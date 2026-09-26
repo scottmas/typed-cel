@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["typed-cel"]
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
+# The ANTLR-generated CEL parser recurses once per grammar production, and at `opt-level = 0`
+# its frames are fat enough that the parser's recursion bound overflows the 2 MiB test-thread
+# stack before it can refuse. cel-rust's own workspace sets `[profile.dev] opt-level = 1` for the
+# same reason; here it is scoped to the two packages that carry the recursion.
+[profile.dev.package.typed-cel]
+opt-level = 1
+
+[profile.dev.package.antlr4rust]
+opt-level = 1

@@ -1,0 +1,23 @@
+typed-cel
+Copyright (c) 2026 Scott Ashton
+
+This repository contains third-party material:
+
+1. cel-rust (https://github.com/cel-rust/cel-rust), version 0.14.2,
+   commit 593c11634fa47b03102a1b9c3b58b2da1d16048a.
+   Copyright (c) 2022 Tom Forbes and Contributors. MIT License
+   (typed-cel/LICENSE-MIT). typed-cel is a modified fork of it; the changes
+   are listed in typed-cel/ATTRIBUTION.md.
+
+2. The CEL grammar, CEL.g4 (typed-cel/src/parser/gen/CEL.g4), and the parser
+   and lexer that ANTLR 4.13.2 generated from it (typed-cel/src/parser/gen/).
+   Copyright 2018 Google LLC. Licensed under the Apache License, Version 2.0
+   (LICENSE-APACHE). The generated code arrived with cel-rust.
+
+3. The google/cel-spec "simple" conformance test data, v0.25.1, commit
+   7f3c4c513b42d471d0be9439bf5bde38f45f8404
+   (https://github.com/google/cel-spec/tree/v0.25.1/tests/simple/testdata),
+   vendored unmodified in typed-cel/conformance/corpus/.
+   Copyright Google LLC. Licensed under the Apache License, Version 2.0
+   (LICENSE-APACHE). Cases this dialect does not run are excluded by
+   typed-cel/conformance/EXCLUSIONS.toml rather than edited out of the files.

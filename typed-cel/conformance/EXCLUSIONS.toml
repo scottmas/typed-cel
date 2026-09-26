@@ -1,0 +1,3213 @@
+# Cases google/cel-spec ships that the typed-CEL dialect does not implement, and WHY.
+#
+# Every `reason` must be a dialect-row id in README.md, verbatim — `exclusions_cite_the_readme`
+# checks it, so excluding a case means editing the document that defines the language. That is the
+# friction that keeps EXCLUDED from becoming a place to put reds.
+#
+# GRANULARITY IS A JUDGEMENT, and the rule is: exclude at the level where the removed construct is
+# the SUBJECT. A whole file whose topic is the construct; a whole section named for it; individual
+# cases where a section mixes. Never a section chosen because that is where the failures happened
+# to land.
+#
+# Every case is compiled through the checker a policy compiles through, then evaluated, so a rule
+# here excludes a case the checker refuses as often as one the evaluator cannot answer. A refusal
+# that no rule names is a red.
+#
+# What is deliberately NOT here: constructs the dialect removes but this crate still implements —
+# `uint` arithmetic, `timestamp` comparisons, and the like. Those cases PASS today. They become
+# failures when the deletion lands, and the deletion's own commit moves them here. Pre-excluding
+# them would hide the deletion's blast radius, which is the one thing that makes a deletion
+# auditable.
+#
+# `every_exclusion_rule_matches_something` rejects a rule that covers no case.
+
+# ---------------------------------------------------------------------------------------------
+# removed: protobuf
+#
+# Neither environment produces a protobuf message. Six whole files are about nothing else, and the
+# scattered cases are message literals reached by a construct that is otherwise supported.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "proto2"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "proto3"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "proto2_ext"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "enums"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "wrappers"
+reason = "removed: protobuf"
+
+# `dynamic` is `google.protobuf.Value`/`Any` and the JSON<->proto conversions built on them.
+[[exclude]]
+file = "dynamic"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_wrapper"
+reason = "removed: protobuf"
+
+# These sections test PARSING, but every expression in them is a proto message literal, so there
+# is nothing left to parse once messages are gone.
+[[exclude]]
+file = "parse"
+section = "struct_field_names"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "parse"
+section = "whitespace"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "parse"
+section = "comments"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "parse"
+section = "nest"
+case = "message_literal"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "select"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "message_literal"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_dyn_json_null"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_proto2_msg_null"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_proto3_msg_null"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto2"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto3"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto2_missing_fields_neq"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto3_missing_fields_neq"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto_nan_not_equal"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto_different_types"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto2_any_unpack"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto2_any_unpack_bytewise_fallback"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto3_any_unpack"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_proto3_any_unpack_bytewise_fallback"
+reason = "removed: protobuf"
+
+# ---------------------------------------------------------------------------------------------
+# removed: dyn()
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "conversions"
+section = "dyn"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "zero_based_double"
+reason = "removed: dyn()"
+
+# `dyn(timestamp(0)) == null` — removed twice over; `dyn()` is the outer construct.
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_timestamp_null"
+reason = "removed: dyn()"
+
+# ---------------------------------------------------------------------------------------------
+# removed: optional syntax
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "optionals"
+reason = "removed: optional syntax"
+
+# ---------------------------------------------------------------------------------------------
+# removed: extension libraries
+#
+# None of these ship with upstream cel-rust and none is added here.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "math_ext"
+reason = "removed: extension libraries"
+
+[[exclude]]
+file = "string_ext"
+reason = "removed: extension libraries"
+
+[[exclude]]
+file = "encoders_ext"
+reason = "removed: extension libraries"
+
+[[exclude]]
+file = "bindings_ext"
+reason = "removed: extension libraries"
+
+[[exclude]]
+file = "block_ext"
+reason = "removed: extension libraries"
+
+# ---------------------------------------------------------------------------------------------
+# removed: size() on strings
+#
+# `size('πέντε')` is 10 here, not 5 — the implementation counts BYTES. A length predicate that
+# means something different on non-ASCII input is worse than none, so the overload goes.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "string"
+section = "size"
+case = "one_unicode"
+reason = "removed: size() on strings"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "unicode"
+reason = "removed: size() on strings"
+
+# ---------------------------------------------------------------------------------------------
+# not implemented: two-variable comprehension macros
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "macros2"
+reason = "not implemented: two-variable comprehension macros"
+
+# ---------------------------------------------------------------------------------------------
+# not implemented: container name resolution
+#
+# A `container` is a proto-package namespace that qualified identifiers resolve against. Both
+# environments bind their roots by name into a flat activation, so there is no namespace to
+# resolve against and nothing for the feature to do.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "namespace"
+reason = "not implemented: container name resolution"
+
+[[exclude]]
+file = "fields"
+section = "qualified_identifier_resolution"
+reason = "not implemented: container name resolution"
+
+# ---------------------------------------------------------------------------------------------
+# not implemented: the cel-spec checker
+#
+# This file asserts the type a CHECKER deduces. typed-cel has a checker, but it is a different one,
+# over schema-derived types rather than proto descriptors, and it is tested directly.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "type_deduction"
+reason = "not implemented: the cel-spec checker"
+
+# ---------------------------------------------------------------------------------------------
+# removed: uint  —  moved here BY the deletion, in the deletion's own commit.
+#
+# Two whole SECTIONS whose subject is the construct, then the individual cases where a section
+# mixes: a `comparisons/eq_literal` is mostly int/double/string equality and a handful of uint
+# rows, so excluding the section would take real coverage with it.
+#
+# `conversions/uint` is excluded whole even though two of its cases passed. They passed
+# incidentally — every case in the section is about the `uint()` conversion — and keeping them as
+# passes would report coverage of a conversion that no longer exists.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "conversions"
+section = "uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "integer_math"
+section = "uint64_math"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "basic"
+section = "self_eval_zeroish"
+case = "self_eval_uint_zero"
+reason = "removed: uint"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_zeroish"
+case = "self_eval_uint_alias_zero"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_uint_nonzero"
+reason = "removed: uint"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_uint_alias_nonzero"
+reason = "removed: uint"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_uint_hex"
+reason = "removed: uint"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_uint_alias_hex"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_uint_double_nan"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_list_mixed_type_numbers"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_list_mixed_type_numbers"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_map_mixed_type_numbers"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_double_uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_uint_double_nan"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_mixed_types"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_int_big_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_small_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_uint_small_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_big_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_uint_small_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_uint_big_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_big_double_uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_int_big_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_small_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_uint_small_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_big_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_uint_small_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_uint_big_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_big_double_uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_uint_lt"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_uint_eq"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_uint_gt"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_int_big_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_small_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_uint_small_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_big_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_uint_small_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_uint_big_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_big_double_uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_uint_gt"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_uint_eq"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_uint_lt"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_uint_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_double_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_int_big_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_small_int_uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_uint_small_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_big_uint_int"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_uint_small_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_uint_big_double"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_big_double_uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "in_list_literal"
+case = "elem_in_mixed_type_list_cross_type"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "in_map_literal"
+case = "key_in_mixed_key_type_map"
+reason = "removed: uint"
+
+[[exclude]]
+file = "comparisons"
+section = "in_map_literal"
+case = "key_in_mixed_key_type_map_cross_type"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "comparisons"
+section = "bound"
+case = "uint_eq_right_false"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "conversions"
+section = "double"
+case = "uint_zero"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "double"
+case = "uint_pos"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "double"
+case = "uint_max_exact"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "double"
+case = "uint_range"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "uint_zero"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "uint_max_exact"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "uint_range"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "conversions"
+section = "string"
+case = "uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "uint"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "eq_diff"
+reason = "removed: uint"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "meta"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_uint64"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_string"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_mixed_type"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_mixed_numbers_double_key"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_mixed_numbers_lossy_double_key"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_mixed_numbers_uint_key"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_mixed_numbers_int_key"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_value_uint64"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_value_list"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "fields"
+section = "in"
+case = "mixed_numbers_and_keys_present"
+reason = "removed: uint"
+
+[[exclude]]
+file = "fields"
+section = "in"
+case = "mixed_numbers_and_keys_absent"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "unary_minus_no_overload"
+reason = "removed: uint"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "uint64_overflow_positive"
+reason = "removed: uint"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "uint64_overflow_negative"
+reason = "removed: uint"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "uint64_overflow_mul_positive"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "zero_based_uint"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "singleton"
+reason = "removed: uint"
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "last"
+reason = "removed: uint"
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "uint_in_ints"
+reason = "removed: uint"
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "uint_in_doubles"
+reason = "removed: uint"
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "int_in_uints"
+reason = "removed: uint"
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "double_in_uints"
+reason = "removed: uint"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: timestamp
+#
+# Four whole sections are about nothing but timestamps. `timestamps/comparisons` and
+# `timestamps/timestamp_arithmetic` are NOT: they interleave duration cases with timestamp ones,
+# and duration is load-bearing for the entire system environment, so those go case by case and
+# the duration rows keep running.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_conversions"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_equality"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_selectors"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_selectors_tz"
+reason = "removed: timestamp"
+
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "timestamp"
+reason = "removed: timestamp"
+
+
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "timestamp"
+reason = "removed: timestamp"
+
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_arithmetic"
+case = "add_duration_to_time"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_arithmetic"
+case = "add_time_to_duration"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_arithmetic"
+case = "add_time_to_duration_nanos_negative"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_arithmetic"
+case = "add_time_to_duration_nanos_positive"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_arithmetic"
+case = "subtract_duration_from_time"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_arithmetic"
+case = "subtract_time_from_time"
+reason = "removed: timestamp"
+
+
+[[exclude]]
+file = "timestamps"
+section = "comparisons"
+case = "leq_timestamp_true"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "comparisons"
+case = "leq_timestamp_false"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "comparisons"
+case = "less_timestamp_true"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "comparisons"
+case = "geq_timestamp_true"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "comparisons"
+case = "geq_timestamp_false"
+reason = "removed: timestamp"
+
+[[exclude]]
+file = "timestamps"
+section = "comparisons"
+case = "greater_timestamp_true"
+reason = "removed: timestamp"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: dyn()
+#
+# `dyn()` exists to defeat type checking, so the corpus uses it to write cross-type comparisons
+# that the spec's own checker would otherwise reject. Every one of these is a case whose SUBJECT
+# is the cast; the same comparison spelled without `dyn()` is a separate case and still runs.
+# ---------------------------------------------------------------------------------------------
+
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_int_double_nan"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_bool_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_bytes_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_double_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_duration_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_int_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_list_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_map_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_string_null"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_dyn_double_int"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_int_double_nan"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "ne_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "ne_literal"
+case = "not_ne_double_int"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_int_big_lossy_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_dyn_int_big_lossy_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_int_small_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_int_small_lossy_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_big_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_dyn_small_double_int"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_int_big_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_int_small_lossy_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_dyn_int_small_lossy_double_greater"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_big_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_dyn_small_double_int"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_int_big_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_int_small_lossy_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_dyn_int_small_lossy_double_less"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_big_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_dyn_small_double_int"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_int_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_int_big_lossy_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_dyn_int_big_double"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_int_small_lossy_double_equal"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_int_small_lossy_double_greater"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_big_double_int"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_dyn_small_double_int"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "double_in_ints"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "in"
+case = "int_in_doubles"
+reason = "removed: dyn()"
+
+# ---------------------------------------------------------------------------------------------
+# The SECOND wave of the same deletions, and the reason it is a separate block.
+#
+# Every case below expects an EVAL ERROR. Once the construct it names was removed, the case kept
+# producing an error — a DIFFERENT one, "undeclared reference" or "not in the dialect" — and so
+# went on reporting PASS while testing nothing. A deletion that turns a red into a green is the
+# quietest way to lose coverage there is, and the only reason these were found is that
+# `the_corpus_rows_moved` asks whether a case NAMES a removed construct rather than whether it
+# failed.
+#
+# `timestamps/timestamp_range` is the whole section: its subject is the spec's timestamp bounds.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "timestamps"
+section = "timestamp_range"
+reason = "removed: timestamp"
+
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_no_such_key_or_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_no_such_key_or_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_no_such_key_and_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_no_such_key_and_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_bad_key_type"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_bad_key_type_or_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_bad_key_type_or_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_bad_key_type_and_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_bad_key_type_and_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_field_select_no_such_key_or_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_field_select_no_such_key_or_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_field_select_no_such_key_and_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_field_select_no_such_key_and_true"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "zero_based_double_error"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "index_out_of_bounds_or_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "index_out_of_bounds_or_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "index_out_of_bounds_and_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "index_out_of_bounds_and_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "bad_index_type"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "bad_index_type_or_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "bad_index_type_or_true"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "bad_index_type_and_false"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "bad_index_type_and_true"
+reason = "removed: dyn()"
+
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "uint_denotation"
+reason = "removed: uint"
+
+
+[[exclude]]
+file = "parse"
+section = "nest"
+case = "funcall"
+reason = "removed: uint"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: type values
+#
+# CASE level, not section level, because `conversions/type` is not entirely about type values:
+# `dyn_no_denotation` asserts that a bare `dyn` is an error, which this dialect gets RIGHT and
+# which `removed: dyn()` already owns. A section-wide rule would turn that pass into an
+# exclusion, and a pass that disappears into EXCLUDED is exactly the movement these rules are
+# supposed to make visible.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "bool"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "bool_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "int"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "int_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "eq_same"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "double"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "double_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "null_type"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "null_type_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "string"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "string_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "bytes"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "bytes_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "list"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "list_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "lists_monomorphic"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "map"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "map_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "map_monomorphic"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "neq_same"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "neq_diff"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "type"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "type_denotation"
+reason = "removed: type values"
+
+[[exclude]]
+file = "conversions"
+section = "type"
+case = "type_type"
+reason = "removed: type values"
+
+[[exclude]]
+file = "timestamps"
+section = "duration_conversions"
+case = "toType_duration"
+reason = "removed: type values"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: type conversion functions
+#
+# Case level again, and for the same reason in three different shapes: `conversions/bool` keeps
+# `string_true_badcase`/`string_false_badcase` (which expect an error and get one),
+# `conversions/int` shares its section with `removed: uint` cases (and its remaining cases moved
+# when `int()` left the evaluator — the block at the end of this file), and `conversions/string` and `conversions/identity` each contribute exactly one case.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_1"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_t"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_true_lowercase"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_true_uppercase"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_true_pascalcase"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_0"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_f"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_false_lowercase"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_false_uppercase"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bool"
+case = "string_false_pascalcase"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_int_max_range"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_int_min_range"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_range"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "string"
+case = "bytes_invalid"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "bool"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "timestamps"
+section = "duration_conversions"
+case = "toString_duration"
+reason = "removed: type conversion functions"
+
+
+# ---------------------------------------------------------------------------------------------
+# not implemented: backtick-quoted field selection
+#
+# `has_field_slash` is deliberately NOT here. It asks whether a key that is absent under either
+# spelling exists, the answer is false either way, and it passes for a reason the construct's
+# absence does not change.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "fields"
+section = "quoted_map_fields"
+case = "field_access_slash"
+reason = "not implemented: backtick-quoted field selection"
+
+[[exclude]]
+file = "fields"
+section = "quoted_map_fields"
+case = "field_access_dash"
+reason = "not implemented: backtick-quoted field selection"
+
+[[exclude]]
+file = "fields"
+section = "quoted_map_fields"
+case = "field_access_dot"
+reason = "not implemented: backtick-quoted field selection"
+
+[[exclude]]
+file = "fields"
+section = "quoted_map_fields"
+case = "has_field_dash"
+reason = "not implemented: backtick-quoted field selection"
+
+[[exclude]]
+file = "fields"
+section = "quoted_map_fields"
+case = "has_field_dot"
+reason = "not implemented: backtick-quoted field selection"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: protobuf — two stragglers that reach protobuf by a supported-looking route
+#
+# `get_milliseconds` looks like a `getMilliseconds` bug and is not: it fails at BINDING, because
+# the corpus hands it a protobuf-encoded Duration. `getMilliseconds` is in the signature table
+# and works. `type_comparison` names `google.protobuf.Duration` as a value.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "timestamps"
+section = "duration_conversions"
+case = "type_comparison"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "timestamps"
+section = "duration_converters"
+case = "get_milliseconds"
+reason = "removed: protobuf"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: modulo
+#
+# `%` is refused by the checker and gone from both runtimes. Case level: every section these sit
+# in (`int64_math`, `exists_one`, `filter`) is about something else, and the `%` cases are the
+# ones that spell it. Four of them still pass, incidentally: `mod_zero`, `fp_math`'s
+# `mod_not_support` and `list_elem_type_exhaustive` expect an error and get one — the undeclared
+# `_%_` — and `filter/list_empty` never runs its body. Keeping them as passes would report
+# coverage of an operator that no longer exists (`the_corpus_rows_moved` holds that). These rules come BEFORE the `integer_math` file rule below, so the `%` cases in
+# `int64_math` are counted as what they are.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "mod_positive_positive"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "mod_positive_negative"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "mod_negative_negative"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "mod_negative_positive"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "mod_zero"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "fp_math"
+section = "fp_math"
+case = "mod_not_support"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "macros"
+section = "all"
+case = "list_elem_type_exhaustive"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "macros"
+section = "filter"
+case = "list_empty"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "macros"
+section = "exists_one"
+case = "list_many"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "macros"
+section = "exists_one"
+case = "map_one"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "macros"
+section = "exists_one"
+case = "list_one"
+reason = "removed: modulo"
+
+[[exclude]]
+file = "macros"
+section = "filter"
+case = "list_some"
+reason = "removed: modulo"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: integer values
+#
+# Every number at run time is a double, so a case that EXPECTS an integer asks for a kind the
+# runtime no longer has (the harness compares by kind: `3` and `3.0` are different corpus
+# expectations), and a case that expects integer division, integer overflow or a division-by-zero
+# ERROR asks for arithmetic the dialect no longer does — `1 / 0` is `+inf`.
+#
+# `integer_math` is excluded WHOLE: its subject is int64 arithmetic (its other section,
+# `uint64_math`, and the uint stragglers inside `int64_math` are already `removed: uint` above,
+# and the `%` cases are `removed: modulo` just above; first match wins). A handful of its cases
+# still pass as doubles — `add_commutative`, `-false` — and keeping them would report int64
+# coverage the dialect does not have.
+#
+# Everywhere else it is case level: the sections below (`basic/self_eval_*`, `lists/size`,
+# `parse/selectors`, `macros/*`, `logic/*`, …) are about literals, sizes, keywords and
+# absorption, and only these cases happen to spell their answer as an integer or their error as a
+# division by zero.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "integer_math"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "functions"
+case = "binop"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_int_hex"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_int_hex_negative"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_int_negative_min"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_int_nonzero"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_nonzeroish"
+case = "self_eval_list_singleitem"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "self_eval_zeroish"
+case = "self_eval_int_zero"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "basic"
+section = "variables"
+case = "self_eval_bound_lookup"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_field_access"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_bool"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_value_int64"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "concatenation"
+case = "left_unit"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "concatenation"
+case = "right_unit"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "concatenation"
+case = "list_repeat"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "middle"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "index"
+case = "zero_based"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "size"
+case = "list"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "size"
+case = "list_empty"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "size"
+case = "map"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "lists"
+section = "size"
+case = "map_empty"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "logic"
+section = "AND"
+case = "error_left"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "logic"
+section = "AND"
+case = "error_right"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "logic"
+section = "conditional"
+case = "error_case"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "logic"
+section = "conditional"
+case = "true_case"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "logic"
+section = "OR"
+case = "error_left"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "logic"
+section = "OR"
+case = "error_right"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "all"
+case = "list_elem_error_exhaustive"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "exists"
+case = "list_elem_exists_error"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "exists_one"
+case = "list_no_shortcircuit"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "filter"
+case = "list_no_shortcircuit"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "filter"
+case = "list_all"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "filter"
+case = "list_one_true"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "map"
+case = "list_many"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "map"
+case = "list_one"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "macros"
+section = "map"
+case = "list_error"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "nest"
+case = "list_index"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "nest"
+case = "list_literal"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "nest"
+case = "map_literal"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "nest"
+case = "parens"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "add_sub"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "list_literal"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "mul_div"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "as"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "unary_neg"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "continue"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "break"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "const"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "else"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "for"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "if"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "function"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "import"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "let"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "loop"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "return"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "namespace"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "package"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "var"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "void"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "parse"
+section = "selectors"
+case = "while"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "plumbing"
+section = "check_inputs"
+case = "skip_check"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "plumbing"
+section = "eval_results"
+case = "error_result"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "plumbing"
+section = "min"
+case = "min_program"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "bytes"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "ascii"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "bytes_empty"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "empty"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "one_ascii"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "timestamps"
+section = "duration_converters"
+case = "get_hours"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "timestamps"
+section = "duration_converters"
+case = "get_minutes"
+reason = "removed: integer values"
+
+[[exclude]]
+file = "timestamps"
+section = "duration_converters"
+case = "get_seconds"
+reason = "removed: integer values"
+
+
+# ---------------------------------------------------------------------------------------------
+# removed: type conversion functions — `int()` left the evaluator with `removed: integer values`
+#
+# There is no integer for `int()` to produce, so the evaluator's `int()` went with the runtime
+# integer. These are the `conversions/int` and `conversions/identity` cases that passed while it
+# was still there.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "int"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_big_exact"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_big_precision"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_half_neg"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_round_neg"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_half_pos"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_truncate"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "double_truncate_neg"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "int"
+case = "string"
+reason = "removed: type conversion functions"
+
+# ---------------------------------------------------------------------------------------------
+# removed: dyn values
+#
+# A program that type-checks holds no `dyn` value. These cases build one — a heterogeneous list
+# or map literal, or a conditional whose branches differ — and the checker refuses them where
+# they are written (`dyn_values_are_gone`). Every section here mixes, so the rules are per case.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_list_null"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_list_false_vs_types"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_map_null"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_map_false_vs_types"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "eq_map_value_mixed_types"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_list_elem_null"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_map_value_null"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "comparisons"
+section = "in_list_literal"
+case = "elem_in_mixed_type_list"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_key_int64"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_value_mix_type"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "logic"
+section = "conditional"
+case = "mixed_type"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "macros"
+section = "exists"
+case = "list_elem_type_shortcircuit"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "macros"
+section = "exists"
+case = "list_elem_type_exhaustive"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "macros"
+section = "exists"
+case = "map_key_type_shortcircuit"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "macros"
+section = "exists"
+case = "map_key_type_exhaustive"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "macros"
+section = "all"
+case = "list_elem_type_shortcircuit"
+reason = "removed: dyn values"
+
+# ---------------------------------------------------------------------------------------------
+# removed: ordering beyond numbers and strings
+#
+# The checker orders numbers, strings and durations only. These cases order bools and bytes and
+# expect a VALUE. The same sections
+# also order lists, maps and `null` — those expect an ERROR, which the checker's refusal agrees with
+# (a static pass), so they are not excluded. Mixed sections: per case.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_bytes"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_bytes_same"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_bytes_width"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "lt_bool_false_first"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_bool_same"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lt_literal"
+case = "not_lt_bool_true_first"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_bytes_one"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_bytes_one_to_empty"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_bytes_sorting"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "gt_bool_true_false"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_bool_false_true"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gt_literal"
+case = "not_gt_bool_same"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_bytes_empty"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "not_lte_bytes_length"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_bool_false_true"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_bool_false_false"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "lte_literal"
+case = "lte_bool_true_false"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_bytes_to_empty"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_bytes_empty_to_nonempty"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_bytes_samelength"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_bool_gt"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "gte_bool_eq"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "gte_literal"
+case = "not_gte_bool_lt"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "bound"
+case = "bytes_gt_left_false"
+reason = "removed: ordering beyond numbers and strings"
+
+[[exclude]]
+file = "comparisons"
+section = "bound"
+case = "bool_lt_right_true"
+reason = "removed: ordering beyond numbers and strings"
+
+# ---------------------------------------------------------------------------------------------
+# removed: logic on non-bools
+#
+# Spec CEL's short circuit returns a value without looking at the non-bool operand; the checker
+# refuses the operand. The `no_overload` cases beside these expect an ERROR and pass statically.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "logic"
+section = "AND"
+case = "short_circuit_type_left"
+reason = "removed: logic on non-bools"
+
+[[exclude]]
+file = "logic"
+section = "AND"
+case = "short_circuit_type_right"
+reason = "removed: logic on non-bools"
+
+[[exclude]]
+file = "logic"
+section = "OR"
+case = "short_circuit_type_left"
+reason = "removed: logic on non-bools"
+
+[[exclude]]
+file = "logic"
+section = "OR"
+case = "short_circuit_type_right"
+reason = "removed: logic on non-bools"
+
+# ---------------------------------------------------------------------------------------------
+# removed: bytes concatenation
+#
+# The section is about nothing else.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "string"
+section = "bytes_concat"
+reason = "removed: bytes concatenation"
+
+# ---------------------------------------------------------------------------------------------
+# removed: type conversion functions (double, string, bytes)
+#
+# The checker refuses all three. Whole sections where the section is the function; per case in
+# `identity`, which mixes them with `duration()`.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "conversions"
+section = "double"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "string"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "bytes"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "double"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "string"
+reason = "removed: type conversion functions"
+
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "bytes"
+reason = "removed: type conversion functions"
+
+# ---------------------------------------------------------------------------------------------
+# not implemented: backtick-quoted field selection
+#
+# The checker refuses the construct (`backtick_field_selection_is_gone`); this one case reaches it
+# through a literal map.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "fields"
+section = "quoted_map_fields"
+case = "has_field_slash"
+reason = "not implemented: backtick-quoted field selection"
+
+# ---------------------------------------------------------------------------------------------
+# diverges: undeclared names are compile errors
+#
+# Spec CEL lets a short circuit absorb an unbound name; the checker refuses it first. The
+# `receiver_function_names` section calls methods on an unbound `a` throughout. The cases that
+# expect an ERROR for an unbound name pass statically and are not excluded.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "basic"
+section = "variables"
+case = "unbound_is_runtime_error"
+reason = "diverges: undeclared names are compile errors"
+
+[[exclude]]
+file = "basic"
+section = "functions"
+case = "unbound_is_runtime_error"
+reason = "diverges: undeclared names are compile errors"
+
+[[exclude]]
+file = "parse"
+section = "receiver_function_names"
+reason = "diverges: undeclared names are compile errors"
+
+# ---------------------------------------------------------------------------------------------
+# diverges: equality is homogeneous
+#
+# `==` between two types is a check error, not `false`.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "comparisons"
+section = "eq_literal"
+case = "not_eq_list_length"
+reason = "diverges: equality is homogeneous"
+
+# ---------------------------------------------------------------------------------------------
+# diverges: duration() takes a string
+#
+# No identity overload.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "conversions"
+section = "identity"
+case = "duration"
+reason = "diverges: duration() takes a string"
+
+# ---------------------------------------------------------------------------------------------
+# diverges: nesting is bounded
+#
+# 32 negations nest past the default depth limit of 32.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "not"
+reason = "diverges: nesting is bounded"
