@@ -556,15 +556,44 @@ impl<'k> Folder<'k> {
             _ => {}
         }
         let target = c.target.as_deref().map(|t| Box::new(self.fold_expr(t)));
-        let args = c.args.iter().map(|a| self.fold_expr(a)).collect();
-        Folded::Expr(IdedExpr {
+        let args: Vec<IdedExpr> = c.args.iter().map(|a| self.fold_expr(a)).collect();
+        if c.target.is_none() {
+            // `!!x` is `x`: the checker types `!` over bool only, so `x` is a bool, and the two
+            // negations answer its value, or its error, unchanged.
+            if c.func_name == operators::LOGICAL_NOT && args.len() == 1 {
+                if let Some(x) = negated(&args[0]) {
+                    return Folded::Expr(x.clone());
+                }
+            }
+            // `(c ? K1 : K2) == K1` is `c`, and `== K2` is `!c`, for two distinct string
+            // literals: the comparison answers the condition's value, or its error.
+            let ne = c.func_name == operators::NOT_EQUALS;
+            if (ne || c.func_name == operators::EQUALS) && args.len() == 2 {
+                let picked = arm_test(&args[0], &args[1]).or_else(|| arm_test(&args[1], &args[0]));
+                if let Some((cond, is_first)) = picked {
+                    return Folded::Expr(if is_first != ne { cond } else { not(cond) });
+                }
+            }
+        }
+        let rebuilt = IdedExpr {
             id: e.id,
             expr: Expr::Call(CallExpr {
                 func_name: c.func_name.clone(),
                 target,
                 args,
             }),
-        })
+        };
+        // A call whose arguments all folded to literals is closed NOW, though it was not before
+        // folding (`!(t || x)` with `t` known): evaluate it, and keep it on an error, which then
+        // recurs at run time, in place.
+        if self.is_closed(&rebuilt, &mut Vec::new()) {
+            if let Ok(v) = self.eval(&rebuilt) {
+                if reify(&v).is_some() {
+                    return Folded::Value(v);
+                }
+            }
+        }
+        Folded::Expr(rebuilt)
     }
 
     /// `_&&_` (`absorbing == false`) and `_||_` (`absorbing == true`), by the dialect's rule for them.
@@ -870,6 +899,56 @@ fn balanced(op: &str, terms: Vec<IdedExpr>) -> IdedExpr {
     let n = terms.len();
     let mut slots: Vec<Option<IdedExpr>> = terms.into_iter().map(Some).collect();
     build(op, &mut slots, 0, n - 2)
+}
+
+/// `x` when `e` is `!x`.
+fn negated(e: &IdedExpr) -> Option<&IdedExpr> {
+    match &e.expr {
+        Expr::Call(c)
+            if c.target.is_none() && c.func_name == operators::LOGICAL_NOT && c.args.len() == 1 =>
+        {
+            Some(&c.args[0])
+        }
+        _ => None,
+    }
+}
+
+/// `!e`, without stacking a second negation on one already there.
+fn not(e: IdedExpr) -> IdedExpr {
+    match negated(&e) {
+        Some(x) => x.clone(),
+        None => node(Expr::Call(CallExpr {
+            func_name: operators::LOGICAL_NOT.to_string(),
+            target: None,
+            args: vec![e],
+        })),
+    }
+}
+
+/// When `side` is `c ? "K1" : "K2"` with two distinct string literals and `k` is a string literal
+/// equal to one of them: the condition, and whether `k` is the FIRST arm.
+fn arm_test(side: &IdedExpr, k: &IdedExpr) -> Option<(IdedExpr, bool)> {
+    let string = |e: &IdedExpr| match &e.expr {
+        Expr::Literal(LiteralValue::String(s)) => Some(s.to_string()),
+        _ => None,
+    };
+    let Expr::Call(c) = &side.expr else {
+        return None;
+    };
+    if c.target.is_some() || c.func_name != operators::CONDITIONAL || c.args.len() != 3 {
+        return None;
+    }
+    let (a, b, k) = (string(&c.args[1])?, string(&c.args[2])?, string(k)?);
+    if a == b {
+        return None;
+    }
+    if k == a {
+        Some((c.args[0].clone(), true))
+    } else if k == b {
+        Some((c.args[0].clone(), false))
+    } else {
+        None
+    }
 }
 
 fn as_bool(f: &Folded) -> Option<bool> {

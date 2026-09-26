@@ -19,6 +19,12 @@ impl FieldId {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// The id of `fields()[i]`. For harnesses that resolve a program's fields themselves.
+    #[doc(hidden)]
+    pub fn from_index(i: usize) -> FieldId {
+        FieldId(i as u32)
+    }
 }
 
 /// One step of a field path: `.name`, or `["name"]` — the same member either way.
@@ -137,15 +143,16 @@ pub(crate) enum Want {
 
 /// Why a read produced no value.
 pub(crate) enum Miss {
-    /// It failed.
-    Err(ExecutionError),
+    /// It failed. Boxed so a read's result stays small: the error is the cold path.
+    Err(Box<ExecutionError>),
     /// It is not answerable yet. Only a host that [waits](Host::waits) answers this.
     Need(DemandHandle),
 }
 
 impl From<ExecutionError> for Miss {
+    #[cold]
     fn from(e: ExecutionError) -> Miss {
-        Miss::Err(e)
+        Miss::Err(Box::new(e))
     }
 }
 
@@ -224,6 +231,30 @@ pub(crate) struct FactsHost<'a, F: ?Sized> {
     pub(crate) wait: bool,
 }
 
+impl<'a, F: Facts + ?Sized> FactsHost<'a, F> {
+    /// A read of a number, bytes or duration field; `Any` is a composite, which `Facts` does not
+    /// serve.
+    #[inline(always)]
+    fn read_rest(&self, f: u32, want: Want) -> Result<Option<Reg<'a>>, Miss> {
+        let id = FieldId(f);
+        Ok(match want {
+            Want::Num => self.facts.num(id).map(Reg::Num),
+            Want::Bytes => self.facts.bytes(id).map(Reg::Bytes),
+            Want::Dur => self
+                .facts
+                .duration_ms(id)
+                .map(|ms| Reg::Dur(chrono::Duration::milliseconds(ms))),
+            Want::Str | Want::Bool => unreachable!("read answers the common kinds itself"),
+            Want::Any => {
+                return Err(Miss::from(ExecutionError::InternalError(format!(
+                    "`{}` is not a scalar, and a Facts provider serves scalars only",
+                    self.fields[f as usize].root
+                ))))
+            }
+        })
+    }
+}
+
 impl<F: ?Sized> FactsHost<'_, F> {
     /// A poll that was not `Ready`, as the miss a walk through views would produce.
     #[cold]
@@ -236,10 +267,10 @@ impl<F: ?Sized> FactsHost<'_, F> {
                 .map_or(path.root.as_str(), |s| s.name.as_str())
         };
         match p {
-            FactPoll::Ready => Miss::Err(ExecutionError::InternalError("a ready poll".into())),
+            FactPoll::Ready => ExecutionError::InternalError("a ready poll".into()).into(),
             FactPoll::Pending { handle, .. } if self.wait => Miss::Need(handle),
-            FactPoll::Pending { at, handle } => Miss::Err(pending_error(name(at), handle)),
-            FactPoll::Failed { at, error } => Miss::Err(member_error(name(at), error)),
+            FactPoll::Pending { at, handle } => pending_error(name(at), handle).into(),
+            FactPoll::Failed { at, error } => member_error(name(at), error).into(),
         }
     }
 }
@@ -252,23 +283,16 @@ impl<'a, F: Facts + ?Sized> Host<'a> for FactsHost<'a, F> {
             FactPoll::Ready => {}
             p => return Err(self.miss(f, p)),
         }
-        let got = match want {
-            Want::Str => self.facts.str(id).map(Reg::Str),
-            Want::Bool => self.facts.bool(id).map(Reg::Bool),
-            Want::Num => self.facts.num(id).map(Reg::Num),
-            Want::Bytes => self.facts.bytes(id).map(Reg::Bytes),
-            Want::Dur => self
-                .facts
-                .duration_ms(id)
-                .map(|ms| Reg::Dur(chrono::Duration::milliseconds(ms))),
-            Want::Any => {
-                return Err(Miss::Err(ExecutionError::InternalError(format!(
-                    "`{}` is not a scalar, and a Facts provider serves scalars only",
-                    self.fields[f as usize].root
-                ))))
-            }
+        // Compare-and-branch on the common kinds before the table: each read's kind is fixed, so
+        // these branches predict perfectly where a jump table on `want` costs an indirect jump.
+        let got = if want == Want::Str {
+            self.facts.str(id).map(Reg::Str)
+        } else if want == Want::Bool {
+            self.facts.bool(id).map(Reg::Bool)
+        } else {
+            self.read_rest(f, want)?
         };
-        got.ok_or_else(|| Miss::Err(self.fields[f as usize].missing()))
+        got.ok_or_else(|| Miss::from(self.fields[f as usize].missing()))
     }
 
     #[inline(always)]
@@ -283,10 +307,9 @@ impl<'a, F: Facts + ?Sized> Host<'a> for FactsHost<'a, F> {
         }
         match self.facts.str(id) {
             Some(s) => Ok(crate::hostfn::tag_of(values, s)),
-            None => Err(Miss::Err(self.fields[f as usize].missing())),
+            None => Err(Miss::from(self.fields[f as usize].missing())),
         }
     }
-
     #[inline(always)]
     fn has(&self, f: u32, _: &mut Store<'a>) -> Result<bool, Miss> {
         let id = FieldId(f);

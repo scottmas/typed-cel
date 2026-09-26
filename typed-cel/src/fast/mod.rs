@@ -270,6 +270,24 @@ pub(crate) enum Op {
         else_: Pc,
         err: Pc,
     },
+    /// `field(a) == field(b)` for two string fields, in a branch: jumps to `else_` when the
+    /// equality is `ne` (so `ne` folds `!=` and the branch's sense together). A read that fails
+    /// jumps to `err` with its error in flight; `a` is read first, as the unfused reads were.
+    CondEqFF {
+        a: u32,
+        b: u32,
+        ne: bool,
+        else_: Pc,
+        err: Pc,
+    },
+    /// `field(a) == k` for a string field and a scalar constant, in a branch, likewise.
+    CondEqFK {
+        a: u32,
+        k: u32,
+        ne: bool,
+        else_: Pc,
+        err: Pc,
+    },
     /// A caught left operand of `&&`/`||` whose right operand passed the result on: raise its
     /// error. A bool (the left passed it on too) does nothing.
     RaiseIfErr {
@@ -406,6 +424,8 @@ impl Op {
             CondRead { .. } => "CondRead",
             CondEqK { .. } => "CondEqK",
             CondMatch { .. } => "CondMatch",
+            CondEqFF { .. } => "CondEqFF",
+            CondEqFK { .. } => "CondEqFK",
             RaiseIfErr { .. } => "RaiseIfErr",
             EqK { .. } => "EqK",
             Catch { .. } => "Catch",
@@ -460,6 +480,8 @@ impl Op {
             Cond { else_, err, .. }
             | CondRead { else_, err, .. }
             | CondMatch { else_, err, .. }
+            | CondEqFF { else_, err, .. }
+            | CondEqFK { else_, err, .. }
             | CondTagIn { else_, err, .. } => {
                 *else_ = at(*else_);
                 *err = at(*err);
@@ -566,9 +588,60 @@ impl Code {
             .collect();
     }
 
-    #[inline]
+    #[inline(always)]
     fn konst<'a>(&'a self, k: u32) -> Reg<'a> {
-        self.kregs[k as usize]
+        debug_assert!((k as usize) < self.kregs.len());
+        // SAFETY: `Code::verify` (run by `lower::finish` on every `Code` there is) checked every
+        // constant index an op carries against `kregs`.
+        unsafe { *self.kregs.get_unchecked(k as usize) }
+    }
+
+    /// The invariants `exec` fetches ops and constants under without a bounds check: every jump
+    /// target is an op, every constant index is a constant, and the last op never falls through
+    /// past the end.
+    pub(crate) fn verify(&self) -> Result<(), String> {
+        let n = self.ops.len() as u64;
+        let bad = std::cell::Cell::new(None);
+        for (pc, op) in self.ops.iter().enumerate() {
+            let mut o = *op;
+            o.retarget(&|t| {
+                if u64::from(t) >= n {
+                    bad.set(Some(format!(
+                        "op {pc} ({}) jumps to {t}, past {n} ops",
+                        op.name()
+                    )));
+                }
+                t
+            });
+            let k = match *op {
+                Op::Const { k, .. }
+                | Op::Raise { k, .. }
+                | Op::CondEqK { k, .. }
+                | Op::CondEqFK { k, .. }
+                | Op::EqK { k, .. }
+                | Op::RetK { k } => Some(k),
+                _ => None,
+            };
+            if let Some(k) = k {
+                if k as usize >= self.kregs.len() {
+                    bad.set(Some(format!(
+                        "op {pc} ({}) names constant {k}, past {} constants",
+                        op.name(),
+                        self.kregs.len()
+                    )));
+                }
+            }
+        }
+        match self.ops.last() {
+            Some(Op::Jump { .. } | Op::Ret { .. } | Op::RetK { .. } | Op::Fail) => {}
+            last => bad.set(Some(format!(
+                "the last op ({last:?}) can fall through past the end"
+            ))),
+        }
+        match bad.into_inner() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 }
 
@@ -764,6 +837,29 @@ impl FastProgram {
             fields: &self.code.fields,
             wait: false,
         };
+        if on_stack(&self.code) {
+            let mut regs = [Reg::Unset; STACK_REGS];
+            let mut store = Store::default();
+            let errs = &mut scratch.errs;
+            if !errs.is_empty() {
+                errs.clear();
+            }
+            let exit = exec(
+                &self.code,
+                &host,
+                &mut regs[..self.code.nregs],
+                &mut store,
+                &mut [],
+                errs,
+                0,
+                None,
+            );
+            if let Exit::Ret(Reg::Bool(b)) = exit {
+                forget_if_empty(store);
+                return Ok(b);
+            }
+            return verdict_of_exit(&self.source, exit, errs);
+        }
         verdict(&self.source, run(&self.code, &host, scratch, as_bool))
     }
 
@@ -845,6 +941,30 @@ impl FastProgram {
         scratch: &mut FastScratch,
         tags: &[&str],
     ) -> Result<Option<usize>, crate::CelError> {
+        if on_stack(&self.code) {
+            let mut regs = [Reg::Unset; STACK_REGS];
+            let mut store = Store::default();
+            let errs = &mut scratch.errs;
+            if !errs.is_empty() {
+                errs.clear();
+            }
+            let exit = exec(
+                &self.code,
+                host,
+                &mut regs[..self.code.nregs],
+                &mut store,
+                &mut [],
+                errs,
+                0,
+                None,
+            );
+            if let Exit::Ret(Reg::Str(s)) = exit {
+                let tag = tags.iter().position(|t| *t == s);
+                forget_if_empty(store);
+                return Ok(tag);
+            }
+            return tag_of_exit(&self.source, exit, errs);
+        }
         let out = run(&self.code, host, scratch, |r, errs| match r {
             Reg::Str(s) => Ok(tags.iter().position(|t| *t == s)),
             other => Err(reg::to_cel(other, errs).unwrap_or(CelValue::Null)),
@@ -873,8 +993,22 @@ fn as_bool(r: Reg<'_>, errs: &[ExecutionError]) -> Result<bool, CelValue> {
 }
 
 /// `activation.rs::verdict`, for a run that already knows whether it produced a bool.
-#[inline]
+#[inline(always)]
 fn verdict(
+    source: &Arc<str>,
+    out: Result<Result<bool, CelValue>, ExecutionError>,
+) -> Result<bool, crate::CelError> {
+    match out {
+        Ok(Ok(b)) => Ok(b),
+        other => verdict_err(source, other),
+    }
+}
+
+/// The `CelError` a run that did not produce a bool answers. Cold: the formatting stays off the
+/// path every successful decision takes.
+#[cold]
+#[inline(never)]
+fn verdict_err(
     source: &Arc<str>,
     out: Result<Result<bool, CelValue>, ExecutionError>,
 ) -> Result<bool, crate::CelError> {
@@ -935,9 +1069,126 @@ unsafe fn relife<T, U>(v: &mut Vec<T>) -> &mut Vec<U> {
     &mut *(v as *mut Vec<T> as *mut Vec<U>)
 }
 
+/// The largest register file a run takes on the stack instead of from its scratch.
+const STACK_REGS: usize = 16;
+
 /// Run `code` against `host`, turning the result into an owned value with `out` before anything
 /// the run built is released.
+#[inline]
 fn run<'a, H: Host<'a>, T>(
+    code: &'a Code,
+    host: &H,
+    scratch: &mut FastScratch,
+    out: impl FnOnce(Reg<'a>, &[ExecutionError]) -> T,
+) -> Result<T, ExecutionError> {
+    if on_stack(code) {
+        return run_on_stack(code, host, &mut scratch.errs, out);
+    }
+    run_on_scratch(code, host, scratch, out)
+}
+
+/// A run with no comprehension and a small register file: its registers live on the stack,
+/// initialized for this call, so nothing is resized, re-lifetimed or cleared. A register is never
+/// reused across calls: a stale `Reg::Str` would point into the PREVIOUS call's facts.
+#[inline(always)]
+fn run_on_stack<'a, H: Host<'a>, T>(
+    code: &'a Code,
+    host: &H,
+    errs: &mut Vec<ExecutionError>,
+    out: impl FnOnce(Reg<'a>, &[ExecutionError]) -> T,
+) -> Result<T, ExecutionError> {
+    let mut regs = [Reg::Unset; STACK_REGS];
+    // Empty unless an op builds a value; dropped with everything that points into it, after `out`
+    // has made the result owned.
+    let mut store = Store::default();
+    if !errs.is_empty() {
+        errs.clear();
+    }
+    let result = match exec(
+        code,
+        host,
+        &mut regs[..code.nregs],
+        &mut store,
+        &mut [],
+        errs,
+        0,
+        None,
+    ) {
+        Exit::Ret(r) => Ok(out(r, errs)),
+        Exit::Fail(e) => Err(*e),
+        Exit::Need { .. } => Err(cannot_wait()),
+    };
+    forget_if_empty(store);
+    result
+}
+
+/// Does `code` run on a stack register file? No comprehension, and few enough registers.
+#[inline(always)]
+fn on_stack(code: &Code) -> bool {
+    code.nloops == 0 && code.nregs <= STACK_REGS
+}
+
+/// A store no op wrote to owns no allocation: skip its drop glue, an out-of-line call per run.
+#[inline(always)]
+fn forget_if_empty(store: Store<'_>) {
+    if store.items.capacity() == 0 {
+        std::mem::forget(store);
+    }
+}
+
+/// The tag of a stack run that did not return a string. Cold, like [`verdict_of_exit`].
+#[cold]
+#[inline(never)]
+fn tag_of_exit(
+    source: &Arc<str>,
+    exit: Exit<'_>,
+    errs: &[ExecutionError],
+) -> Result<Option<usize>, crate::CelError> {
+    match exit {
+        Exit::Ret(other) => Err(crate::CelError::Evaluation {
+            source: source.clone(),
+            message: format!(
+                "produced {:?} rather than a string",
+                reg::to_cel(other, errs).unwrap_or(CelValue::Null)
+            ),
+        }),
+        Exit::Fail(e) => Err(crate::CelError::Evaluation {
+            source: source.clone(),
+            message: format!("could not be evaluated: {e}"),
+        }),
+        Exit::Need { .. } => Err(crate::CelError::Evaluation {
+            source: source.clone(),
+            message: format!("could not be evaluated: {}", cannot_wait()),
+        }),
+    }
+}
+
+/// The verdict of a stack run that did not return a bool. Cold: only an erroring or ill-typed
+/// run reaches it.
+#[cold]
+#[inline(never)]
+fn verdict_of_exit(
+    source: &Arc<str>,
+    exit: Exit<'_>,
+    errs: &[ExecutionError],
+) -> Result<bool, crate::CelError> {
+    match exit {
+        Exit::Ret(r) => verdict_err(source, Ok(as_bool(r, errs))),
+        Exit::Fail(e) => verdict_err(source, Err(*e)),
+        Exit::Need { .. } => verdict_err(source, Err(cannot_wait())),
+    }
+}
+
+/// A run that paused although its host cannot wait.
+#[cold]
+#[inline(never)]
+fn cannot_wait() -> ExecutionError {
+    ExecutionError::InternalError("a run that cannot wait paused".into())
+}
+
+/// A run whose registers and iterations live in its scratch.
+#[inline(never)]
+fn run_on_scratch<'a, H: Host<'a>, T>(
     code: &'a Code,
     host: &H,
     scratch: &mut FastScratch,
@@ -961,11 +1212,9 @@ fn run<'a, H: Host<'a>, T>(
     }
     let result = match exec(code, host, regs, store, iters, errs, 0, None) {
         Exit::Ret(r) => Ok(out(r, errs)),
-        Exit::Fail(e) => Err(e),
+        Exit::Fail(e) => Err(*e),
         // Only a host that waits pauses, and this run's does not.
-        Exit::Need { .. } => Err(ExecutionError::InternalError(
-            "a run that cannot wait paused".into(),
-        )),
+        Exit::Need { .. } => Err(cannot_wait()),
     };
     regs.clear();
     iters.clear();
@@ -976,13 +1225,13 @@ fn run<'a, H: Host<'a>, T>(
 /// How a run left `exec`.
 enum Exit<'a> {
     Ret(Reg<'a>),
-    Fail(ExecutionError),
+    Fail(Box<ExecutionError>),
     /// A read is not answerable yet. `pc` is the op that asked: resuming re-executes it, and
     /// nothing before it. Only a host that waits produces this.
     Need {
         handle: DemandHandle,
         pc: usize,
-        inflight: Option<ExecutionError>,
+        inflight: Option<Box<ExecutionError>>,
     },
 }
 
@@ -996,7 +1245,7 @@ fn exec<'a, H: Host<'a>>(
     iters: &mut [Iter<'a>],
     errs: &mut Vec<ExecutionError>,
     start: usize,
-    inflight: Option<ExecutionError>,
+    inflight: Option<Box<ExecutionError>>,
 ) -> Exit<'a> {
     let ops = &code.ops[..];
     let mut pc = start;
@@ -1015,7 +1264,11 @@ fn exec<'a, H: Host<'a>>(
     // The ops a decision runs most, inline; everything else through `slow`, which keeps this loop
     // small enough to hold its state in registers.
     loop {
-        let op = ops[pc];
+        debug_assert!(pc < ops.len());
+        // SAFETY: `Code::verify` checked every jump target against `ops.len()` and that the last
+        // op never falls through, so `pc` — the start (0 or a resumed op), a target, or the op
+        // after one that falls through — is always an op.
+        let op = unsafe { *ops.get_unchecked(pc) };
         pc += 1;
         match op {
             Op::Const { dst, k } => regs[dst as usize] = code.konst(k),
@@ -1051,7 +1304,7 @@ fn exec<'a, H: Host<'a>>(
                     }
                 }
                 Ok(_) => {
-                    inflight = Some(ExecutionError::NoSuchOverload);
+                    inflight = Some(no_such_overload());
                     pc = err as usize;
                 }
                 Err(Miss::Err(e)) => {
@@ -1068,6 +1321,53 @@ fn exec<'a, H: Host<'a>>(
                     pc = else_ as usize;
                 }
             }
+            Op::CondEqFF {
+                a,
+                b,
+                ne,
+                else_,
+                err,
+            } => {
+                let x = match host.read(a, Want::Str, st) {
+                    Ok(v) => v,
+                    Err(Miss::Err(e)) => {
+                        inflight = Some(e);
+                        pc = err as usize;
+                        continue;
+                    }
+                    Err(Miss::Need(h)) => need!(h),
+                };
+                let y = match host.read(b, Want::Str, st) {
+                    Ok(v) => v,
+                    Err(Miss::Err(e)) => {
+                        inflight = Some(e);
+                        pc = err as usize;
+                        continue;
+                    }
+                    Err(Miss::Need(h)) => need!(h),
+                };
+                if eq_k(x, y) == ne {
+                    pc = else_ as usize;
+                }
+            }
+            Op::CondEqFK {
+                a,
+                k,
+                ne,
+                else_,
+                err,
+            } => match host.read(a, Want::Str, st) {
+                Ok(x) => {
+                    if eq_k(x, code.konst(k)) == ne {
+                        pc = else_ as usize;
+                    }
+                }
+                Err(Miss::Err(e)) => {
+                    inflight = Some(e);
+                    pc = err as usize;
+                }
+                Err(Miss::Need(h)) => need!(h),
+            },
             Op::CondMatch {
                 a,
                 m,
@@ -1081,7 +1381,7 @@ fn exec<'a, H: Host<'a>>(
                     }
                 }
                 _ => {
-                    inflight = Some(ExecutionError::NoSuchOverload);
+                    inflight = Some(no_such_overload());
                     pc = err as usize;
                 }
             },
@@ -1097,7 +1397,7 @@ fn exec<'a, H: Host<'a>>(
                     }
                 }
                 _ => {
-                    inflight = Some(ExecutionError::NoSuchOverload);
+                    inflight = Some(no_such_overload());
                     pc = err as usize;
                 }
             },
@@ -1121,6 +1421,25 @@ fn exec<'a, H: Host<'a>>(
                 Err(Miss::Need(h)) => need!(h),
             },
             Op::RaiseIfErr { r, .. } if matches!(regs[r as usize], Reg::Bool(_)) => {}
+            Op::Eq { dst, a, b } => {
+                regs[dst as usize] = Reg::Bool(eq_k(regs[a as usize], regs[b as usize]))
+            }
+            Op::Ne { dst, a, b } => {
+                regs[dst as usize] = Reg::Bool(!eq_k(regs[a as usize], regs[b as usize]))
+            }
+            // Only the case that does nothing is inline: the left passed it on and the right is a
+            // bool. Every other case — an error to raise or absorb — goes to `slow`.
+            Op::Absorb { dst, a, or, .. }
+                if matches!(
+                    (regs[a as usize], regs[dst as usize]),
+                    (Reg::Bool(l), Reg::Bool(_)) if l != or
+                ) => {}
+            Op::Match { dst, a, m, .. } if matches!(regs[a as usize], Reg::Str(_)) => {
+                let Reg::Str(s) = regs[a as usize] else {
+                    unreachable!()
+                };
+                regs[dst as usize] = Reg::Bool(code.matchers[m as usize].matches(s));
+            }
             Op::Ret { r } => return Exit::Ret(regs[r as usize]),
             Op::RetK { k } => return Exit::Ret(code.konst(k)),
             _ => match slow(
@@ -1143,13 +1462,65 @@ fn exec<'a, H: Host<'a>>(
     }
 }
 
+/// The error an op raises when its operand is not a type it takes. Boxed, and built only on the
+/// cold path that raises it.
+#[cold]
+#[inline(never)]
+fn no_such_overload() -> Box<ExecutionError> {
+    Box::new(ExecutionError::NoSuchOverload)
+}
+
 /// What one op did.
 enum Flow<'a> {
     Next,
     Ret(Reg<'a>),
-    Fail(ExecutionError),
+    Fail(Box<ExecutionError>),
     /// Not answerable yet: the op did nothing, and `pc` is where `exec` left it.
     Need(DemandHandle),
+}
+
+/// The ops `exec` handles itself (some only in their common case; see [`handled_inline`]).
+pub(crate) const INLINE: &[&str] = &[
+    "Const",
+    "Jump",
+    "BrTrue",
+    "BrFalse",
+    "Local",
+    "Read",
+    "CondRead",
+    "EqK",
+    "CondEqK",
+    "CondMatch",
+    "Cond",
+    "CondTagIn",
+    "RaiseIfErr",
+    "Eq",
+    "Ne",
+    "Absorb",
+    "Match",
+    "CondEqFF",
+    "CondEqFK",
+    "Ret",
+    "RetK",
+];
+
+/// The names of the ops `exec` handles inline, for `tests/fast_layout.rs`.
+#[doc(hidden)]
+pub fn inline_ops() -> &'static [&'static str] {
+    INLINE
+}
+
+/// Would `exec` have handled `op` itself, given these registers? `slow` asserts it never sees one.
+fn handled_inline(op: Op, regs: &[Reg<'_>]) -> bool {
+    match op {
+        Op::Absorb { dst, a, or, .. } => matches!(
+            (regs[a as usize], regs[dst as usize]),
+            (Reg::Bool(l), Reg::Bool(_)) if l != or
+        ),
+        Op::Match { a, .. } => matches!(regs[a as usize], Reg::Str(_)),
+        Op::RaiseIfErr { r, .. } => matches!(regs[r as usize], Reg::Bool(_)),
+        other => INLINE.contains(&other.name()),
+    }
 }
 
 /// Every op the hot loop does not handle inline: the rarer, larger ones.
@@ -1163,12 +1534,17 @@ fn slow<'a, H: Host<'a>>(
     st: &mut Store<'a>,
     iters: &mut [Iter<'a>],
     errs: &mut Vec<ExecutionError>,
-    inflight: &mut Option<ExecutionError>,
+    inflight: &mut Option<Box<ExecutionError>>,
     pc: &mut usize,
 ) -> Flow<'a> {
+    debug_assert!(
+        !handled_inline(op, regs),
+        "{} reached slow, but exec handles it inline",
+        op.name()
+    );
     macro_rules! fail {
         ($e:expr, $to:expr) => {{
-            *inflight = Some($e);
+            *inflight = Some(Box::new($e));
             *pc = $to as usize;
             return Flow::Next;
         }};
@@ -1186,7 +1562,11 @@ fn slow<'a, H: Host<'a>>(
         ($e:expr, $to:expr) => {
             match $e {
                 Ok(v) => v,
-                Err(Miss::Err(e)) => fail!(e, $to),
+                Err(Miss::Err(e)) => {
+                    *inflight = Some(e);
+                    *pc = $to as usize;
+                    return Flow::Next;
+                }
                 Err(Miss::Need(h)) => return Flow::Need(h),
             }
         };
@@ -1195,6 +1575,8 @@ fn slow<'a, H: Host<'a>>(
     // poll, or pauses the run before it has touched anything.
     let waits = host.waits();
     match op {
+        // Only ever inline: `exec` answers both in every case.
+        Op::CondEqFF { .. } | Op::CondEqFK { .. } => unreachable!("{} reached slow", op.name()),
         Op::Const { dst, k } => regs[dst as usize] = code.konst(k),
         Op::Raise { k, err } => match &code.consts[k as usize] {
             CVal::Err(e) => fail!(e.clone(), err),
@@ -1445,7 +1827,7 @@ fn slow<'a, H: Host<'a>>(
             _ => fail!(ExecutionError::NoSuchOverload, err),
         },
         Op::Catch { dst } => {
-            errs.push(inflight.take().expect("an error in flight"));
+            errs.push(*inflight.take().expect("an error in flight"));
             regs[dst as usize] = Reg::Err((errs.len() - 1) as u32);
         }
         Op::Absorb { dst, a, or, err } => {
@@ -1534,7 +1916,7 @@ fn slow<'a, H: Host<'a>>(
             regs[accu as usize] = s;
         }
         Op::CatchPending { pend } => {
-            let e = inflight.take().expect("an error in flight");
+            let e = *inflight.take().expect("an error in flight");
             // The FIRST error is the one reported.
             if !matches!(regs[pend as usize], Reg::Err(_)) {
                 errs.push(e);
@@ -1741,7 +2123,7 @@ pub(crate) struct Paused {
     store: Store<'static>,
     iters: Vec<Held<'static>>,
     errs: Vec<ExecutionError>,
-    inflight: Option<ExecutionError>,
+    inflight: Option<Box<ExecutionError>>,
 }
 
 impl std::fmt::Debug for Paused {
@@ -1918,7 +2300,7 @@ impl FastProgram {
         );
         match exit {
             Exit::Ret(r) => Resumed::Done(verdict(&self.source, Ok(as_bool(r, &errs)))),
-            Exit::Fail(e) => Resumed::Done(verdict(&self.source, Err(e))),
+            Exit::Fail(e) => Resumed::Done(verdict(&self.source, Err(*e))),
             Exit::Need {
                 handle,
                 pc,
@@ -1959,10 +2341,15 @@ impl FastProgram {
         for op in &self.code.ops {
             if let Op::Read { f, .. }
             | Op::CondRead { f, .. }
+            | Op::CondEqFK { a: f, .. }
             | Op::TagIn { f, .. }
             | Op::CondTagIn { f, .. } = op
             {
                 out[*f as usize] = true;
+            }
+            if let Op::CondEqFF { a, b, .. } = op {
+                out[*a as usize] = true;
+                out[*b as usize] = true;
             }
         }
         out
@@ -1976,4 +2363,73 @@ pub(crate) type Kinds = HashMap<u64, Kind>;
 #[cfg(feature = "conformance")]
 pub(crate) fn run_value(p: &FastProgram, roots: &Bindings) -> Result<CelValue, ExecutionError> {
     p.eval_value(roots)
+}
+
+/// The sizes of the backend's hot types, for `tests/fast_layout.rs` and the ablation's `--listing`.
+#[doc(hidden)]
+pub fn layout_sizes() -> Vec<(&'static str, usize)> {
+    use std::mem::size_of;
+    vec![
+        ("Reg", size_of::<Reg<'static>>()),
+        ("Op", size_of::<Op>()),
+        ("ExecutionError", size_of::<ExecutionError>()),
+        (
+            "Option<ExecutionError>",
+            size_of::<Option<ExecutionError>>(),
+        ),
+        ("Result<Reg, Miss>", size_of::<Result<Reg<'static>, Miss>>()),
+        ("Exit", size_of::<Exit<'static>>()),
+        ("Flow", size_of::<Flow<'static>>()),
+        (
+            "Result<bool, CelError>",
+            size_of::<Result<bool, crate::CelError>>(),
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+
+    fn code(ops: Vec<Op>, nconsts: usize) -> Code {
+        let mut c = Code {
+            ops,
+            consts: (0..nconsts).map(|_| CVal::Bool(true)).collect(),
+            nregs: 1,
+            ..Code::default()
+        };
+        c.seal();
+        c
+    }
+
+    #[test]
+    fn a_well_formed_program_verifies() {
+        assert!(code(vec![Op::RetK { k: 0 }], 1).verify().is_ok());
+    }
+
+    /// `exec` fetches ops and constants unchecked on the strength of `verify`, so each way a
+    /// program can index past its arrays must be refused, naming the op.
+    #[test]
+    fn a_corrupt_program_is_refused() {
+        let cases = [
+            (vec![Op::Jump { to: 5 }], 1, "jumps to 5"),
+            (
+                vec![Op::Const { dst: 0, k: 3 }, Op::Ret { r: 0 }],
+                1,
+                "names constant 3",
+            ),
+            (vec![Op::Const { dst: 0, k: 0 }], 1, "fall through"),
+            (
+                vec![Op::BrTrue { r: 0, to: 9 }, Op::RetK { k: 0 }],
+                1,
+                "jumps to 9",
+            ),
+        ];
+        for (ops, nconsts, want) in cases {
+            let err = code(ops.clone(), nconsts)
+                .verify()
+                .expect_err(&format!("{ops:?} verified"));
+            assert!(err.contains(want), "{ops:?}: {err}");
+        }
+    }
 }

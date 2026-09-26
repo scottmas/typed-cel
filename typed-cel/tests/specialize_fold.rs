@@ -312,3 +312,38 @@ fn no_dotted_function_names_exist() {
         );
     }
 }
+
+#[test]
+fn a_call_whose_arguments_all_folded_is_evaluated() {
+    // `t || …` folds to `true` only after `!` has been rebuilt around it; the call is then closed.
+    folds(&[
+        (r#"!(t || u.s == "a")"#, "false"),
+        ("!(f && u.b)", "true"),
+        (r#"u.s.startsWith(p.fs.root + "/")"#, r#"u.s.startsWith("/ws/")"#),
+    ]);
+}
+
+#[test]
+fn and_with_a_folded_false_operand_is_false() {
+    folds(&[(r#"u.s == "a" && !(t || u.s == "b")"#, "false")]);
+}
+
+#[test]
+fn a_conditional_compared_to_one_arm_is_its_condition() {
+    folds(&[
+        (r#"(u.b ? "eacces" : "allow") == "allow""#, "!u.b"),
+        (r#"(u.b ? "eacces" : "allow") == "eacces""#, "u.b"),
+        (r#"(u.b ? "eacces" : "allow") != "allow""#, "u.b"),
+        (r#"(u.b ? "eacces" : "allow") != "eacces""#, "!u.b"),
+        (r#""allow" == (u.b ? "eacces" : "allow")"#, "!u.b"),
+        // Arms that are not two distinct literals, or a constant neither arm equals, stay: the
+        // condition is a read that can raise, and only rewriting to it keeps that error.
+        (r#"(u.b ? "a" : "a") == "a""#, r#"(u.b ? "a" : "a") == "a""#),
+        (r#"(u.b ? "a" : "b") == "c""#, r#"(u.b ? "a" : "b") == "c""#),
+    ]);
+}
+
+#[test]
+fn double_negation_of_a_bool_is_the_bool() {
+    folds(&[("!!u.b", "u.b"), ("!!(u.b && u.c)", "u.b && u.c")]);
+}

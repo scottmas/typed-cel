@@ -15,7 +15,7 @@ Numbers below are ns per evaluation, with allocations per evaluation in brackets
 Hetzner cx33 (AMD EPYC-Rome, one pinned core). Method and every table:
 [`docs/PERFORMANCE.md`](./typed-cel/docs/PERFORMANCE.md).
 
-## 1. Typed and compiled: ~100× faster than cel-rust, zero allocations
+## 1. Typed and compiled: ~200× faster than cel-rust, zero allocations
 
 ```text
 req.body.account.owner_id == req.user && req.body.account.tier == "gold"
@@ -23,9 +23,9 @@ req.body.account.owner_id == req.user && req.body.account.tier == "gold"
 
 | | ns / eval | allocations |
 |---|---:|---:|
-| cel-rust 0.14.2 | 8,293 | 193 |
-| **typed-cel** | **87** | **0** |
-| hand-written Rust | 8.7 | 0 |
+| cel-rust 0.14.2 | 9,742 | 193 |
+| **typed-cel** | **42.5** | **0** |
+| hand-written Rust | 9.0 | 0 |
 
 A dynamically typed CEL builds a map of boxed values for every request, looks each field up by
 name, and checks operand types on every operation. typed-cel resolves every field a program reads
@@ -116,14 +116,14 @@ policy.roots.exists(r, req.path == r || req.path.startsWith(r + "/"))
 
 | | ns / eval | allocations |
 |---|---:|---:|
-| cel-rust 0.14.2 | 878,800 | 18,257 |
-| typed-cel, no specialization | 301,000 | 822 |
-| **typed-cel, specialized** | **205** | **0** |
-| hand-written Rust (loop over the roots) | 2,226 | 0 |
+| cel-rust 0.14.2 | 949,900 | 18,257 |
+| typed-cel, no specialization | 298,300 | 822 |
+| **typed-cel, specialized** | **207** | **0** |
+| hand-written Rust (loop over the roots) | 2,331 | 0 |
 
-That's **4,300× faster than cel-rust, and 11× faster than the Rust.** The Rust version was compiled
+That's **4,600× faster than cel-rust, and 11× faster than the Rust.** The Rust version was compiled
 before anyone knew the roots, so it has to loop over them. The specialized program was compiled
-after, with the roots as constants. (With 13 roots the Rust loop still wins, 35 ns against 75 ns.
+after, with the roots as constants. (With 13 roots the Rust loop still wins, 35 ns against 59 ns.
 The crossover comes where the static data gets big.)
 
 ```rust

@@ -42,6 +42,33 @@ fn ret_early(ops: &mut [Op]) {
     }
 }
 
+/// Is `e` a `&&`, `||` or `!` — a bool whose operands a branch can test without building them?
+fn is_logic(e: &IdedExpr) -> bool {
+    matches!(&e.expr, Expr::Call(c) if c.target.is_none()
+    && matches!(
+        (c.func_name.as_str(), c.args.len()),
+        (operators::LOGICAL_AND | operators::LOGICAL_OR, 2) | (operators::LOGICAL_NOT, 1)
+    ))
+}
+
+/// Does `e` lower to fewer ops as a branch than as a value followed by `BrTrue`/`BrFalse`? A
+/// logic operator branches on its operands; `==`/`!=`, a bool field and `in` each fuse with the
+/// branch on them (`CondEqFF`/`CondEqFK`/`CondEqK`, `CondRead`, `CondMatch`/`CondTagIn`).
+fn branches_well(e: &IdedExpr) -> bool {
+    match &e.expr {
+        Expr::Ident(_) | Expr::Select(_) => true,
+        Expr::Call(c) => {
+            is_logic(e)
+                || (c.target.is_none()
+                    && matches!(
+                        c.func_name.as_str(),
+                        operators::EQUALS | operators::NOT_EQUALS | operators::IN
+                    ))
+        }
+        _ => false,
+    }
+}
+
 /// The fewest `==`/`startsWith` leaves an `||` chain needs before it is answered by a matcher.
 /// Below it the chain is cheaper as written.
 const MIN_CHAIN: usize = 2;
@@ -74,9 +101,22 @@ pub(crate) fn lower(
         l.slots.push((name.to_string(), k, value.clone()));
     }
     let fail = l.label();
-    let out = l.tmp()?;
-    l.expr(e, out, fail)?;
-    l.push(Op::Ret { r: out });
+    if is_logic(e) {
+        // A `&&`/`||`/`!` result as a branch to one of two constant returns: the branch lowering
+        // keeps absorption without building each operand's bool, and lets a comparison fuse with
+        // the branch on it (`CondEqFF`, `CondEqK`, …).
+        let otherwise = l.label();
+        l.branch(e, otherwise, false, fail)?;
+        let t = l.konst(CVal::Bool(true));
+        l.push(Op::RetK { k: t });
+        l.place(otherwise);
+        let f = l.konst(CVal::Bool(false));
+        l.push(Op::RetK { k: f });
+    } else {
+        let out = l.tmp()?;
+        l.expr(e, out, fail)?;
+        l.push(Op::Ret { r: out });
+    }
     l.place(fail);
     l.push(Op::Fail);
     l.finish()
@@ -269,6 +309,9 @@ impl Lower<'_> {
         }
         ret_early(&mut self.code.ops);
         self.code.seal();
+        self.code
+            .verify()
+            .map_err(|e| format!("the lowered program is malformed: {e}"))?;
         Ok(self.code)
     }
 
@@ -870,7 +913,79 @@ impl Lower<'_> {
                 err: h,
             }),
         }
+        self.fuse_reads(jump_if);
         Ok(())
+    }
+
+    /// Fold the string reads a comparison-and-branch just lowered to into it:
+    /// `Read a; Read b; Eq|Ne; Cond` becomes `CondEqFF`, `Read a; CondEqK` becomes `CondEqFK`.
+    /// Reads keep their order and their shared error handler, so a failing read raises the same
+    /// error at the same point. Nothing fuses across a jump target: a label placed on any op but
+    /// the first would be left pointing past the fused op.
+    fn fuse_reads(&mut self, jump_if: bool) {
+        let ops = &self.code.ops;
+        let n = ops.len();
+        let lands_from = |from: usize| matches!(self.pinned, Some(p) if p as usize >= from);
+        let read_str = |op: Op| match op {
+            Op::Read {
+                dst,
+                f,
+                want: Want::Str,
+                err,
+            } => Some((dst, f, err)),
+            _ => None,
+        };
+        if n >= 4 && !lands_from(n - 3) {
+            if let (
+                Some((ra, fa, ea)),
+                Some((rb, fb, eb)),
+                eq,
+                Op::Cond {
+                    r, invert, else_, ..
+                },
+            ) = (
+                read_str(ops[n - 4]),
+                read_str(ops[n - 3]),
+                ops[n - 2],
+                ops[n - 1],
+            ) {
+                let cmp = match eq {
+                    Op::Eq { dst, a, b } if dst == r && a == ra && b == rb => Some(false),
+                    Op::Ne { dst, a, b } if dst == r && a == ra && b == rb => Some(true),
+                    _ => None,
+                };
+                if let (Some(ne_op), true, true) = (cmp, ea == eb, ra != rb) {
+                    debug_assert_eq!(invert, jump_if);
+                    self.code.ops.truncate(n - 4);
+                    self.code.ops.push(Op::CondEqFF {
+                        a: fa,
+                        b: fb,
+                        ne: jump_if != ne_op,
+                        else_,
+                        err: ea,
+                    });
+                    return;
+                }
+            }
+        }
+        let ops = &self.code.ops;
+        let n = ops.len();
+        if n >= 2 && !lands_from(n - 1) {
+            if let (Some((ra, fa, ea)), Op::CondEqK { a, k, ne, else_ }) =
+                (read_str(ops[n - 2]), ops[n - 1])
+            {
+                if a == ra {
+                    self.code.ops.truncate(n - 2);
+                    self.code.ops.push(Op::CondEqFK {
+                        a: fa,
+                        k,
+                        ne,
+                        else_,
+                        err: ea,
+                    });
+                }
+            }
+        }
     }
 
     /// `a || b` / `a && b` as a branch to `target` when the result is `jump_if`.
@@ -889,13 +1004,23 @@ impl Lower<'_> {
     ) -> Result<(), String> {
         let a = self.tmp()?;
         let (caught, b, settled, passed) = (self.label(), self.label(), self.label(), self.label());
-        self.expr(left, a, caught)?;
-        // The left operand settles it: `or` is the settling value.
-        self.push(if or {
-            Op::BrTrue { r: a, to: settled }
+        // The left operand is a branch too: it jumps to `settled` when it settles, and an error
+        // in it is caught into `a`. `a` holds the passing value until then, so `RaiseIfErr` below
+        // sees a bool unless the left raised — the register is reused, so it is set, not assumed.
+        if branches_well(left) {
+            let passing = self.konst(CVal::Bool(!or));
+            self.push(Op::Const { dst: a, k: passing });
+            self.branch(left, settled, or, caught)?;
         } else {
-            Op::BrFalse { r: a, to: settled }
-        });
+            // Nothing fuses with the branch on it: build the bool and branch on the register,
+            // one op cheaper than presetting `a`.
+            self.expr(left, a, caught)?;
+            self.push(if or {
+                Op::BrTrue { r: a, to: settled }
+            } else {
+                Op::BrFalse { r: a, to: settled }
+            });
+        }
         self.place(b);
         if jump_if == or {
             // Settling goes to `target`; passing falls through, once the left's error is raised.

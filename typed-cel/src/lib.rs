@@ -64,6 +64,8 @@ pub use desugar::{desugar, DesugarError, SpanMap};
 pub use emit::{emit, CelBytecode};
 pub use event::Event;
 pub use fast::{FactPoll, Facts, FastProgram, FastScratch, FieldId, FieldPath};
+#[doc(hidden)]
+pub use fast::{inline_ops, layout_sizes};
 pub use governed::{
     GovernedDoc, GovernedShape, RunLiveness, StreamedProgram, StreamedRun, GOVERNED_CELL_BYTES,
 };

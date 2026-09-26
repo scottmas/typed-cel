@@ -20,6 +20,10 @@
 mod events;
 
 mod count;
+#[path = "floor.rs"]
+mod floor;
+#[path = "pmu.rs"]
+mod pmu;
 
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -27,8 +31,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use typed_cel::{
-    emit, CelActivation, CelEnvironment, CelLimits, CelTy, Facts, FastProgram, FastScratch,
-    FieldId, Record, RunLiveness, StreamedProgram, Vm,
+    emit, CelActivation, CelBytecode, CelEnvironment, CelLimits, CelProgram, CelTy, Facts,
+    FastProgram, FastScratch, FieldId, Record, RunLiveness, StreamedProgram, Vm,
 };
 
 #[global_allocator]
@@ -879,6 +883,48 @@ fn verdict_of(v: Result<cel::Value, cel::ExecutionError>) -> Result<bool, String
     }
 }
 
+/// What the dialect columns run, built once per workload: the checked program, its bytecode, the
+/// requests as `Facts` for (3b), and the specialized residual with its `Facts` for (4).
+struct Prepared {
+    program: CelProgram,
+    bytecode: CelBytecode,
+    facts: Result<Vec<ReqFacts>, String>,
+    specialized: Option<(CelProgram, FastProgram, Vec<ReqFacts>)>,
+}
+
+fn prepared(env: &CelEnvironment, w: &Workload) -> Prepared {
+    let id = w.id;
+    let policy_json = serde_json::to_value(&w.policy).expect("policy serializes");
+    let program = env
+        .compile(&w.dialect)
+        .unwrap_or_else(|e| panic!("{id}: {e}"));
+    let bytecode = emit(&program).unwrap_or_else(|e| panic!("{id}: {e}"));
+    let facts = facts_for(bytecode.program(), &w.policy, &w.requests);
+    let specialized = if w.dialect.contains("policy.") {
+        let mut known = env.activation();
+        known.bind("policy", &policy_json).expect("policy binds");
+        let residual = env
+            .specialize(&program, &known)
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        let fast = FastProgram::new(&residual).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let f = facts_for(&fast, &w.policy, &w.requests).unwrap_or_else(|p| {
+            panic!(
+                "{id}: the residual reads a composite {p}: {}",
+                residual.source()
+            )
+        });
+        Some((residual, fast, f))
+    } else {
+        None
+    };
+    Prepared {
+        program,
+        bytecode,
+        facts,
+        specialized,
+    }
+}
+
 fn run_workload(env: &CelEnvironment, w: &Workload, out: &mut String) {
     let id = w.id;
     let n = w.requests.len();
@@ -900,11 +946,13 @@ fn run_workload(env: &CelEnvironment, w: &Workload, out: &mut String) {
         })
         .collect();
 
-    // (2) / (3a)
-    let program = env
-        .compile(&w.dialect)
-        .unwrap_or_else(|e| panic!("{id}: {e}"));
-    let bytecode = emit(&program).unwrap_or_else(|e| panic!("{id}: {e}"));
+    // (2) / (3a), (3b), (4)
+    let Prepared {
+        program,
+        bytecode,
+        facts,
+        specialized,
+    } = prepared(env, w);
     let acts: Vec<CelActivation> = w
         .requests
         .iter()
@@ -916,29 +964,7 @@ fn run_workload(env: &CelEnvironment, w: &Workload, out: &mut String) {
         })
         .collect();
     let vm = Vm::new();
-
-    // (3b)
     let code = bytecode.program();
-    let facts = facts_for(code, &w.policy, &w.requests);
-
-    // (4)
-    let specialized = if reads_policy {
-        let mut known = env.activation();
-        known.bind("policy", &policy_json).expect("policy binds");
-        let residual = env
-            .specialize(&program, &known)
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-        let fast = FastProgram::new(&residual).unwrap_or_else(|e| panic!("{id}: {e}"));
-        let f = facts_for(&fast, &w.policy, &w.requests).unwrap_or_else(|p| {
-            panic!(
-                "{id}: the residual reads a composite {p}: {}",
-                residual.source()
-            )
-        });
-        Some((residual, fast, f))
-    } else {
-        None
-    };
 
     // The vacuity guard: every leg answers every request, and alike.
     let mut verdicts = Vec::new();
@@ -1528,6 +1554,13 @@ fn main() {
         print!("{}", render(&r, split.map(|_| &h)));
         return;
     }
+    match args.first().map(String::as_str) {
+        Some("--listing") => return listing(&args[1..]),
+        Some("--cycles") => return cycles(&args[1..]),
+        Some("--cycles-median") => return cycles_median(&args[1..]),
+        Some("--trace") => return trace(&args[1..]),
+        _ => {}
+    }
     header();
     let env = env();
     let mut out = String::new();
@@ -1549,4 +1582,352 @@ fn main() {
     r.add(&out);
     println!();
     print!("{}", render(&r, None));
+}
+
+// ------------------------------------------------------------------------------------------
+// Cycles: hardware counters per decision
+// ------------------------------------------------------------------------------------------
+
+/// Calls per counted run: long enough that the two counter reads are noise.
+const CYCLE_ITERS: usize = 5_000_000;
+
+/// The columns whose cycles the `--against` gate holds: the ones `decide` runs.
+const GATED: &[&str] = &["bytecode_facts", "specialized"];
+
+fn cycles_row<F: FnMut(usize) -> bool>(
+    out: &mut String,
+    id: &str,
+    col: &str,
+    n: usize,
+    ctr: &Option<pmu::Ctr>,
+    mut f: F,
+) {
+    // `time` warms and then times; the counted run comes after it, equally warm.
+    let (median, _min) = time(n, &mut f);
+    let line = match ctr
+        .as_ref()
+        .map(|c| pmu::per_call(c, n, CYCLE_ITERS, &mut f))
+    {
+        Some([cyc, ins, br, miss]) => {
+            format!("@cycles\t{id}\t{col}\t{median:.1}\t{cyc:.1}\t{ins:.1}\t{br:.1}\t{miss:.2}")
+        }
+        None => format!("@cycles\t{id}\t{col}\t{median:.1}\tna\tna\tna\tna"),
+    };
+    raw(out, line);
+}
+
+/// `nested_fields`'s three field reads, in the order the floor spikes hardcode.
+const NESTED_FIELDS: [&[&str]; 3] = [
+    &["req", "body", "account", "owner_id"],
+    &["req", "user"],
+    &["req", "body", "account", "tier"],
+];
+
+fn cycles(args: &[String]) {
+    let mut against = None;
+    let mut filters = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--against" {
+            against = Some(it.next().expect("--against <file>").clone());
+        } else {
+            filters.push(a.clone());
+        }
+    }
+    let ctr = pmu::Ctr::new();
+    if ctr.is_none() {
+        if against.is_some() {
+            eprintln!("cycles need the PMU; run on a Linux x86_64 host that exposes it");
+            std::process::exit(2);
+        }
+        println!("# pmu: unavailable — ns only");
+    }
+    let wanted = |id: &str| filters.is_empty() || filters.iter().any(|f| f == id);
+    let env = env();
+    let all = workloads();
+    let mut out = String::new();
+    for id in WORKLOADS
+        .iter()
+        .filter(|id| !id.starts_with("streamed_") && wanted(id))
+    {
+        let w = all.iter().find(|w| w.id == *id).expect("workload");
+        let p = prepared(&env, w);
+        let n = w.requests.len();
+        let (reqs, pol) = (&w.requests, &w.policy);
+        cycles_row(&mut out, id, "rust", n, &ctr, |i| {
+            (w.rust)(black_box(pol), black_box(&reqs[i]))
+        });
+        if let Ok(f) = &p.facts {
+            let code = p.bytecode.program();
+            let mut s = FastScratch::default();
+            cycles_row(&mut out, id, "bytecode_facts", n, &ctr, |i| {
+                code.decide(&f[i], &mut s).unwrap()
+            });
+            if *id == "nested_fields" {
+                floor_rows(&mut out, w, code, f, &ctr);
+            }
+        }
+        if let Some((_, fast, f)) = &p.specialized {
+            let mut s = FastScratch::default();
+            cycles_row(&mut out, id, "specialized", n, &ctr, |i| {
+                fast.decide(&f[i], &mut s).unwrap()
+            });
+        }
+    }
+    if wanted("constant_true") {
+        // The program `true`: every cycle it costs is the fixed per-call path.
+        let fast = FastProgram::new(&env.compile("true").expect("`true` compiles"))
+            .expect("`true` lowers");
+        let facts: Vec<ReqFacts> = (0..8).map(|_| ReqFacts { vals: Vec::new() }).collect();
+        let mut s = FastScratch::default();
+        cycles_row(&mut out, "constant_true", "bytecode_facts", 8, &ctr, |i| {
+            fast.decide(&facts[i], &mut s).unwrap()
+        });
+    }
+    println!();
+    print!("{}", cycles_table(&parse_cycles(&out)));
+    if let Some(path) = against {
+        let base = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        std::process::exit(gate(&parse_cycles(&base), &parse_cycles(&out)));
+    }
+}
+
+/// The floor spikes beside `nested_fields`, each held to the Rust column's answers first.
+fn floor_rows(
+    out: &mut String,
+    w: &Workload,
+    code: &FastProgram,
+    f: &[ReqFacts],
+    ctr: &Option<pmu::Ctr>,
+) {
+    let fields = code.fields();
+    assert!(
+        fields.len() == 3 && NESTED_FIELDS.iter().zip(fields).all(|(n, p)| p.is(n)),
+        "the floor spikes hardcode nested_fields's field order; the program reads {:?}",
+        fields
+            .iter()
+            .map(|p| std::iter::once(p.root())
+                .chain(p.segments())
+                .collect::<Vec<_>>()
+                .join("."))
+            .collect::<Vec<_>>()
+    );
+    let (ops, k) = floor::nested();
+    let (fops, fk) = floor::nested_fused();
+    let tree = floor::closures::nested();
+    for (i, r) in w.requests.iter().enumerate() {
+        let want = (w.rust)(&w.policy, r);
+        let got = [
+            floor::run(&ops, &k, &f[i]).ok(),
+            floor::run_fused(&fops, &fk, &f[i]).ok(),
+            tree(&f[i]).ok(),
+        ];
+        assert!(
+            got.iter().all(|g| *g == Some(want)),
+            "nested_fields request {i}: a floor spike disagrees with Rust ({want}): {got:?}"
+        );
+    }
+    let n = w.requests.len();
+    cycles_row(out, w.id, "floor_lean", n, ctr, |i| {
+        floor::run(&ops, &k, &f[i]).ok().unwrap()
+    });
+    cycles_row(out, w.id, "floor_fused", n, ctr, |i| {
+        floor::run_fused(&fops, &fk, &f[i]).ok().unwrap()
+    });
+    cycles_row(out, w.id, "floor_closures", n, ctr, |i| {
+        tree(&f[i]).unwrap()
+    });
+}
+
+/// One `@cycles` row: (id, col) → [ns, cycles, instructions, branches, branch misses].
+type CycleRows = BTreeMap<(String, String), [Option<f64>; 5]>;
+
+fn parse_cycles(text: &str) -> CycleRows {
+    let mut rows = CycleRows::new();
+    for line in text.lines().filter(|l| l.starts_with("@cycles\t")) {
+        let c: Vec<&str> = line.split('\t').collect();
+        let mut v = [None; 5];
+        for (k, cell) in c[3..8].iter().enumerate() {
+            v[k] = cell.parse().ok();
+        }
+        rows.insert((c[1].to_string(), c[2].to_string()), v);
+    }
+    rows
+}
+
+fn cycles_table(rows: &CycleRows) -> String {
+    let mut s =
+        String::from("| workload | column | ns | cycles | instructions | IPC | branch misses |\n");
+    s += "|---|---|---:|---:|---:|---:|---:|\n";
+    let f = |v: Option<f64>, d: usize| v.map_or("na".to_string(), |x| format!("{x:.d$}"));
+    for ((id, col), v) in rows {
+        let ipc = match (v[1], v[2]) {
+            (Some(c), Some(i)) if c > 0.0 => Some(i / c),
+            _ => None,
+        };
+        s += &format!(
+            "| `{id}` | {col} | {} | {} | {} | {} | {} |\n",
+            f(v[0], 1),
+            f(v[1], 0),
+            f(v[2], 0),
+            f(ipc, 2),
+            f(v[4], 2)
+        );
+    }
+    s
+}
+
+/// The 5% gate: exit status 1 when any gated `decide` cell's cycles rose by more than 5% AND its
+/// instruction count rose. Cycles alone swing ±7% run to run on the small cells (measured: the
+/// program `true` over five runs, 94–109 cycles at a fixed 240 instructions), so a cycle rise with
+/// no more instructions executed is layout or noise, not a regression the story introduced.
+fn gate(base: &CycleRows, now: &CycleRows) -> i32 {
+    let mut worst = Vec::new();
+    println!("\n# cycles against the baseline (now / base)");
+    for ((id, col), v) in now {
+        if !GATED.contains(&col.as_str()) {
+            continue;
+        }
+        let Some(base_v) = base.get(&(id.clone(), col.clone())) else {
+            continue;
+        };
+        let (Some(b), Some(c), Some(bi), Some(ci)) = (base_v[1], v[1], base_v[2], v[2]) else {
+            continue;
+        };
+        let ratio = c / b;
+        println!("{id}\t{col}\t{b:.1} -> {c:.1}\t{ratio:.3}\tinstructions {bi:.0} -> {ci:.0}");
+        if ratio > 1.05 && ci > bi {
+            worst.push(format!(
+                "{id} {col}: {b:.1} -> {c:.1} ({ratio:.3}), instructions {bi:.0} -> {ci:.0}"
+            ));
+        }
+    }
+    if worst.is_empty() {
+        println!("# gate: no gated cell regressed (cycles > +5% with more instructions)");
+        0
+    } else {
+        eprintln!("# gate: REGRESSED more than 5%:\n{}", worst.join("\n"));
+        1
+    }
+}
+
+/// `--cycles-median a b c`: the per-cell median of several `--cycles` runs, as `@cycles` rows.
+fn cycles_median(paths: &[String]) {
+    let runs: Vec<CycleRows> = paths
+        .iter()
+        .map(|p| parse_cycles(&std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{p}: {e}"))))
+        .collect();
+    let first = runs.first().expect("--cycles-median <run>...");
+    for (key, _) in first {
+        let mut cells = [None; 5];
+        for (k, cell) in cells.iter_mut().enumerate() {
+            let v: Vec<f64> = runs
+                .iter()
+                .filter_map(|r| r.get(key).and_then(|v| v[k]))
+                .collect();
+            if v.len() == runs.len() {
+                *cell = Some(med(v));
+            }
+        }
+        let f = |v: Option<f64>, d: usize| v.map_or("na".to_string(), |x| format!("{x:.d$}"));
+        println!(
+            "@cycles\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            key.0,
+            key.1,
+            f(cells[0], 1),
+            f(cells[1], 1),
+            f(cells[2], 1),
+            f(cells[3], 1),
+            f(cells[4], 2)
+        );
+    }
+}
+
+/// `--listing [workload…]`: each program's lowered ops, and the hot types' sizes.
+fn listing(filters: &[String]) {
+    let env = env();
+    for w in workloads()
+        .iter()
+        .filter(|w| filters.is_empty() || filters.iter().any(|f| f == w.id))
+    {
+        let p = prepared(&env, w);
+        let code = p.bytecode.program();
+        println!(
+            "## {} (3b): {} ops\n{}\n{}",
+            w.id,
+            code.op_count(),
+            p.program.source(),
+            code.listing()
+        );
+        if let Some((residual, fast, _)) = &p.specialized {
+            println!(
+                "## {} (4): {} ops\n{}\n{}",
+                w.id,
+                fast.op_count(),
+                residual.source(),
+                fast.listing()
+            );
+        }
+    }
+    println!("## layout");
+    for (name, size) in typed_cel::layout_sizes() {
+        println!("{name}\t{size}");
+    }
+}
+
+/// `--trace <workload> <request> <column>`: warm the column, then run it ONCE between two `int3`
+/// markers for `tools/steptrace.py` to single-step.
+fn trace(args: &[String]) {
+    let [id, req, col] = args else {
+        panic!("--trace <workload> <request> <column>")
+    };
+    let req: usize = req.parse().expect("request index");
+    let env = env();
+    if id == "constant_true" {
+        // The fixed per-call path alone.
+        let fast = FastProgram::new(&env.compile("true").expect("`true` compiles"))
+            .expect("`true` lowers");
+        let facts = ReqFacts { vals: Vec::new() };
+        let mut s = FastScratch::default();
+        for _ in 0..1000 {
+            black_box(fast.decide(&facts, &mut s).unwrap());
+        }
+        marker();
+        black_box(fast.decide(black_box(&facts), &mut s).unwrap());
+        marker();
+        return;
+    }
+    let all = workloads();
+    let w = all.iter().find(|w| w.id == id.as_str()).expect("workload");
+    let p = prepared(&env, w);
+    let mut s = FastScratch::default();
+    let (fast, f): (&FastProgram, &Vec<ReqFacts>) = match col.as_str() {
+        "bytecode_facts" => (
+            p.bytecode.program(),
+            p.facts.as_ref().expect("scalar reads"),
+        ),
+        "specialized" => {
+            let (_, fast, f) = p.specialized.as_ref().expect("reads the policy");
+            (fast, f)
+        }
+        other => panic!("--trace runs bytecode_facts or specialized, not {other}"),
+    };
+    for _ in 0..1000 {
+        black_box(fast.decide(&f[req], &mut s).unwrap());
+    }
+    marker();
+    black_box(fast.decide(black_box(&f[req]), &mut s).unwrap());
+    marker();
+}
+
+#[cfg(target_arch = "x86_64")]
+fn marker() {
+    // SAFETY: a breakpoint trap; under the stepper it stops the tracee, alone it kills it — the
+    // mode exists only for the stepper.
+    unsafe { std::arch::asm!("int3") }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn marker() {
+    panic!("--trace is x86_64 only");
 }

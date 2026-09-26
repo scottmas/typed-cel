@@ -449,3 +449,152 @@ fn lazy_answers_are_pinned() {
     let e = observe_one("has(r.a)");
     assert_eq!(e.answer, (true, Some(true), String::new()));
 }
+
+// ---- fused string comparisons keep `&&`/`||` absorption --------------------------------------
+
+/// Three string fields, each present with a value or absent, answered through `Facts`.
+struct Three<'a> {
+    fields: Vec<&'a str>,
+    vals: [Option<&'a str>; 3],
+}
+
+impl typed_cel::Facts for Three<'_> {
+    fn str(&self, f: typed_cel::FieldId) -> Option<&str> {
+        let slot = ["a", "b", "c"]
+            .iter()
+            .position(|n| *n == self.fields[f.index()])
+            .expect("a field of req");
+        self.vals[slot]
+    }
+    fn bool(&self, _: typed_cel::FieldId) -> Option<bool> {
+        None
+    }
+    fn num(&self, _: typed_cel::FieldId) -> Option<f64> {
+        None
+    }
+    fn has(&self, _: typed_cel::FieldId) -> bool {
+        true
+    }
+}
+
+/// One operand's answer under CEL: its bool, or the field whose missing read it raises.
+type Operand = Result<bool, &'static str>;
+
+/// `&&` (`or == false`) / `||` (`or == true`) over two operands, as CEL defines it: a deciding
+/// value absorbs an error on either side; two errors report the RIGHT one.
+fn logic(or: bool, l: Operand, r: Operand) -> Operand {
+    match (l, r) {
+        (Ok(x), _) if x == or => Ok(or),
+        (Ok(_), r) => r,
+        (Err(_), Ok(y)) if y == or => Ok(or),
+        (Err(e), Ok(_)) => Err(e),
+        (Err(_), Err(e)) => Err(e),
+    }
+}
+
+/// The message the backend raises for `field`'s missing read, from a program that reads only it
+/// in value position (no fusion there).
+fn missing_message(env: &CelEnvironment, field: &str) -> String {
+    let p = env
+        .compile(&format!("req.{field} == 'x'"))
+        .expect("compiles");
+    let fast = typed_cel::FastProgram::new(&p).expect("lowers");
+    let fields: Vec<String> = fast
+        .fields()
+        .iter()
+        .map(|f| f.segments().collect())
+        .collect();
+    let facts = Three {
+        fields: fields.iter().map(String::as_str).collect(),
+        vals: [None; 3],
+    };
+    let err = fast
+        .decide(&facts, &mut typed_cel::FastScratch::default())
+        .expect_err("a missing field raises");
+    let text = err.to_string();
+    text[text
+        .find("could not be evaluated")
+        .expect("an evaluation error")..]
+        .to_string()
+}
+
+#[test]
+fn fused_equality_keeps_and_absorption() {
+    let env = env_of(&[(
+        "req",
+        record(
+            "req",
+            &[("a", CelTy::Str), ("b", CelTy::Str), ("c", CelTy::Str)],
+        ),
+    )]);
+    let msg: std::collections::HashMap<&str, String> = ["a", "b", "c"]
+        .into_iter()
+        .map(|f| (f, missing_message(&env, f)))
+        .collect();
+    let mut fused_seen = std::collections::BTreeSet::new();
+    let mut checked = 0;
+    for ne in [false, true] {
+        let op = if ne { "!=" } else { "==" };
+        let ab = format!("req.a {op} req.b");
+        let ck = format!("req.c {op} 'x'");
+        for or in [false, true] {
+            let join = if or { "||" } else { "&&" };
+            for (src, ab_first) in [
+                (format!("{ab} {join} {ck}"), true),
+                (format!("{ck} {join} {ab}"), false),
+            ] {
+                let p = env.compile(&src).expect("compiles");
+                let fast = typed_cel::FastProgram::new(&p).expect("lowers");
+                fused_seen.extend(
+                    fast.op_names()
+                        .into_iter()
+                        .filter(|n| n.starts_with("CondEqF")),
+                );
+                let fields: Vec<String> = fast
+                    .fields()
+                    .iter()
+                    .map(|f| f.segments().collect())
+                    .collect();
+                for a in [Some("x"), Some("y"), None] {
+                    for c in [Some("x"), Some("z"), None] {
+                        let b = Some("x");
+                        let ab_v: Operand = match a {
+                            None => Err("a"),
+                            Some(a) => Ok((a == "x") != ne),
+                        };
+                        let ck_v: Operand = match c {
+                            None => Err("c"),
+                            Some(c) => Ok((c == "x") != ne),
+                        };
+                        let want = if ab_first {
+                            logic(or, ab_v, ck_v)
+                        } else {
+                            logic(or, ck_v, ab_v)
+                        };
+                        let facts = Three {
+                            fields: fields.iter().map(String::as_str).collect(),
+                            vals: [a, b, c],
+                        };
+                        let got = fast.decide(&facts, &mut typed_cel::FastScratch::default());
+                        match (&want, &got) {
+                            (Ok(w), Ok(g)) => assert_eq!(w, g, "{src} with a={a:?} c={c:?}"),
+                            (Err(field), Err(e)) => assert!(
+                                e.to_string().ends_with(&msg[field]),
+                                "{src} with a={a:?} c={c:?}: want `{field}`'s error ({}), got {e}",
+                                msg[field]
+                            ),
+                            _ => panic!("{src} with a={a:?} c={c:?}: want {want:?}, got {got:?}"),
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(checked, 72);
+    assert_eq!(
+        fused_seen.into_iter().collect::<Vec<_>>(),
+        ["CondEqFF", "CondEqFK"],
+        "the programs lower through the fused ops, so this table tests them"
+    );
+}

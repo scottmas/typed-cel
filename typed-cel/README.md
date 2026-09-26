@@ -116,13 +116,13 @@ decision (allocations per decision); the columns are defined in
 <!-- ablation:begin -->
 | workload | Rust | (1) upstream | (2) typed tree † | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
 |---|---:|---:|---:|---:|---:|---:|
-| `fs_open_allow_all` | 8.0 ns (0) | 4762 ns† (92) | 4612 ns (92) | 843 ns† (2) | n/a (composite root: `policy.fs.writable_roots`) | 57.9 ns (0) |
-| `fs_open_13` | 32.6 ns (0) | 10.8 µs (248.8) | 11.0 µs (248.8) | 2877 ns (9) | n/a (composite root: `policy.fs.writable_roots`) | 140 ns (0) |
-| `fs_open_1000` | 1367 ns (0) | 827.5 µs (17064.4) | 829.6 µs (17064.4) | 215.8 µs (578.8) | n/a (composite root: `policy.fs.writable_roots`) | 390 ns† (0) |
-| `prefix_13` | 35.1 ns (0) | 11.6 µs (247.8) | 11.7 µs (247.8) | 4068 ns (15) | n/a (composite root: `policy.roots`) | 74.7 ns (0) |
-| `nested_fields` | 8.7 ns (0) | 8293 ns† (193) | 8460 ns (193) | 338 ns† (1) | 86.6 ns (0) | — (reads no policy) |
-| `all_items` | 17.9 ns (0) | 21.1 µs (455.4) | 20.7 µs (481.8) | 3227 ns (2) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `policy_residual` | 24.0 ns (0) | 6329 ns (143.1) | 6223 ns (143.1) | 2099 ns (9.4) | n/a (composite root: `policy.methods`) | 144 ns (0) |
+| `fs_open_allow_all` | 8.1 ns (0) | 5121 ns (92) | 4612 ns (92) | 893 ns† (2) | n/a (composite root: `policy.fs.writable_roots`) | 31.3 ns (0) |
+| `fs_open_13` | 32.7 ns (0) | 12.2 µs† (248.8) | 11.0 µs (248.8) | 2798 ns (9) | n/a (composite root: `policy.fs.writable_roots`) | 123 ns† (0) |
+| `fs_open_1000` | 1490 ns (0) | 882.5 µs (17064.4) | 829.6 µs (17064.4) | 213.9 µs (578.8) | n/a (composite root: `policy.fs.writable_roots`) | 366 ns† (0) |
+| `prefix_13` | 35.2 ns (0) | 12.3 µs (247.8) | 11.7 µs (247.8) | 4257 ns (15) | n/a (composite root: `policy.roots`) | 59.3 ns (0) |
+| `nested_fields` | 9.0 ns (0) | 9742 ns (193) | 8460 ns (193) | 312 ns (0) | 42.5 ns (0) | — (reads no policy) |
+| `all_items` | 19.0 ns (0) | 23.0 µs (455.4) | 20.7 µs (481.8) | 3298 ns (2) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `policy_residual` | 25.5 ns (0) | 6933 ns (143.1) | 6223 ns (143.1) | 2154 ns (9.4) | n/a (composite root: `policy.methods`) | 86.2 ns (0) |
 
 † Column (2) is historical: measured on the typed dialect's first engine, since deleted (docs/PERFORMANCE.md, "Historical"). Every other column is this run.
 <!-- ablation:end -->

@@ -761,3 +761,64 @@ fn folding_reads_known_locals_before_roots() {
     let residual = env.specialize(&program, &k).expect("specializes");
     assert_eq!(residual.source(), "true");
 }
+
+/// The fs posture program (the ablation's `fs_open`, `ablation/benches/ablation.rs`) under the
+/// allow-all policy has one question left: is the path UTF-8. Every other branch answers "allow"
+/// or is unreachable, so the residual is that read alone — no `!(true)` or conditional left over.
+#[test]
+fn fs_open_allow_all_residual_is_path_utf8() {
+    const OPEN: &str = r#"(!req.path_utf8 ? "eacces"
+ : (req.subject == "other_process" && policy.fs.deny_other_process_proc) ? "eacces"
+ : (req.target == "device" && !(policy.fs.default == "allow"
+     || policy.fs.writable_roots.exists(r, req.path_text == r)
+     || policy.fs.readonly_roots.exists(r, req.path_text == r))) ? "eacces"
+ : policy.fs.deny_roots.exists(r, req.path_text == r || req.path_text.startsWith(r + "/")) ? "eacces"
+ : policy.fs.writable_roots.exists(r, req.path_text == r || req.path_text.startsWith(r + "/")) ? "allow"
+ : (policy.fs.readonly_roots.exists(r, req.path_text == r || req.path_text.startsWith(r + "/"))
+     || policy.fs.default == "readonly")
+     ? ((req.access == "read" || req.access == "exec") ? "allow"
+        : req.access == "write" ? "readonly" : "erofs")
+ : policy.fs.default == "allow" ? "allow" : "eacces") == "allow""#;
+    let roots = || typed_cel::CelTy::list(typed_cel::CelTy::Str);
+    let mut env = typed_cel::CelEnvironment::new();
+    env.declare(
+        "req",
+        typed_cel::Record::new(
+            "req",
+            [
+                ("path_utf8", typed_cel::CelTy::Bool),
+                ("path_text", typed_cel::CelTy::Str),
+                ("subject", typed_cel::CelTy::Str),
+                ("target", typed_cel::CelTy::Str),
+                ("access", typed_cel::CelTy::Str),
+            ],
+        ),
+    );
+    let fs = typed_cel::Record::new(
+        "fs",
+        [
+            ("default", typed_cel::CelTy::Str),
+            ("deny_other_process_proc", typed_cel::CelTy::Bool),
+            ("writable_roots", roots()),
+            ("readonly_roots", roots()),
+            ("deny_roots", roots()),
+        ],
+    );
+    env.declare(
+        "policy",
+        typed_cel::Record::new("policy", [("fs", typed_cel::CelTy::from(fs))]),
+    );
+    let program = env.compile(OPEN).expect("compiles");
+    let mut known = env.activation();
+    known
+        .bind(
+            "policy",
+            &serde_json::json!({"fs": {
+                "default": "allow", "deny_other_process_proc": false,
+                "writable_roots": [], "readonly_roots": [], "deny_roots": []
+            }}),
+        )
+        .expect("binds");
+    let residual = env.specialize(&program, &known).expect("specializes");
+    assert_eq!(residual.source(), "req.path_utf8");
+}

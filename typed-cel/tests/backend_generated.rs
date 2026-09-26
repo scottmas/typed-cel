@@ -75,6 +75,8 @@ fn the_generators_reach_every_op() {
         "CondRead",
         "CondEqK",
         "CondMatch",
+        "CondEqFF",
+        "CondEqFK",
         "RaiseIfErr",
         "EqK",
         "Catch",
@@ -433,4 +435,126 @@ fn under_any_with_a_host_prefix_trims_every_trailing_slash() {
     let mut act = env.runtime().activation();
     act.bind_fact("p", CelValue::Str("/ws/x".into()));
     assert_eq!(code.eval(&act).map_err(|e| e.to_string()), Ok(true));
+}
+
+/// The specializer's law, over every generated program: bind any one root as known and
+/// specialize, then run the residual on the others — it answers exactly as the program does with
+/// every root bound. Verdict alike, and error alike (by message: the source a message names
+/// is the residual's, not the original's).
+#[test]
+fn specialized_generated_programs_answer_as_unspecialized() {
+    fn message(e: &typed_cel::CelError) -> String {
+        match e {
+            typed_cel::CelError::Evaluation { message, .. } => message.clone(),
+            other => other.to_string(),
+        }
+    }
+    let env = roster();
+    let mut compared = 0usize;
+    let mut mismatches = Vec::new();
+    for seed in SEEDS {
+        for (index, (src, acts)) in typed_batch(seed).iter().enumerate() {
+            let original = compile_typed(src, &format!("seed={seed:#x} index={index}"));
+            for act in acts {
+                let Some((known_name, known_value)) = act.first() else {
+                    continue;
+                };
+                let mut known = env.activation();
+                known.bind(known_name, known_value).expect("binds");
+                let residual = match env.specialize(&original, &known) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        mismatches.push(format!("{src}\n  specialize over `{known_name}`: {e}"));
+                        continue;
+                    }
+                };
+                let mut full = env.activation();
+                let mut rest = env.activation();
+                for (i, (name, value)) in act.iter().enumerate() {
+                    full.bind(name, value).expect("binds");
+                    if i > 0 {
+                        rest.bind(name, value).expect("binds");
+                    }
+                }
+                let want = original.evaluate(&full).map_err(|e| message(&e));
+                let got = residual.evaluate(&rest).map_err(|e| message(&e));
+                compared += 1;
+                if want != got {
+                    mismatches.push(format!(
+                        "{src}\n  known {known_name} = {known_value}\n  residual: {}\n  want {want:?}\n  got  {got:?}",
+                        residual.source()
+                    ));
+                }
+            }
+        }
+    }
+    fail_on("specialize-then-run", &mismatches);
+    assert!(compared >= 5000, "compared only {compared}");
+}
+
+/// The shapes the specializer rewrites — a conditional compared to one of its arms, a double
+/// negation, a call that closes once its arguments fold — answer as written, over every state of
+/// their unknown operands, an unbound (erroring) one included. The generator rarely spells them,
+/// so they are enumerated here.
+#[test]
+fn the_rewritten_shapes_answer_as_written() {
+    fn message(e: &typed_cel::CelError) -> String {
+        match e {
+            typed_cel::CelError::Evaluation { message, .. } => message.clone(),
+            other => other.to_string(),
+        }
+    }
+    let mut env = typed_cel::CelEnvironment::new();
+    env.declare("x", CelTy::Bool);
+    env.declare("y", CelTy::Bool);
+    env.declare("k", CelTy::Str);
+    env.declare("t", CelTy::Bool);
+    let shapes = [
+        r#"(x ? "a" : "b") == k"#,
+        r#"(x ? "a" : "b") != k"#,
+        r#"k == (x && y ? "a" : "b")"#,
+        r#"k != (x || y ? "a" : "b")"#,
+        "!!(x || y)",
+        "!(t || x)",
+        "!(t && x)",
+        r#"y && !(t || k == "a")"#,
+    ];
+    let mut compared = 0usize;
+    let mut mismatches = Vec::new();
+    for src in shapes {
+        let original = env.compile(src).expect("compiles");
+        for k in ["a", "b", "z"] {
+            for t in [true, false] {
+                let mut known = env.activation();
+                known.bind("k", &serde_json::json!(k)).expect("binds");
+                known.bind("t", &serde_json::json!(t)).expect("binds");
+                let residual = env.specialize(&original, &known).expect("specializes");
+                for x in [Some(true), Some(false), None] {
+                    for y in [Some(true), Some(false), None] {
+                        let mut full = env.activation();
+                        let mut rest = env.activation();
+                        full.bind("k", &serde_json::json!(k)).expect("binds");
+                        full.bind("t", &serde_json::json!(t)).expect("binds");
+                        for (name, v) in [("x", x), ("y", y)] {
+                            if let Some(v) = v {
+                                full.bind(name, &serde_json::json!(v)).expect("binds");
+                                rest.bind(name, &serde_json::json!(v)).expect("binds");
+                            }
+                        }
+                        let want = original.evaluate(&full).map_err(|e| message(&e));
+                        let got = residual.evaluate(&rest).map_err(|e| message(&e));
+                        compared += 1;
+                        if want != got {
+                            mismatches.push(format!(
+                                "{src} with k={k} t={t} x={x:?} y={y:?}\n  residual: {}\n  want {want:?}\n  got  {got:?}",
+                                residual.source()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fail_on("rewritten-shape", &mismatches);
+    assert_eq!(compared, 8 * 3 * 2 * 9);
 }
