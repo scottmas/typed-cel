@@ -175,6 +175,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The same program works unspecialized, with both halves bound per request. Specialization is an
 optimization you opt into, not a different language.
 
+## Also in the box
+
+Giving up dynamic typing buys more than speed. Because every program is checked against declared
+types before it runs, typed-cel can answer questions about a program ahead of time, and a host can
+lean on those answers:
+
+- **Mistakes fail at compile time.** A misspelled field, a function that doesn't exist, a string
+  compared with a number, or a result that isn't a bool is an error when the expression is
+  compiled, pointing at the mistake. A typo can't hide behind a short circuit (`true || typo`
+  doesn't compile), so a rule that loads is a rule that type-checks.
+- **Know what a program reads before it runs.** `program.demand()` lists every root and field path
+  the program can touch, including literal map keys:
+  `files["/run/secrets/tls.key"].closed.elapsed` reports `files ▸ "/run/secrets/tls.key" ▸
+  "closed" ▸ "elapsed"`. A host fetches only those fields, and an operator can ask a compiled
+  rule "what does this watch?" without running it.
+- **Evaluate a JSON body while it streams in.** `StreamedProgram` runs over JSON events as they
+  arrive instead of a parsed document. Members the program never reads are skipped, the run's
+  state is bounded by the program's shape rather than the document (383 B for a 4 KB body), and it
+  answers as soon as the fields it needs have arrived: 3.3 µs against 51.9 µs for cel-rust's
+  parse-then-evaluate when those fields come early.
+- **Values that aren't there yet.** A field can be served lazily. When a run reaches a read the
+  host can't answer yet, it pauses and resumes from that op when the value arrives, without
+  redoing the work before it.
+- **Typed host functions.** `register_host` adds a function with a declared signature: the checker
+  types every call to it, and because host functions are pure, specialization evaluates a call
+  whose arguments are all static and leaves the constant in the residual.
+- **Closed string sets.** `declare_enum` marks a string field as one of a fixed list. Nothing about
+  its meaning changes, but comparisons against the listed values become index comparisons, and a
+  host that already holds the index can hand it over directly.
+- **Bounded before it runs.** Source length, nesting depth, estimated cost, list sizes and loop
+  unrolling are all checked when a program compiles or its static inputs are bound
+  (`CelLimits`), so a runaway rule is refused at load time rather than discovered in production.
+- **Residuals you can read.** A specialized program is ordinary CEL source (`residual.source()`),
+  so you can print, diff and review exactly what will run per request.
+- **One engine.** Evaluation, specialization, streaming and pause/resume all run on the same
+  register backend, so there's no second implementation to drift out of agreement with it.
+
 ## What you give up
 
 The dialect removes whatever would force a type check at run time:
