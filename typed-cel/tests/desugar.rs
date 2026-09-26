@@ -5,12 +5,15 @@
 //! parses, because a rewrite that produces something the parser rejects is worse than no rewrite:
 //! the author sees a diagnostic about source they did not write.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use typed_cel::{desugar, DesugarError};
 
 /// The rewritten source, asserting it parses. Every positive test goes through here.
 fn sugar(src: &str) -> String {
     let (out, _spans) = desugar(src).unwrap_or_else(|e| panic!("desugar({src:?}) failed: {e}"));
-    typed_cel::fork::Program::compile(&out)
+    typed_cel::fork::parse(&out)
         .unwrap_or_else(|e| panic!("desugar({src:?}) produced unparseable {out:?}: {e}"));
     out
 }
@@ -53,10 +56,7 @@ fn days_are_rejected() {
     assert!(msg.contains("24h"), "message must show the fix: {msg}");
 
     // And the claim behind it, so nobody "fixes" the rejection by expanding it after all.
-    assert!(typed_cel::fork::Program::compile("duration('1d')")
-        .unwrap()
-        .execute(&typed_cel::fork::Context::default())
-        .is_err());
+    assert!(support::run_closed("duration('1d')").is_err());
 
     err("uptime > 1d");
     err("2d12h");

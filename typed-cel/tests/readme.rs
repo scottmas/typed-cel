@@ -342,3 +342,98 @@ fn every_exclusion_reason_appears_here() {
         "exclusion reasons that name no README dialect row: {orphans:?}"
     );
 }
+
+/// The text between two markers, which must each appear exactly once.
+fn block<'t>(text: &'t str, begin: &str, end: &str, whence: &str) -> &'t str {
+    assert_eq!(text.matches(begin).count(), 1, "{whence}: `{begin}` once");
+    assert_eq!(text.matches(end).count(), 1, "{whence}: `{end}` once");
+    let a = text.find(begin).expect("begin") + begin.len();
+    let b = text.find(end).expect("end");
+    assert!(a <= b, "{whence}: `{end}` before `{begin}`");
+    &text[a..b]
+}
+
+fn performance() -> String {
+    std::fs::read_to_string(crate_dir().join("docs/PERFORMANCE.md")).expect("docs/PERFORMANCE.md")
+}
+
+/// The README's ablation block is the measured one, byte for byte.
+#[test]
+fn the_ablation_block_is_the_measured_one() {
+    let (readme, perf) = (readme(), performance());
+    let begin = "<!-- ablation:begin -->";
+    let end = "<!-- ablation:end -->";
+    assert_eq!(
+        block(&readme, begin, end, "README.md"),
+        block(&perf, begin, end, "docs/PERFORMANCE.md"),
+        "the README's ablation block drifted from docs/PERFORMANCE.md"
+    );
+}
+
+/// Every workload the ablation runs is a row of "Time and allocations", and every row is one it
+/// runs.
+#[test]
+fn every_ablation_workload_is_documented() {
+    let bench = std::fs::read_to_string(crate_dir().join("ablation/benches/ablation.rs"))
+        .expect("the ablation bench");
+    let begin = "const WORKLOADS: &[&str] = &[";
+    let start = bench.find(begin).expect("`const WORKLOADS` in the bench") + begin.len();
+    let list = &bench[start..start + bench[start..].find("];").expect("the list's end")];
+    let workloads: Vec<String> = list
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect();
+    assert!(workloads.len() >= 10, "only {} workloads", workloads.len());
+    let perf = performance();
+    let table = perf
+        .split("### Time and allocations")
+        .nth(1)
+        .expect("a `### Time and allocations` table");
+    let rows: Vec<String> = table
+        .lines()
+        .skip_while(|l| !l.starts_with('|'))
+        .take_while(|l| l.starts_with('|'))
+        .filter_map(row_cells)
+        .map(|cells| cells[0].trim_matches('`').to_string())
+        .filter(|c| c != "workload" && !c.starts_with("---"))
+        .collect();
+    for w in &workloads {
+        assert!(rows.contains(w), "`{w}` has no row in docs/PERFORMANCE.md");
+    }
+    for r in &rows {
+        assert!(
+            workloads.contains(r),
+            "row `{r}` is not a workload the bench runs"
+        );
+    }
+}
+
+/// The README describes one engine. The one historical paragraph is exempt.
+#[test]
+fn the_readme_names_no_second_engine() {
+    let readme = readme();
+    let historical = block(
+        &readme,
+        "<!-- historical:begin -->",
+        "<!-- historical:end -->",
+        "README.md",
+    );
+    let rest = readme.replacen(historical, "", 1);
+    let mut leaks = Vec::new();
+    for phrase in [
+        "tree evaluator",
+        "absorbed evaluator",
+        "both engines",
+        "both runtimes",
+        "executable specification",
+    ] {
+        for line in rest.lines() {
+            if line.to_lowercase().contains(phrase) {
+                leaks.push(format!("`{phrase}`: {line}"));
+            }
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}

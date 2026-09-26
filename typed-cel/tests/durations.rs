@@ -17,14 +17,13 @@
 //! `duration('320000000000s')` used to arrive as a plausible-looking 292-year span instead of an
 //! error. A `checked_add` against `TimeDelta`'s range is not a check against the language's.
 
-use typed_cel::fork::objects::Value;
-use typed_cel::fork::{Context, Program};
+#[path = "support/mod.rs"]
+mod support;
+
+use typed_cel::CelValue as Value;
 
 fn eval(src: &str) -> Result<Value, String> {
-    Program::compile(src)
-        .map_err(|e| format!("parse: {e}"))?
-        .execute(&Context::default())
-        .map_err(|e| format!("eval: {e}"))
+    support::run_closed(src).map_err(|e| format!("eval: {e}"))
 }
 
 fn refused(src: &str) -> String {

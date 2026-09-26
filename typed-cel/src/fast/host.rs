@@ -1,18 +1,15 @@
 //! Where a run's roots come from: a [`Facts`] implementation reading the caller's own data by
-//! field, or — for every existing caller and test — the values a [`CelActivation`] bound.
+//! field, or the values a [`CelActivation`] bound.
 //!
 //! [`CelActivation`]: crate::CelActivation
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
-use crate::common::types::{CelMap, CelString};
-use crate::common::value::Val;
-use crate::context::Context;
-use crate::lazy::{member_error, pending_error, Access, DemandHandle, LazyAdapter, Presence};
-use crate::ExecutionError;
+use crate::bindings::Bindings;
+use crate::lazy::{self, member_error, pending_error, Access, DemandHandle, Presence};
+use crate::{CelKey, CelValue, ExecutionError};
 
-use super::reg::{of_cow, Reg, Store};
+use super::reg::{of_cel, Reg, Store};
 
 /// A field path a program reads, by index into [`FastProgram::fields`](super::FastProgram::fields).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -24,12 +21,10 @@ impl FieldId {
     }
 }
 
-/// One step of a field path: `.name`, or `["name"]` — the same member, reached by the evaluator's
-/// select or index arm.
+/// One step of a field path: `.name`, or `["name"]` — the same member either way.
 #[derive(Clone, Debug)]
 pub(crate) struct Step {
-    pub(crate) name: CelString,
-    pub(crate) indexed: bool,
+    pub(crate) name: CelKey,
 }
 
 /// A root and the members below it: `req.path_text` is root `req`, segments `["path_text"]`.
@@ -45,7 +40,7 @@ impl FieldPath {
     }
 
     pub fn segments(&self) -> impl Iterator<Item = &str> {
-        self.steps.iter().map(|s| s.name.inner())
+        self.steps.iter().map(|s| s.name.as_str())
     }
 
     /// Does this path spell `root.a.b` for `names == [root, a, b]`?
@@ -56,15 +51,14 @@ impl FieldPath {
                 .steps
                 .iter()
                 .zip(&names[1..])
-                .all(|(s, n)| s.name.inner() == *n)
+                .all(|(s, n)| s.name.as_str() == *n)
     }
 
-    /// The error a missing path is, as the evaluator words it: an undeclared root, or no such key
-    /// at the leaf.
+    /// The error a missing path is: an undeclared root, or no such key at the leaf.
     pub(crate) fn missing(&self) -> ExecutionError {
         match self.steps.last() {
             None => ExecutionError::UndeclaredReference(Arc::new(self.root.clone())),
-            Some(s) => ExecutionError::no_such_key(s.name.inner()),
+            Some(s) => ExecutionError::no_such_key(s.name.as_str()),
         }
     }
 }
@@ -72,7 +66,7 @@ impl FieldPath {
 /// The caller's data, read by field. Implemented by a request type directly, so a decision reads
 /// its inputs where they already are rather than packing them into values first.
 ///
-/// `None` is "absent": the evaluator's `no such key` at the leaf. Every method answers for the
+/// `None` is "absent": `no such key` at the leaf. Every method answers for the
 /// field's DECLARED type; a program is only ever handed to a `Facts` whose fields have the types
 /// its environment declared.
 pub trait Facts {
@@ -117,7 +111,7 @@ pub trait Facts {
 }
 
 /// Whether a field can be read yet. `at` numbers the members below the field's root from 0, so
-/// the evaluator's error names the member it failed at, as a walk through views would.
+/// the error names the member it failed at, as a walk through views would.
 #[derive(Debug)]
 pub enum FactPoll {
     /// Read it now.
@@ -125,8 +119,8 @@ pub enum FactPoll {
     /// Member `at` is not answerable yet: a run that can wait pauses, and re-reads it when resumed.
     Pending { at: usize, handle: DemandHandle },
     /// Reading member `at` fails with `error` — exactly as a [`LazyValue`](crate::LazyValue)
-    /// failing the same read ([`CelError::NoSuchMember`](crate::CelError::NoSuchMember) is the
-    /// evaluator's `no such key`).
+    /// failing the same read ([`CelError::NoSuchMember`](crate::CelError::NoSuchMember) is
+    /// `no such key`).
     Failed { at: usize, error: crate::CelError },
 }
 
@@ -143,7 +137,7 @@ pub(crate) enum Want {
 
 /// Why a read produced no value.
 pub(crate) enum Miss {
-    /// It failed, as the evaluator's read fails.
+    /// It failed.
     Err(ExecutionError),
     /// It is not answerable yet. Only a host that [waits](Host::waits) answers this.
     Need(DemandHandle),
@@ -169,7 +163,7 @@ pub(crate) trait Host<'a> {
     }
     fn has(&self, f: u32, st: &mut Store<'a>) -> Result<bool, Miss>;
     /// Does a read that is not answerable yet PAUSE the run (`Miss::Need`)? Only a run that can
-    /// wait says yes; every other run reads "not yet" as the evaluator does, as an error.
+    /// wait says yes; every other run reads "not yet" as an error.
     fn waits(&self) -> bool {
         false
     }
@@ -231,7 +225,7 @@ pub(crate) struct FactsHost<'a, F: ?Sized> {
 }
 
 impl<F: ?Sized> FactsHost<'_, F> {
-    /// A poll that was not `Ready`, as the miss the evaluator's walk would produce.
+    /// A poll that was not `Ready`, as the miss a walk through views would produce.
     #[cold]
     #[inline(never)]
     fn miss(&self, f: u32, p: FactPoll) -> Miss {
@@ -239,7 +233,7 @@ impl<F: ?Sized> FactsHost<'_, F> {
         let name = |at: usize| {
             path.steps
                 .get(at)
-                .map_or(path.root.as_str(), |s| s.name.inner())
+                .map_or(path.root.as_str(), |s| s.name.as_str())
         };
         match p {
             FactPoll::Ready => Miss::Err(ExecutionError::InternalError("a ready poll".into())),
@@ -307,79 +301,58 @@ impl<'a, F: Facts + ?Sized> Host<'a> for FactsHost<'a, F> {
     }
 }
 
-/// An evaluator context as a host: each path is walked exactly as the evaluator walks the same
-/// expression — the same trait calls in the same order, so a lazy value serves the same reads.
-pub(crate) struct CtxHost<'a> {
-    pub(crate) ctx: &'a Context<'a>,
+/// Bound values as a host: each path is walked member by member, one read per step, so a lazy
+/// value serves exactly the reads the program makes.
+pub(crate) struct RootsHost<'a> {
+    pub(crate) roots: &'a Bindings,
     pub(crate) fields: &'a [FieldPath],
     /// Pause on a lazy member that is not answerable yet, rather than failing on it.
     pub(crate) wait: bool,
 }
 
-impl<'a> CtxHost<'a> {
-    /// The value at `steps` below `root`, and whether the evaluator would hold it owned.
+impl<'a> RootsHost<'a> {
+    /// The value at `steps` below `root`. A member a lazy view hands back is kept in the store for
+    /// the run.
     fn walk(
         &self,
         path: &'a FieldPath,
         steps: &'a [Step],
         st: &mut Store<'a>,
-    ) -> Result<(&'a dyn Val, bool), Miss> {
-        let root = self
-            .ctx
-            .get_variable(&path.root)
+    ) -> Result<&'a CelValue, Miss> {
+        let mut cur: &'a CelValue = self
+            .roots
+            .get(&path.root)
             .ok_or_else(|| ExecutionError::UndeclaredReference(Arc::new(path.root.clone())))?;
-        let mut owned = matches!(root, Cow::Owned(_));
-        let mut cur: &'a dyn Val = keep(root, st);
         for step in steps {
-            // A run that waits POLLS a lazy member: `Indexer::get` on a `LazyAdapter` is exactly
-            // this poll with "not yet" turned into an error.
-            let lazy = if self.wait {
-                cur.downcast_ref::<LazyAdapter>()
-            } else {
-                None
-            };
-            let got = if let Some(lazy) = lazy {
-                match lazy.poll_read(step.name.inner())? {
-                    Access::Ready(v) => Cow::Owned(v.into_val()),
-                    Access::Pending(h) => return Err(Miss::Need(h)),
-                }
-            } else if step.indexed {
-                // `operators::INDEX`: `get` on a borrowed container, `steal` on an owned one —
-                // with a string key the two agree.
-                cur.as_indexer()
-                    .ok_or(ExecutionError::NoSuchOverload)?
-                    .get(&step.name)?
-            } else {
-                // `Expr::Select`: a map's missing indexer is `no such key`, anything else's is
-                // `no such overload`.
-                let is_map = cur.downcast_ref::<CelMap>().is_some();
-                match cur.as_indexer() {
-                    Some(ix) => ix.get(&step.name)?,
-                    None if is_map => {
-                        return Err(ExecutionError::no_such_key(step.name.inner()).into())
+            let name = step.name.as_str();
+            cur = match cur {
+                CelValue::Map(m) => m
+                    .get(name)
+                    .ok_or_else(|| ExecutionError::no_such_key(name))?,
+                CelValue::Lazy(l) => match lazy::poll_read(l.as_ref(), name)? {
+                    Access::Ready(v) => st.value(v),
+                    Access::Pending(h) if self.wait => return Err(Miss::Need(h)),
+                    Access::Pending(h) => return Err(pending_error(name, h).into()),
+                },
+                // A list's index refuses a string.
+                CelValue::List(_) => {
+                    return Err(ExecutionError::UnexpectedType {
+                        got: "string".into(),
+                        want: "double".into(),
                     }
-                    None => return Err(ExecutionError::NoSuchOverload.into()),
+                    .into())
                 }
+                _ => return Err(ExecutionError::NoSuchOverload.into()),
             };
-            owned = owned || !step.indexed || matches!(got, Cow::Owned(_));
-            cur = keep(got, st);
         }
-        Ok((cur, owned))
+        Ok(cur)
     }
 }
 
-fn keep<'a>(v: Cow<'a, dyn Val>, st: &mut Store<'a>) -> &'a dyn Val {
-    match v {
-        Cow::Borrowed(v) => v,
-        Cow::Owned(b) => st.val(b),
-    }
-}
-
-impl<'a> Host<'a> for CtxHost<'a> {
+impl<'a> Host<'a> for RootsHost<'a> {
     fn read(&self, f: u32, _: Want, st: &mut Store<'a>) -> Result<Reg<'a>, Miss> {
         let path = &self.fields[f as usize];
-        let (v, owned) = self.walk(path, &path.steps, st)?;
-        Ok(of_cow(Cow::Borrowed(v), owned, st))
+        Ok(of_cel(self.walk(path, &path.steps, st)?))
     }
 
     fn has(&self, f: u32, st: &mut Store<'a>) -> Result<bool, Miss> {
@@ -388,21 +361,16 @@ impl<'a> Host<'a> for CtxHost<'a> {
             .steps
             .split_last()
             .expect("a presence path has a member");
-        let (v, _) = self.walk(path, prefix, st)?;
-        if let Some(lazy) = v.downcast_ref::<LazyAdapter>() {
-            if self.wait {
-                return match lazy.poll_presence(last.name.inner())? {
-                    Presence::Known(b) => Ok(b),
-                    Presence::Pending(h) => Err(Miss::Need(h)),
-                };
-            }
-            return Ok(lazy.presence(last.name.inner())?);
+        let name = last.name.as_str();
+        match self.walk(path, prefix, st)? {
+            CelValue::Lazy(l) if self.wait => match lazy::poll_presence(l.as_ref(), name)? {
+                Presence::Known(b) => Ok(b),
+                Presence::Pending(h) => Err(Miss::Need(h)),
+            },
+            CelValue::Lazy(l) => Ok(lazy::presence(l.as_ref(), name)?),
+            CelValue::Map(m) => Ok(m.get(name).is_some()),
+            _ => Err(ExecutionError::NoSuchOverload.into()),
         }
-        if let Some(m) = v.downcast_ref::<CelMap>() {
-            use crate::common::types::map::AsKeyRef;
-            return Ok(m.inner().contains_key(&last.name as &dyn AsKeyRef));
-        }
-        Err(ExecutionError::NoSuchOverload.into())
     }
 
     fn waits(&self) -> bool {
@@ -411,11 +379,11 @@ impl<'a> Host<'a> for CtxHost<'a> {
 }
 
 /// A run's roots from two places: the fields `mine` marks from a [`Facts`] provider, every other
-/// from an evaluator context. A streamed run reads its document this way and the rest of its
+/// from a context of bound values. A streamed run reads its document this way and the rest of its
 /// roots from its bindings.
 pub(crate) struct SplitHost<'a, F: ?Sized> {
     pub(crate) facts: FactsHost<'a, F>,
-    pub(crate) ctx: CtxHost<'a>,
+    pub(crate) ctx: RootsHost<'a>,
     pub(crate) mine: &'a [bool],
 }
 

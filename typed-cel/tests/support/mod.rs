@@ -4,7 +4,8 @@
 
 #![allow(dead_code)]
 
-use typed_cel::{CelEnvironment, CelError, CelTy, Record};
+use typed_cel::fork;
+use typed_cel::{CelEnvironment, CelError, CelTy, CelValue, ExecutionError, FastProgram, Record};
 
 /// Comparing the VM with the evaluator (and generating what to
 /// compare them on).
@@ -190,4 +191,60 @@ pub fn err_mentions(expr: &str, fragments: &[&str]) -> String {
         );
     }
     rendered
+}
+
+/// Strip `//`-comments. STRING LITERALS ARE KEPT.
+///
+/// Keeping them is the whole difference between a gate and a decoration. The leak this crate
+/// actually had was `if root == "metrics" && agg == "max"` — one environment's variable names, in
+/// a general-purpose data structure, entirely inside string literals. A scanner that stripped
+/// strings would have reported that file clean and this test would have been a decoration.
+///
+/// Comments go, because a doc comment explaining WHY a library file must not name a policy concept
+/// necessarily names one, and scanning prose would force the explanation out of the code.
+pub fn code_only(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        // Naive, and adequate: a `//` inside a string literal truncates the line early, which can
+        // only ever make this scan MISS something, never invent a leak. There are none today.
+        let line = match line.find("//") {
+            Some(ix) => &line[..ix],
+            None => line,
+        };
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// `src` on the backend over `binds`, checked against `env`, for a program the checker ADMITS. A refused program panics: it has no run-time
+/// answer in this dialect, and a test that wanted one is a test of a construct the dialect deleted.
+pub fn run(
+    env: &CelEnvironment,
+    src: &str,
+    binds: &[(&str, CelValue)],
+) -> Result<CelValue, ExecutionError> {
+    let program =
+        fork::compile_any(env, src).unwrap_or_else(|e| panic!("`{src}` does not check:\n{e}"));
+    let code =
+        FastProgram::new(&program).unwrap_or_else(|e| panic!("`{src}` does not lower:\n{e}"));
+    let mut act = env.runtime().activation();
+    for (name, v) in binds {
+        act.bind_fact(name, v.clone());
+    }
+    fork::fast_value(&code, &act)
+}
+
+/// A closed program (no roots) on the backend.
+pub fn run_closed(src: &str) -> Result<CelValue, ExecutionError> {
+    run(&CelEnvironment::new(), src, &[])
+}
+
+/// The refusal of a closed program — by the parser or the checker, never for its result type
+/// (`compile_any` admits every result). Panics when it compiles.
+pub fn refused_closed(src: &str) -> CelError {
+    match fork::compile_any(&CelEnvironment::new(), src) {
+        Ok(_) => panic!("expected `{src}` to be refused, but it compiled"),
+        Err(e) => e,
+    }
 }

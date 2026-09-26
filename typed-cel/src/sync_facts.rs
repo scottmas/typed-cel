@@ -15,8 +15,9 @@
 
 use std::sync::OnceLock;
 
-use crate::lazy::{CelKey, CelValue, LazyValue, Presence};
+use crate::lazy::{CelKey, LazyValue, Presence};
 use crate::CelError;
+use crate::CelValue;
 
 /// One fact: bounded synchronous work, run at most once. The error is the fact's own message.
 ///

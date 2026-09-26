@@ -6,6 +6,8 @@
 
 #[path = "../conformance/harness/mod.rs"]
 mod harness;
+#[path = "support/mod.rs"]
+mod support;
 
 use harness::case::Case;
 use harness::exclusions::Exclusions;
@@ -643,4 +645,22 @@ fn checker_rows_exclude_only_what_the_checker_refuses() {
         problems.len(),
         problems.join("\n")
     );
+}
+
+/// The lane runs every admitted case on the backend — the one engine — compiled once, never on a
+/// second parse through the tree evaluator.
+#[test]
+fn the_lane_runs_on_the_backend() {
+    let text = std::fs::read_to_string(conformance_dir().join("harness/run.rs")).expect("readable");
+    let code = support::code_only(&text);
+    assert!(
+        code.contains("fast_value"),
+        "conformance/harness/run.rs does not run a case on the backend"
+    );
+    for banned in ["Program::compile", ".execute("] {
+        assert!(
+            !code.contains(banned),
+            "conformance/harness/run.rs runs a case on the tree evaluator: it names `{banned}`"
+        );
+    }
 }

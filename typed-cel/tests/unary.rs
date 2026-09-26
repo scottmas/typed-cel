@@ -6,19 +6,24 @@
 //! handled an error instead gets a dead thread — which is a bug in its own terms and not only
 //! against cel-spec.
 //!
-//! Everything here drives the evaluator directly rather than `CelEnvironment::compile`, because the
-//! checker refuses two of these at BUILD: `-` has no bool overload, so `-false` never reaches an
-//! activation through the dialect's front door. What is asserted is that the layer BELOW the
-//! checker is still sound, since it is the layer the corpus runs against.
+//! Everything here compiles through the checker a policy compiles through and runs on the backend.
+//! The checker refuses `-false` at BUILD (`-` has no bool overload), so that one is asserted as the
+//! refusal: it never reaches an activation.
 
-use typed_cel::fork::objects::Value;
-use typed_cel::fork::{Context, Program};
+#[path = "support/mod.rs"]
+mod support;
 
+use typed_cel::CelValue as Value;
+use typed_cel::{CelEnvironment, CelError, CelLimits};
+
+/// Deep enough for the corpus's runs of 32 operators: the default nesting bound (32) is a
+/// policy limit, not what this file tests.
 fn eval(src: &str) -> Result<Value, String> {
-    Program::compile(src)
-        .map_err(|e| format!("parse: {e}"))?
-        .execute(&Context::default())
-        .map_err(|e| format!("eval: {e}"))
+    let env = CelEnvironment::with_limits(CelLimits {
+        max_depth: 64,
+        ..CelLimits::default()
+    });
+    support::run(&env, src, &[]).map_err(|e| format!("eval: {e}"))
 }
 
 fn evaluates_to(src: &str, expected: &str) {
@@ -49,8 +54,12 @@ fn negating_the_minimum_integer_is_a_double_not_a_panic() {
 /// operator the language does not have, quietly answering as if it did.
 #[test]
 fn negating_a_bool_is_an_error() {
-    assert!(eval("-false").is_err(), "`-false` must not evaluate");
-    assert!(eval("-true").is_err(), "`-true` must not evaluate");
+    for src in ["-false", "-true"] {
+        assert!(
+            matches!(support::refused_closed(src), CelError::Check { .. }),
+            "`{src}` must be refused by the checker"
+        );
+    }
 
     // `!` still works, and is the operator that was being impersonated.
     evaluates_to("!false", "Bool(true)");

@@ -44,6 +44,45 @@ them instead of making them optional:
 
 The full list of removals, divergences and additions, each with its reason and the test that holds
 it, is the dialect table in [`typed-cel/README.md`](./typed-cel/README.md#relationship-to-spec-cel).
+Against cel-spec v0.25.1 they exclude 1875 of 2344 cases.
+
+### What it buys, measured
+
+The ablation in [`typed-cel/ablation/`](./typed-cel/ablation/) runs the same workloads through
+hand-written Rust, upstream cel-rust 0.14.2 (1), the typed tree evaluator this crate forked from (2),
+the typed register backend over a bound activation (3a) and over fields read in place (3b), and that
+backend after the policy is bound at compile time (4). Each cell is ns per decision (allocations per
+decision), on a Hetzner Cloud cx33 VM (AMD EPYC-Rome, one pinned core); the method and every table
+are in [`typed-cel/docs/PERFORMANCE.md`](./typed-cel/docs/PERFORMANCE.md).
+
+<!-- ablation:begin -->
+| workload | Rust | (1) upstream | (2) typed tree † | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
+|---|---:|---:|---:|---:|---:|---:|
+| `fs_open_allow_all` | 8.0 ns (0) | 4762 ns† (92) | 4612 ns (92) | 843 ns† (2) | n/a (composite root: `policy.fs.writable_roots`) | 57.9 ns (0) |
+| `fs_open_13` | 32.6 ns (0) | 10.8 µs (248.8) | 11.0 µs (248.8) | 2877 ns (9) | n/a (composite root: `policy.fs.writable_roots`) | 140 ns (0) |
+| `fs_open_1000` | 1367 ns (0) | 827.5 µs (17064.4) | 829.6 µs (17064.4) | 215.8 µs (578.8) | n/a (composite root: `policy.fs.writable_roots`) | 390 ns† (0) |
+| `prefix_13` | 35.1 ns (0) | 11.6 µs (247.8) | 11.7 µs (247.8) | 4068 ns (15) | n/a (composite root: `policy.roots`) | 74.7 ns (0) |
+| `nested_fields` | 8.7 ns (0) | 8293 ns† (193) | 8460 ns (193) | 338 ns† (1) | 86.6 ns (0) | — (reads no policy) |
+| `all_items` | 17.9 ns (0) | 21.1 µs (455.4) | 20.7 µs (481.8) | 3227 ns (2) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `policy_residual` | 24.0 ns (0) | 6329 ns (143.1) | 6223 ns (143.1) | 2099 ns (9.4) | n/a (composite root: `policy.methods`) | 144 ns (0) |
+
+† Column (2) is historical: measured on the typed dialect's first engine, since deleted (typed-cel/docs/PERFORMANCE.md, "Historical"). Every other column is this run.
+<!-- ablation:end -->
+
+- **One engine.** Every program — evaluated, specialized, streamed, paused and resumed — runs on the
+  register backend. There is no second implementation to disagree with.
+- **Speed.** `fs_open_1000` with its policy bound decides in 390 ns — 2121.8× faster than upstream
+  cel-rust 0.14.2 (827.5 µs) and 3.5× faster than the hand-written Rust reference (1367 ns), which
+  scans the 1000 roots linearly. `policy_residual` decides in 144 ns against upstream's 6329 ns, 44.0×.
+- **No allocation on the facts path.** Every (3b) and (4) cell reads `(0)`, and
+  `typed-cel/tests/fast_alloc.rs` holds it at exactly 0 over 10 000 decisions.
+- **What it costs.** A compile runs the checker and the lowering, so it is slower than upstream's
+  parse: `policy_residual` compiles and emits in 151.9 µs against upstream's 91.8 µs, and
+  `fs_open_13` in 630.5 µs against 551.0 µs. A policy compiles once per process.
+
+Column (2) was measured once, before the tree evaluator was deleted, on the last revision that
+still carried it (`55d75a8`, whose engine source is identical to the measured one up to formatting).
+It isolates what typing alone bought: 1.0× on every headline row.
 
 ## What else is in here
 
@@ -57,16 +96,18 @@ it, is the dialect table in [`typed-cel/README.md`](./typed-cel/README.md#relati
   populate only what the program reads, and an operator can answer "what does this watch?" from the
   compiled artifact. A computed key is a compile error rather than a silent "read everything".
 - **Partial evaluation / specialization** (`src/specialize.rs`): bind the roots that are fixed at
-  compile time (a policy document, say) and `specialize`; subtrees reading only them are folded by
-  the one evaluator, comprehensions over a known list unroll, and non-scalar constants go into a
+  compile time (a policy document, say) and `specialize`; subtrees reading only them are folded on
+  the backend, comprehensions over a known list unroll, and non-scalar constants go into a
   typed constant pool. The residual is an ordinary program that reads only the per-request input,
   and it never silently reads a folded root.
-- **A fast typed backend** (`src/fast/`): a checked program lowers to a register program over
+- **One typed backend** (`src/fast/`): a checked program lowers to a register program over
   unboxed values, with names resolved to fields and functions to ops. It can pause on a read that
   has not arrived and resume later, and it reads host data by field (`Facts`) instead of packing it
-  into values. It is differential-tested against the reference tree evaluator on generated typed
-  programs, eager and lazy, and on the conformance corpus (`tests/vm_differential.rs`,
-  `tests/fast_eval.rs`).
+  into values. It is the only engine: `CelProgram::evaluate`, `Vm::eval`, specialization and
+  streaming all run it. Its answers are held by the conformance corpus, a frozen golden of every
+  generated program's answer, single-engine laws over generated programs (every host alike, eager
+  and lazy) and pinned edges (`tests/generated_golden.rs`, `tests/metamorphic.rs`,
+  `tests/backend_edges.rs`).
 - **Streamed / governed values** (`src/governed.rs`): evaluate over a JSON body *as it streams in*.
   The program's demand is laid over the declared type as a small trie; the document is fed as
   `Event`s and never held, undemanded members are skipped, memory is bounded by the program's shape
@@ -168,6 +209,8 @@ typed-cel/                 the crate (package `typed-cel`, lib `typed_cel`)
     parser/gen/              ANTLR-generated parser from Google's CEL.g4
   tests/                   integration tests, including the dialect's rejection tests
   conformance/             the cel-spec conformance lane (corpus, harness, exclusions, report)
+  ablation/                the benchmark: typed-cel against upstream cel-rust and hand-written Rust
+  docs/PERFORMANCE.md      the ablation's method and measured tables
   ATTRIBUTION.md           fork point, and every change made to the absorbed source
 ```
 
@@ -206,7 +249,9 @@ profile: at `opt-level = 0` the ANTLR-generated parser's frames are large enough
 test-thread stack on deeply nested input before its own recursion bound fires. A project depending
 on this crate needs the same override for debug builds.
 
-There are no benchmarks in this repository, so it makes no performance claims.
+The ablation is its own workspace, so the upstream cel-rust it compares against never enters this
+one's lock: `cd typed-cel/ablation && cargo bench --bench ablation`.
+`typed-cel/docs/PERFORMANCE.md` gives the pinned three-run method its published numbers come from.
 
 ## Licensing and attribution
 

@@ -68,7 +68,7 @@ fn pending(a: Result<Access, CelError>) -> bool {
 
 fn ready_str(a: Result<Access, CelError>) -> String {
     match a {
-        Ok(Access::Ready(CelValue::Str(s))) => s,
+        Ok(Access::Ready(CelValue::Str(s))) => s.to_string(),
         other => panic!("expected a settled string, got {other:?}"),
     }
 }
@@ -309,6 +309,7 @@ fn settled_cells_never_change_and_generation_counts_settles() {
         }
         before = after;
         if let Ok(Access::Ready(CelValue::Str(s))) = v.poll_member("name") {
+            let s = s.to_string();
             if let Some(prev) = &name_seen {
                 assert_eq!(prev, &s, "a settled cell changed");
             }
@@ -714,4 +715,18 @@ fn item<'s>(code: &'s str, head: &str) -> &'s str {
         }
     }
     panic!("`{head}` never closes")
+}
+
+/// A streamed duration settles at the precision `duration()` parses: `1500ns` is 1500
+/// nanoseconds, never rounded to whole milliseconds.
+#[test]
+fn a_streamed_duration_keeps_nanoseconds() {
+    let env = env_of(record("body", &[("d", CelTy::Duration)]));
+    let doc = doc_of(&env, "body.d > duration('1us')");
+    feed(&doc, &to_events(r#"{"d": "1500ns"}"#, 64));
+    doc.end();
+    match root(&doc).poll_member("d") {
+        Ok(Access::Ready(CelValue::Duration(d))) => assert_eq!(d.as_nanos(), Some(1500)),
+        other => panic!("expected a settled duration, got {other:?}"),
+    }
 }

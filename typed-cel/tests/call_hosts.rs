@@ -60,7 +60,7 @@ fn req_act(env: &CelEnvironment) -> typed_cel::CelActivation {
     let mut act = env.runtime().activation();
     act.bind_fact(
         "req",
-        CelValue::Record(vec![(CelKey::new("x"), CelValue::Str("abc".into()))]),
+        CelValue::record([(CelKey::new("x"), CelValue::Str("abc".into()))]),
     );
     act
 }
@@ -78,7 +78,7 @@ fn a_call_host_reaches_the_dispatcher() {
         .expect("evaluates");
     assert!(matches!(got, CelValue::Bool(true)), "{got:?}");
     assert_eq!(d.count("probe_len"), 1);
-    assert!(matches!(&d.calls[0].1[0], CelValue::Str(s) if s == "abc"));
+    assert!(matches!(&d.calls[0].1[0], CelValue::Str(s) if &**s == "abc"));
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn a_call_host_and_a_closure_host_cannot_share_a_name() {
             &[],
             CelTy::Str,
             false,
-            Arc::new(|_: &[CelValue]| Ok(CelValue::Str(String::new()))),
+            Arc::new(|_: &[CelValue]| Ok(CelValue::from(""))),
         )
         .err()
         .expect("refused");
@@ -256,19 +256,19 @@ fn a_call_host_answers_a_lazy_record() {
         let got = Vm::new()
             .eval_result_with(&bc, &req_act(&env), &mut d)
             .expect("evaluates");
-        assert!(matches!(&got, CelValue::Str(s) if s == want), "{got:?}");
+        assert!(matches!(&got, CelValue::Str(s) if &**s == want), "{got:?}");
     }
     // An eager record serves the same members.
     let mut d = Counting::answering(vec![(
         "rule",
-        Some(CelValue::Record(vec![
+        Some(CelValue::record([
             (CelKey::new("admits"), CelValue::Bool(true)),
             (CelKey::new("how"), CelValue::Str("opaque".into())),
         ])),
     )]);
     let got = Vm::new().eval_result_with(&bc, &req_act(&env), &mut d);
     assert!(
-        matches!(&got, Ok(CelValue::Str(s)) if s == "allow:opaque"),
+        matches!(&got, Ok(CelValue::Str(s)) if &**s == "allow:opaque"),
         "{got:?}"
     );
 }
@@ -321,4 +321,27 @@ fn a_tag_decision_dispatches_call_hosts() {
     )
     .expect("emits");
     assert!(plain.program().call_hosts().is_empty());
+}
+
+/// `evaluate` has no dispatcher, so a call to a CALL host fails — with the backend's error, which
+/// names the cause, not the retired evaluator's "undeclared reference".
+#[test]
+fn evaluate_fails_an_undispatched_call_host_as_the_backend_does() {
+    let mut env = CelEnvironment::new();
+    env.declare_call_host("f", &[CelTy::Str], CelTy::Bool)
+        .expect("declares");
+    let program = env.compile(r#"f("x")"#).expect("compiles");
+    let evaluated = program
+        .evaluate(&env.activation())
+        .expect_err("no dispatcher answers `f`");
+    let vm = Vm::new()
+        .eval(&emit(&program).expect("emits"), &env.activation())
+        .expect_err("no dispatcher answers `f`");
+    assert_eq!(evaluated.to_string(), vm.to_string());
+    assert!(
+        evaluated
+            .to_string()
+            .contains("`f` is not a host function this run answers"),
+        "{evaluated}"
+    );
 }

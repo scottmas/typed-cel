@@ -63,11 +63,12 @@ append to this list.
   reproducible substitution (`perl -pi -e 's/\bcel::/typed_cel::/g'`), needed because the
   doctests reference the crate by name and would otherwise not compile.
 - **Benches dropped.** `benches/runtime.rs` and its `criterion` / `dhat` dev-dependencies, and
-  the `dhat-heap` feature, did not come across. They measure upstream's evaluator, not the
-  dialect; the evaluation bounds this crate adds get their own measurements.
+  the `dhat-heap` feature, did not come across. They measured upstream's evaluator, not the
+  dialect. The ablation in `ablation/` replaces them: a standalone workspace that measures this
+  crate against upstream cel-rust 0.14.2 and hand-written Rust (`docs/PERFORMANCE.md`).
 - **`serde`'s `derive` feature is now asked for directly**, as a dev-dependency. The absorbed
   `ser.rs` tests `#[derive(Serialize)]` their fixture structs and got the macro by accident,
-  through feature unification with criterion's `serde`. Dropping the benches made that accident
+  through feature unification with criterion's `serde`. Dropping the upstream benches made that accident
   visible as 15 compile errors in the test build.
 - **Default features changed** from `["regex", "chrono"]` to
   `["regex", "chrono", "json", "bytes"]`. `json` and `bytes` are load-bearing here (the
@@ -204,6 +205,73 @@ timestamp field, and `functions::tests::{test_int, no_bool_coercion, test_chrono
 `objects::tests::test_heterogeneous_compare` lost only their uint or timestamp rows. The parser's
 own test table kept its message-construction, uint-literal and optional-syntax inputs and now
 asserts the REFUSAL each one produces, which is strictly more coverage than deleting them.
+
+Running every program on the one engine took the floor to **80**:
+`activation::tests::activations_share_one_function_table` went with the evaluator's function table it
+guarded — an activation no longer carries one.
+
+The absorbed evaluator's unit tests then moved to `tests/runtime.rs` or were dropped with the
+construct they tested, taking the floor to **44**. All 5 of `lib.rs`'s (`parse`, `from_str`,
+`variables`, `references`, `test_execution_errors`), all 14 of `functions.rs`'s, and 17 of
+`objects.rs`'s run on the backend there now — ported where the checker admits the program, asserted
+as the checker's refusal where it does not (a heterogeneous comparison, a wrong-typed operand, an
+undeclared name, a non-bool `||` operand). Dropped outright: `objects::tests::opaque::{test_opaque_fn,
+opaque_eq}`, which run an opaque host value and a function registered on a `Context`, neither of
+which a checked program can reach. `objects.rs` keeps `reference_to_value`, `test_value_holder_dbg`
+and `test_json`, which convert values and run nothing. The `ser.rs` tests assert on `to_value`
+directly instead of comparing through a program, and `Program`'s `TryFrom<&str>` is deleted.
+
+Deleting the evaluator took the floor to **43**: `env::tests` went with `src/env.rs`.
+
+Replacing the fork's value model took it to **29**: the 10 `ser::tests`, the 1 `json::tests` and the
+3 left in `objects::tests` went with the bridges and the value they tested.
+
+Replacing the fork's store took it to **15**: the tests inside `common/types/*`, `common/value.rs`
+and `context.rs` went with the value trait, the types and the variable store they tested.
+
+### One engine
+
+- **The tree evaluator and its function-call machinery are deleted**: `src/functions.rs`,
+  `src/magic.rs`, `src/resolvers.rs`, `src/macros.rs`, `src/env.rs`; from `src/objects.rs`,
+  `Value::resolve_all`/`resolve`/`resolve_val` with `absorbs`, `bool`, `try_bool` and the
+  `impl Add/Sub/Div/Mul for Value`; from `src/lib.rs`, `Program::execute` and `Program::compile`
+  and the `fork::{Env, extractors, Program}` doors; the `stdlib(env)` registration function of
+  each of `common/types/{duration,list,map,string}.rs` and `FunctionDecl::find_overload` in
+  `common/decls.rs`, whose only caller was `Env`. The fast backend (`src/fast/`) is the only
+  engine: `CelProgram::evaluate`, partial evaluation's fold and the conformance lane all run on it.
+- **`Context` keeps variables only**: the `Env` and the function registry a root carried, and
+  `env`/`get_function`/`add_function`/`resolve`/`resolve_all`/`with_env`, are gone;
+  `Context::default()` is `Context::empty()`, a root with no variables.
+- **`objects.rs` keeps the value types**, and gained the `From<f64/bool/i64/…> for Value`
+  conversions `magic.rs` used to generate (`impl_conversions!`). `Map::contains_key`, dead with the
+  evaluator, is deleted.
+- **`ExecutionError` loses the variants nothing constructs**: `InvalidArgumentCount`,
+  `NotSupportedAsMethod`, `MissingArgumentOrTarget`, `ValuesNotComparable`, and the deprecated
+  `UnsupportedUnaryOperator`, `UnsupportedMapIndex`, `UnsupportedListIndex`, `UnsupportedIndex`,
+  `UnsupportedFunctionCallIdentifierType`, `UnsupportedFieldsConstruction`, with their
+  constructors.
+- **The fork's `Value` model and its serde bridges are deleted**: `src/objects.rs` (`Value`, `Key`,
+  `Map`, `Opaque`, `OpaqueVal`, `ValueType`, `TryIntoValue`, `ResolveResult`), `src/ser.rs`
+  (serde → `Value`) and `src/json.rs` (`Value` → JSON), with `Context::add_variable` (serde) and the
+  `base64` and `serde_bytes` dependencies only they used. The public `CelValue` (`src/value.rs`) is
+  the one value: what a caller binds, what a program returns, what a constant slot holds and what
+  every `ExecutionError` carries. Its `Debug` renders exactly as `Value`'s did (`Float(5.0)`,
+  `String("x")`, `Map(Map { map: {…} })`), because error text embeds it; a map now iterates in key
+  order (`Num < Bool < Str`, the fork's `Key` order) where the fork's `HashMap` did not, and a
+  duration keeps nanoseconds where `CelValue::Duration` held milliseconds.
+- **The fork's value trait, value types and variable store are deleted**: `src/context.rs`
+  (`Context`, `VariableResolver`), `src/common/value.rs` (`Val`), `src/common/traits.rs`,
+  `src/common/types/` (every fork value type), `src/common/decls.rs`, `src/common/functions.rs`, and
+  the `LazyAdapter` bridge in `lazy.rs`. A run's roots live in a small `Bindings` (`src/bindings.rs`),
+  a register borrows a `CelValue` (`Reg::Val`), and a lazy view is read through `LazyValue` directly.
+  `src/common/` keeps only the AST; the four scalars a literal carries (`Bool`, `Bytes`, `Double`,
+  `String`) move to `src/common/ast/literal.rs` as plain syntax, unchanged in name and shape so the
+  parser and the checker read as before. A map is iterated in key order.
+- **`DefaultMap::steal` is no longer called.** The backend tracked, per register, whether the
+  evaluator would have held a value owned, only to call `steal` on an owned map — which answered a
+  fractional number key `UnsupportedKeyType` where the same key into a borrowed map answered
+  `NoSuchKey`. Indexing a map is now one rule: a number that names no key is `NoSuchKey`, wherever
+  the map lives.
 
 ### The dialect's additions
 

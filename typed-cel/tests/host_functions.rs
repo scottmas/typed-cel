@@ -35,25 +35,14 @@ fn with_twice() -> CelEnvironment {
     env
 }
 
-/// `Ok(true)` through `CelProgram::evaluate` (the tree evaluator, which needs the environment's
-/// activation) AND through `Vm::eval` (the fast backend, on a prepared activation).
-fn true_on_both(env: &CelEnvironment, p: &CelProgram, bind: &dyn Fn(&mut CelActivation)) {
-    let mut tree = env.activation();
-    bind(&mut tree);
+/// `Ok(true)` on the backend, over an activation `bind` fills.
+fn is_true(env: &CelEnvironment, p: &CelProgram, bind: &dyn Fn(&mut CelActivation)) {
+    let mut act = env.runtime().activation();
+    bind(&mut act);
     assert_eq!(
-        p.evaluate(&tree).map_err(|e| e.to_string()),
+        p.evaluate(&act).map_err(|e| e.to_string()),
         Ok(true),
-        "evaluator: `{}`",
-        p.source()
-    );
-    let mut prepared = env.runtime().activation();
-    bind(&mut prepared);
-    assert_eq!(
-        Vm::new()
-            .eval(&emit(p).expect("emits"), &prepared)
-            .map_err(|e| e.to_string()),
-        Ok(true),
-        "vm: `{}`",
+        "`{}`",
         p.source()
     );
 }
@@ -63,7 +52,7 @@ fn a_registered_host_function_type_checks_and_runs() {
     let mut env = with_twice();
     env.declare("x", CelTy::Num);
     let p = env.compile("twice(x) == 4.0").expect("compiles");
-    true_on_both(&env, &p, &|act| {
+    is_true(&env, &p, &|act| {
         act.bind_fact("x", CelValue::Num(2.0));
     });
 }
@@ -77,7 +66,7 @@ fn a_member_host_function_runs_as_a_method() {
         CelTy::Str,
         true,
         Arc::new(|a: &[CelValue]| match a {
-            [CelValue::Str(s)] => Ok(CelValue::Str(format!("{}!", s.to_uppercase()))),
+            [CelValue::Str(s)] => Ok(CelValue::from(format!("{}!", s.to_uppercase()))),
             _ => Err(eval_err("shout expects a string receiver")),
         }),
     )
@@ -85,7 +74,7 @@ fn a_member_host_function_runs_as_a_method() {
     env.declare("s", CelTy::Str);
     for src in [r#""a".shout() == "A!""#, r#"s.shout() == "AB!""#] {
         let p = env.compile(src).expect("compiles");
-        true_on_both(&env, &p, &|act| {
+        is_true(&env, &p, &|act| {
             act.bind_fact("s", CelValue::Str("ab".into()));
         });
     }
@@ -166,7 +155,7 @@ fn host_calls_fold_only_when_every_argument_is_known() {
         Arc::new(move |a: &[CelValue]| {
             c.fetch_add(1, Ordering::SeqCst);
             match a {
-                [CelValue::Str(s)] => Ok(CelValue::Str(format!("{s}/"))),
+                [CelValue::Str(s)] => Ok(CelValue::from(format!("{s}/"))),
                 _ => Err(eval_err("count_me expects one string")),
             }
         }),
@@ -200,7 +189,7 @@ fn host_calls_fold_only_when_every_argument_is_known() {
         let mut act = env.runtime().activation();
         act.bind_fact("u", CelValue::Str(u.into()));
         match Vm::new().eval_result(&code, &act).expect("evaluates") {
-            CelValue::Str(s) => s,
+            CelValue::Str(s) => s.to_string(),
             other => panic!("{other:?}"),
         }
     };
@@ -223,17 +212,12 @@ fn a_host_error_is_an_evaluation_error_not_a_panic() {
     .expect("registers");
     env.declare("x", CelTy::Num);
     let p = env.compile("boom(x) == 1.0").expect("compiles");
-    let mut tree = env.activation();
-    tree.bind_fact("x", CelValue::Num(1.0));
-    let a = p.evaluate(&tree).expect_err("the evaluator reports it");
-    let mut prepared = env.runtime().activation();
-    prepared.bind_fact("x", CelValue::Num(1.0));
-    let b = Vm::new()
-        .eval_result(&emit(&p).expect("emits"), &prepared)
-        .expect_err("the fast backend reports it");
+    let mut act = env.runtime().activation();
+    act.bind_fact("x", CelValue::Num(1.0));
+    let a = Vm::new()
+        .eval_result(&emit(&p).expect("emits"), &act)
+        .expect_err("the backend reports it");
     assert!(matches!(a, CelError::Evaluation { .. }), "{a:?}");
-    // One error, worded identically by both engines.
-    assert_eq!(a.to_string(), b.to_string());
     assert!(a.to_string().contains("boom"), "{a}");
 }
 
@@ -280,14 +264,10 @@ fn a_host_argument_with_no_cel_value_form_is_an_error() {
     let p = env
         .compile("total(xs.map(x, x * 2.0)) == 12.0")
         .expect("compiles");
-    true_on_both(&env, &p, &|act| {
+    is_true(&env, &p, &|act| {
         act.bind_fact(
             "xs",
-            CelValue::List(vec![
-                CelValue::Num(1.0),
-                CelValue::Num(2.0),
-                CelValue::Num(3.0),
-            ]),
+            CelValue::list([CelValue::Num(1.0), CelValue::Num(2.0), CelValue::Num(3.0)]),
         );
     });
 
@@ -313,10 +293,10 @@ fn a_host_argument_with_no_cel_value_form_is_an_error() {
     .expect("registers");
     env.declare("v", ty);
     let p = env.compile("same_view(v)").expect("compiles");
-    true_on_both(&env, &p, &|act| {
+    is_true(&env, &p, &|act| {
         act.bind_fact("v", CelValue::Lazy(Arc::clone(&view)));
     });
-    assert_eq!(seen.load(Ordering::SeqCst), 2, "both engines called it");
+    assert_eq!(seen.load(Ordering::SeqCst), 1, "the backend called it once");
 }
 
 #[test]
@@ -332,49 +312,28 @@ fn emit_is_deterministic_with_hosts() {
     assert!(a.listing().contains("Host"), "{}", a.listing());
 }
 
-/// Generated expressions over a roster with host functions, on both engines: the same verdict, or
-/// the same error text, for every activation — a host call nested anywhere a value may be.
+/// Every name the retired evaluator's standard library declared (`Env::stdlib()`, captured before
+/// it was deleted). A host function never takes one: each is a dialect built-in, and the refusal
+/// must outlive the table it used to be read from.
+const RETIRED_STDLIB: &[&str] = &[
+    "contains",
+    "duration",
+    "endsWith",
+    "getMilliseconds",
+    "getSeconds",
+    "matches",
+    "size",
+    "startsWith",
+];
+
 #[test]
-fn generated_host_calls_agree_with_the_evaluator() {
-    let env = host_roster();
-    let mut compared = 0usize;
-    let mut calls = 0usize;
-    let mut mismatches = Vec::new();
-    for seed in SEEDS {
-        let mut g = Gen::new(seed ^ 0x4057);
-        for index in 0..300 {
-            let src = g.host_bool(4);
-            calls += src.matches("twice(").count() + src.matches("tag(").count();
-            let whence = format!("seed={seed:#x}, index={index}");
-            let p = env
-                .compile(&src)
-                .unwrap_or_else(|e| panic!("{whence}: `{src}` does not compile:\n{e}"));
-            let code = emit(&p).expect("emits");
-            for _ in 0..3 {
-                let json = host_typed_json(&mut g);
-                let mut tree = env.activation();
-                let mut prepared = env.activation();
-                for (name, v) in &json {
-                    tree.bind(name, v).expect("binds");
-                    prepared.bind(name, v).expect("binds");
-                }
-                let a = p.evaluate(&tree).map_err(|e| e.to_string());
-                let b = Vm::new().eval(&code, &prepared).map_err(|e| e.to_string());
-                compared += 1;
-                if a != b {
-                    mismatches.push(format!(
-                        "{whence}: {src}\n  with {json:?}\n  evaluate: {a:?}\n  vm:       {b:?}"
-                    ));
-                }
-            }
+fn register_host_refuses_every_name_the_retired_stdlib_declared() {
+    for name in RETIRED_STDLIB {
+        match CelEnvironment::new().register_host(name, &[CelTy::Str], CelTy::Bool, false, twice())
+        {
+            Err(CelError::Registration { .. }) => {}
+            Err(other) => panic!("`{name}`: refused, but not as a registration: {other}"),
+            Ok(_) => panic!("`{name}` registered as a host function"),
         }
     }
-    assert!(
-        mismatches.is_empty(),
-        "{} mismatch(es):\n{}",
-        mismatches.len(),
-        mismatches.join("\n")
-    );
-    assert!(calls >= 500, "only {calls} host calls were generated");
-    assert!(compared >= 2000, "only {compared} comparisons");
 }

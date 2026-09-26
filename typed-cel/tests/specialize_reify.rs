@@ -1,47 +1,46 @@
 //! `fork::reify` turns an evaluated value back into a literal expression, or refuses.
 //!
 //! The property every reifying test holds is "reify then evaluate is the identity": the expression
-//! `reify` returns, run by the crate's one evaluator, produces the value it was given — same
+//! `reify` returns, run on the backend, produces the value it was given — same
 //! variant, same bits. Where no CEL literal can spell a value (a non-finite double, an opaque host
 //! value, a function value) the answer is `None`, never an approximation.
 
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+#[path = "support/mod.rs"]
+mod support;
+
 use std::sync::Arc;
 
+use typed_cel::fork;
 use typed_cel::fork::ast::{Expr, IdedExpr, LiteralValue};
-use typed_cel::fork::objects::{Key, Map, Opaque, Value};
-use typed_cel::fork::parser::Parser;
-use typed_cel::fork::{self, Context};
+use typed_cel::{CelError, CelKey, CelMap, CelMapKey as Key, CelValue as Value, LazyValue};
 
 /// CEL's duration range in seconds (`src/duration.rs`'s `CEL_DURATION_MAX_SECS`, which is not
 /// exported): ±10000 years.
 const CEL_DURATION_MAX_SECS: i64 = 315_576_000_000;
 
+/// `e` on the backend: rendered (`fork::unparse`), checked and run.
 fn eval_expr(e: &IdedExpr) -> Value {
-    Value::resolve(e, &Context::default()).unwrap_or_else(|err| panic!("{e:?}: {err:?}"))
+    let src = fork::unparse(e).unwrap_or_else(|err| panic!("{e:?} does not render: {err}"));
+    eval_src(&src)
 }
 
 fn eval_src(src: &str) -> Value {
-    let e = Parser::default()
-        .parse(src)
-        .unwrap_or_else(|err| panic!("{src}: {err}"));
-    eval_expr(&e)
+    support::run_closed(src).unwrap_or_else(|err| panic!("{src}: {err:?}"))
 }
 
 /// Bit-exact equality: `Value`'s `==` says `-0.0 == 0.0` and `NaN != NaN`, and neither is the
 /// question here. Recurses through containers.
 fn identical(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Num(x), Value::Num(y)) => x.to_bits() == y.to_bits(),
         (Value::List(x), Value::List(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| identical(p, q))
         }
         (Value::Map(x), Value::Map(y)) => {
-            x.map.len() == y.map.len()
-                && x.map
-                    .iter()
-                    .all(|(k, v)| y.map.get(k).is_some_and(|w| identical(v, w)))
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|((k, v), (l, w))| k == l && identical(v, w))
         }
         _ => a == b,
     }
@@ -59,17 +58,15 @@ fn round_trip(v: &Value) -> IdedExpr {
 }
 
 fn map(entries: Vec<(Key, Value)>) -> Value {
-    Value::Map(Map {
-        map: Arc::new(entries.into_iter().collect::<HashMap<_, _>>()),
-    })
+    Value::Map(CelMap::new(entries))
 }
 
 fn list(items: Vec<Value>) -> Value {
-    Value::List(Arc::new(items))
+    Value::list(items)
 }
 
 fn s(x: &str) -> Value {
-    Value::String(Arc::new(x.to_string()))
+    Value::from(x)
 }
 
 #[test]
@@ -77,14 +74,14 @@ fn scalars_reify_to_themselves() {
     for v in [
         Value::Bool(true),
         Value::Bool(false),
-        Value::Float(-3.0),
-        Value::Float(i64::MIN as f64),
-        Value::Float(9007199254740992.0),
-        Value::Float(0.1),
-        Value::Float(-0.0),
-        Value::Float(1e300),
+        Value::Num(-3.0),
+        Value::Num(i64::MIN as f64),
+        Value::Num(9007199254740992.0),
+        Value::Num(0.1),
+        Value::Num(-0.0),
+        Value::Num(1e300),
         s("a\"b\n"),
-        Value::Bytes(Arc::new(vec![0, 255])),
+        Value::Bytes(vec![0, 255].into()),
         Value::Null,
     ] {
         let e = round_trip(&v);
@@ -99,7 +96,7 @@ fn scalars_reify_to_themselves() {
 /// integer for an `Int` literal to stand for (`removed: integer values`).
 #[test]
 fn bound_number_reifies_as_double() {
-    let e = round_trip(&Value::Float(7.0));
+    let e = round_trip(&Value::Num(7.0));
     assert!(
         matches!(e.expr, Expr::Literal(LiteralValue::Double(_))),
         "Float(7.0) must reify as a Double literal, got {e:?}"
@@ -113,15 +110,15 @@ fn bound_number_reifies_as_double() {
 fn nonfinite_is_not_reified() {
     for f in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
         assert!(
-            fork::reify(&Value::Float(f)).is_none(),
+            fork::reify(&Value::Num(f)).is_none(),
             "Float({f}) must be refused"
         );
-        let l = list(vec![Value::Float(1.0), Value::Float(f)]);
+        let l = list(vec![Value::Num(1.0), Value::Num(f)]);
         assert!(
             fork::reify(&l).is_none(),
             "a list holding Float({f}) must be refused"
         );
-        let m = map(vec![(Key::Num(1), Value::Float(f))]);
+        let m = map(vec![(Key::Num(1), Value::Num(f))]);
         assert!(
             fork::reify(&m).is_none(),
             "a map holding Float({f}) must be refused"
@@ -164,48 +161,59 @@ fn durations_reify_as_duration_calls() {
 
 #[test]
 fn containers_reify_recursively() {
-    let inner = map(vec![
-        (
-            Key::String(Arc::new("xs".into())),
-            list(vec![Value::Float(1.0), Value::Float(2.5)]),
-        ),
-        (Key::Num(-4), list(vec![])),
-        (Key::Bool(true), map(vec![])),
-    ]);
-    let v = list(vec![
-        inner.clone(),
+    let str_key = |k: &str| Key::Str(CelKey::new(k));
+    // Lists of maps of lists, nested — every container homogeneous, as a checked program's
+    // values are, so the round trip runs through the checker.
+    let leaf = |xs: Vec<f64>| {
         map(vec![(
-            Key::String(Arc::new("nested".into())),
-            list(vec![inner, s("x"), Value::Null]),
+            str_key("xs"),
+            list(xs.into_iter().map(Value::Num).collect()),
+        )])
+    };
+    let v = list(vec![
+        map(vec![(
+            str_key("a"),
+            list(vec![leaf(vec![1.0, 2.5]), leaf(vec![])]),
         )]),
-        list(vec![]),
+        map(vec![(str_key("a"), list(vec![]))]),
     ]);
     round_trip(&v);
+    // Every key kind a map can have.
+    round_trip(&map(vec![
+        (Key::Num(-4), list(vec![])),
+        (Key::Num(2), list(vec![Value::Num(1.0)])),
+    ]));
+    round_trip(&map(vec![
+        (Key::Bool(true), s("t")),
+        (Key::Bool(false), s("f")),
+    ]));
+    // A map whose keys differ in kind is no checked program's value, so it has no round trip; it
+    // still reifies, keys sorted by kind.
+    let mixed = map(vec![
+        (str_key("xs"), list(vec![])),
+        (Key::Num(-4), list(vec![])),
+        (Key::Bool(true), list(vec![])),
+    ]);
+    let e = fork::reify(&mixed).expect("a mixed-key map reifies");
+    assert_eq!(
+        fork::unparse(&e).unwrap(),
+        r#"{(-4.0): [], true: [], "xs": []}"#
+    );
 }
 
-/// `Map` is a `HashMap`, so its iteration order is whatever the hasher says. Sorting the entries
-/// is what makes a residual's text deterministic.
+/// Built in any order, a map is held — and rendered — in key order, which is what makes a
+/// residual's text deterministic.
 #[test]
 fn map_entries_are_sorted() {
     let keys: Vec<String> = (0..20).map(|i| format!("k{i:02}")).collect();
     let forward = map(keys
         .iter()
-        .map(|k| {
-            (
-                Key::String(Arc::new(k.clone())),
-                Value::Float(k.len() as f64),
-            )
-        })
+        .map(|k| (Key::Str(CelKey::new(k)), Value::Num(k.len() as f64)))
         .collect());
     let backward = map(keys
         .iter()
         .rev()
-        .map(|k| {
-            (
-                Key::String(Arc::new(k.clone())),
-                Value::Float(k.len() as f64),
-            )
-        })
+        .map(|k| (Key::Str(CelKey::new(k)), Value::Num(k.len() as f64)))
         .collect());
     let a = fork::unparse(&round_trip(&forward)).unwrap();
     let b = fork::unparse(&round_trip(&backward)).unwrap();
@@ -224,39 +232,31 @@ fn map_entries_are_sorted() {
     );
 }
 
-#[derive(Eq, PartialEq)]
-struct HostHandle(u64);
+/// A lazy view: served on access, so it has no source form.
+#[derive(Debug)]
+struct View;
 
-impl Debug for HostHandle {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "HostHandle({})", self.0)
-    }
-}
-
-impl Opaque for HostHandle {
-    fn runtime_type_name(&self) -> &str {
-        "test.HostHandle"
+impl LazyValue for View {
+    fn member(&self, name: &str) -> Result<Value, CelError> {
+        Err(CelError::NoSuchMember {
+            key: name.to_string(),
+        })
     }
 }
 
 #[test]
-fn opaque_and_function_are_refused() {
-    let opaque = Value::Opaque(Arc::new(HostHandle(7)));
+fn a_lazy_view_is_refused() {
+    let view = Value::Lazy(Arc::new(View));
     assert!(
-        fork::reify(&opaque).is_none(),
-        "an opaque value has no source form"
-    );
-    let function = Value::Function(Arc::new("size".into()), None);
-    assert!(
-        fork::reify(&function).is_none(),
-        "a function value has no source form"
+        fork::reify(&view).is_none(),
+        "a lazy view has no source form"
     );
     assert!(
-        fork::reify(&list(vec![Value::Float(1.0), opaque])).is_none(),
-        "a list holding an opaque value must be refused"
+        fork::reify(&list(vec![Value::Num(1.0), view.clone()])).is_none(),
+        "a list holding a lazy view must be refused"
     );
     assert!(
-        fork::reify(&map(vec![(Key::Num(1), function)])).is_none(),
-        "a map holding a function value must be refused"
+        fork::reify(&map(vec![(Key::Num(1), view)])).is_none(),
+        "a map holding a lazy view must be refused"
     );
 }

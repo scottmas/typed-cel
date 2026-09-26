@@ -203,10 +203,41 @@ fn a_lazy_binding_is_still_refused_for_an_undeclared_name() {
     let env = CelEnvironment::new();
     let mut activation = env.activation();
     let rendered = activation
-        .bind_lazy("nowhere", CelValue::Duration(5))
+        .bind_lazy(
+            "nowhere",
+            CelValue::Duration(typed_cel::CelDuration::from_millis(5)),
+        )
         .err()
         .expect("an undeclared name must be refused")
         .to_string();
     assert!(rendered.contains("nowhere"), "{rendered}");
     assert!(rendered.contains("not declared"), "{rendered}");
 }
+
+/// What one read of a lazy member costs: exactly one `member` per read an expression makes. These
+/// counts are a host's per-tick cost, captured before the store changed and pinned.
+#[test]
+fn a_lazy_member_is_read_once_per_read() {
+    let mut env = CelEnvironment::new();
+    env.declare(
+        "r",
+        support::record_opt("r", &[("a", CelTy::Num), ("b", CelTy::Num)], &["b"]),
+    );
+    let program = env
+        .compile("r.a == 1.0 && r.a == 1.0 && has(r.b)")
+        .expect("compiles");
+    let mut fields = serde_json::Map::new();
+    fields.insert("a".into(), serde_json::json!(1.0));
+    fields.insert("b".into(), serde_json::json!(2.0));
+    let view = Arc::new(support::gen::JsonLazy::new(fields));
+    let mut act = env.activation();
+    act.bind_lazy("r", CelValue::Lazy(Arc::clone(&view) as _))
+        .expect("declared");
+    assert_eq!(program.evaluate(&act).map_err(|e| e.to_string()), Ok(true));
+    assert_eq!(view.members.load(Ordering::SeqCst), MEMBERS, "member reads");
+    assert_eq!(view.key_calls.load(Ordering::SeqCst), KEYS, "keys calls");
+}
+/// `r.a` twice.
+const MEMBERS: usize = 2;
+/// `has(r.b)` asks a keyed view its keys, and resolves no member.
+const KEYS: usize = 1;

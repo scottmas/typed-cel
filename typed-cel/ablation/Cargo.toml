@@ -1,0 +1,36 @@
+# The ablation: what each of typed-cel's two bets buys (a TYPED dialect; a COMPILE STEP to register
+# bytecode), measured against upstream cel-rust 0.14.2 and hand-written Rust. See ../docs/PERFORMANCE.md.
+#
+# STANDALONE — not a member of this repository's workspace (its own [workspace] table, its own
+# Cargo.lock and target/), so the crates.io `cel` it compares against never enters the workspace
+# lock or anything a consumer links; `tests/provenance.rs` holds that. Run from THIS directory:
+#     cd typed-cel/ablation && cargo bench --bench ablation
+[package]
+name = "typed-cel-ablation"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Column (2) measured `CelProgram::evaluate` while it ran the tree evaluator; the evaluator is
+# deleted and its numbers are historical (../docs/PERFORMANCE.md).
+typed-cel = { path = ".." }
+cel = "=0.14.2"                               # UPSTREAM, column (1)
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bench]]
+name = "ablation"
+harness = false
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+debug = false
+[profile.bench]
+opt-level = 3
+codegen-units = 1
+debug = false

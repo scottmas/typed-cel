@@ -42,7 +42,7 @@ impl CelBytecode {
 /// ([`CelError::Emit`](crate::CelError::Emit)) is a defect of the backend, never a fallback.
 pub fn emit(p: &crate::CelProgram) -> Result<CelBytecode, crate::CelError> {
     Ok(CelBytecode {
-        fast: Arc::new(FastProgram::new(p)?),
+        fast: Arc::clone(p.lowered()?),
         demand: p.demand().clone(),
         source: p.source_arc(),
     })

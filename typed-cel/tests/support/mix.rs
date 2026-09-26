@@ -5,11 +5,15 @@
 //! binding every other declared root, one ROW is:
 //!
 //! ```text
-//! column 1   P.evaluate(K ∪ U)                          the reference, unspecialized
-//! column 2   env.specialize(P, K)?.evaluate(U)          the reference, on the residual
-//! column 3   Vm::eval(&emit(&env.specialize(P, K)?), U) the backend, on the residual
-//! column 4   Vm::eval(&emit(&P), K ∪ U)                 a GUARD: the backend on the original
+//! column 1   P.evaluate(K ∪ U)                          the original, over bound values
+//! column 2   env.specialize(P, K)?.evaluate(U)          the residual, over bound values
+//! column 3   residual.decide(JsonFacts(U))              the residual, read by field
+//! column 4   P.decide(JsonFacts(K ∪ U))                 a GUARD: the original, read by field
 //! ```
+//!
+//! Columns 3 and 4 exist only for a program whose fields are all scalars (`Facts` answers scalars
+//! only); the row counts how often each ran. Four DIFFERENT computations: two programs, each on two
+//! hosts.
 //!
 //! Two outcomes AGREE when both are `Ok(b)` with the same `b`, or both are `Err(_)`. Error
 //! identity is never compared: an evaluation error embeds the program's source text, which differs
@@ -20,9 +24,11 @@
 
 use serde_json::{json, Value as J};
 use typed_cel::fork::ast::{EntryExpr, Expr, IdedExpr};
-use typed_cel::{emit, CelActivation, CelEnvironment, CelError, CelLimits, CelProgram, CelTy, Vm};
+use typed_cel::{
+    CelActivation, CelEnvironment, CelError, CelLimits, CelProgram, CelTy, FastProgram, FastScratch,
+};
 
-use super::gen::Gen;
+use super::gen::{Gen, JsonFacts};
 use super::record_opt;
 
 /// Every root of [`roster`], in declaration order.
@@ -92,26 +98,30 @@ pub struct Row {
     pub residual_loops: usize,
     pub c1: Outcome,
     pub c2: Outcome,
-    pub c3: Outcome,
-    pub c4: Outcome,
+    /// `None`: the residual reads a field `Facts` does not serve.
+    pub c3: Option<Outcome>,
+    /// `None`: the original reads a field `Facts` does not serve.
+    pub c4: Option<Outcome>,
 }
 
 impl Row {
     /// The property: columns 2 and 3 agree with column 1.
     pub fn holds(&self) -> bool {
-        self.ran_fast() && agree(&self.c1, &self.c2) && agree(&self.c1, &self.c3)
+        self.ran_fast()
+            && agree(&self.c1, &self.c2)
+            && self.c3.as_ref().is_none_or(|c3| agree(&self.c1, c3))
     }
 
-    /// Did column 3 run on the backend? There is no fallback: a residual `emit` cannot lower is a
+    /// Did the residual lower? There is no fallback: a residual the backend cannot lower is a
     /// failing row.
     pub fn ran_fast(&self) -> bool {
-        self.residual.is_ok() && !matches!(&self.c3, Err(e) if e.starts_with(EMIT_FAILED))
+        self.residual.is_ok() && !matches!(&self.c2, Err(e) if e.starts_with(EMIT_FAILED))
     }
 
-    /// The guard: the backend agrees with the evaluator on the ORIGINAL. When it does not, a
-    /// column-3 disagreement is a backend defect, not a specializer one.
-    pub fn vm_guard_holds(&self) -> bool {
-        agree(&self.c1, &self.c4)
+    /// The guard: the original read by field agrees with the original over bound values. When it
+    /// does not, a column-3 disagreement is a host defect, not a specializer one.
+    pub fn guard_holds(&self) -> bool {
+        self.c4.as_ref().is_none_or(|c4| agree(&self.c1, c4))
     }
 
     pub fn residual_source(&self) -> &str {
@@ -123,9 +133,9 @@ impl Row {
 
     /// Everything a reader needs to reproduce and triage the row.
     pub fn report(&self, label: &str) -> String {
-        let blame = if !self.vm_guard_holds() {
-            "BACKEND DEFECT (column 4 disagrees with column 1 on the ORIGINAL program; \
-             tests/vm_differential.rs should have caught it)"
+        let blame = if !self.guard_holds() {
+            "HOST DEFECT (column 4 disagrees with column 1 on the ORIGINAL program; \
+             tests/metamorphic.rs::every_host_answers_alike should have caught it)"
         } else if let Err(e) = &self.residual {
             return format!(
                 "{label}\n  specialize REFUSED a program compile accepted: {e}\n{}",
@@ -135,7 +145,7 @@ impl Row {
             "SPECIALIZER DEFECT"
         };
         format!(
-            "{label}: {blame}\n{}\n  column 1 (P, K ∪ U):          {:?}\n  column 2 (residual, U):       {:?}\n  column 3 (Vm residual, U):    {:?}\n  column 4 (Vm P, K ∪ U):       {:?}",
+            "{label}: {blame}\n{}\n  column 1 (P, K ∪ U):             {:?}\n  column 2 (residual, U):          {:?}\n  column 3 (residual, Facts U):    {:?}\n  column 4 (P, Facts K ∪ U):       {:?}",
             self.context(),
             self.c1,
             self.c2,
@@ -189,12 +199,18 @@ pub fn row(
     let u = bind_all(env, &completion);
     let ku = bind_all(env, &full);
 
-    let vm = Vm::new();
-    let c1 = outcome(original.evaluate(&ku));
-    let c4 = match emit(&original) {
-        Ok(code) => outcome(vm.eval(&code, &ku)),
-        Err(e) => Err(format!("emit failed on the original: {e}")),
+    let facts = |p: &CelProgram, json: &[(&str, J)]| -> Option<Outcome> {
+        let code = FastProgram::new(p).ok()?;
+        // `d` is the roster's one duration; JSON spells it as a string, which `JsonFacts` would
+        // serve as one. A duration read by field is `Facts::duration_ms`, not exercised here.
+        if code.fields().iter().any(|f| f.root() == "d") {
+            return None;
+        }
+        let f = JsonFacts::new(code.fields(), json)?;
+        Some(outcome(code.decide(&f, &mut FastScratch::default())))
     };
+    let c1 = outcome(original.evaluate(&ku));
+    let c4 = facts(&original, &full);
     let original_tree = typed_cel::fork::expression_of(&original);
     let original_rendered =
         typed_cel::fork::unparse(original_tree).expect("a compiled tree renders");
@@ -203,16 +219,16 @@ pub fn row(
     let residual = env.specialize(&original, &k).map_err(|e| e.to_string());
     let (c2, c3, residual_loops) = match &residual {
         Ok(res) => {
-            let c2 = outcome(res.evaluate(&u));
-            // An `emit` failure on the residual is a defect in its own right; it is reported as a
-            // column value that no `Ok` or evaluator error can be mistaken for.
-            let c3 = match emit(res) {
-                Ok(code) => outcome(vm.eval(&code, &u)),
+            // A residual the backend cannot lower is a defect in its own right; it is reported as
+            // a column value that no `Ok` or evaluation error can be mistaken for.
+            let c2 = match FastProgram::new(res) {
+                Ok(_) => outcome(res.evaluate(&u)),
                 Err(e) => Err(format!("{EMIT_FAILED} on the residual: {e}")),
             };
+            let c3 = facts(res, &completion);
             (c2, c3, comprehensions(typed_cel::fork::expression_of(res)))
         }
-        Err(e) => (Err(e.clone()), Err(e.clone()), original_loops),
+        Err(e) => (Err(e.clone()), None, original_loops),
     };
     Row {
         source: source.to_string(),

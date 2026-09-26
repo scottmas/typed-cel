@@ -13,8 +13,6 @@ extern crate core;
 use std::sync::Arc;
 use thiserror::Error;
 
-mod macros;
-
 // The absorbed fork. PRIVATE — see the public-contract section below. `dead_code` is allowed
 // across it because narrowing the surface made a lot of upstream API unreachable, and deleting it
 // would make the fork point undiffable, which is the one thing `ATTRIBUTION.md` promises a reader
@@ -22,38 +20,16 @@ mod macros;
 #[allow(dead_code)]
 mod common;
 #[allow(dead_code)]
-mod context;
-mod env;
-#[allow(dead_code)]
 mod parser;
 
-use common::ast::SelectExpr;
 // The fork's own in-crate unit tests import these from the crate root. Crate-private rather than
 // deleted: they are not contract, but removing them would edit absorbed source.
 #[allow(unused_imports)]
 pub(crate) use common::ast::IdedExpr;
-use context::Context;
-use functions::FunctionContext;
-#[allow(unused_imports)]
-pub(crate) use json::ConvertToJsonError;
-use objects::{ResolveResult, Value};
-use parser::ParseErrors;
 use parser::{Expression, ExpressionReferences, Parser};
-#[allow(unused_imports)]
-pub(crate) use ser::{to_value, Duration, SerializationError};
-#[allow(dead_code, unused_imports)]
-mod functions;
-mod magic;
-#[allow(dead_code)]
-mod objects;
-mod resolvers;
 
 #[cfg(feature = "chrono")]
 mod duration;
-#[cfg(feature = "chrono")]
-use env::Env;
-
-mod ser;
 
 #[cfg(feature = "json")]
 // ------------------------------------------------------------------------------------------
@@ -61,6 +37,7 @@ mod ser;
 // so a reader can diff against the fork point (ATTRIBUTION.md).
 // ------------------------------------------------------------------------------------------
 mod activation;
+mod bindings;
 mod bounds;
 mod check;
 mod demand;
@@ -70,8 +47,6 @@ mod event;
 mod fast;
 mod governed;
 mod hostfn;
-#[cfg(feature = "json")]
-mod json;
 mod lazy;
 mod prepared;
 mod shape;
@@ -80,6 +55,7 @@ mod specialize;
 mod sync_facts;
 mod ty;
 mod unparse;
+mod value;
 pub use activation::{BindError, CelActivation, CelBindings, CelTemplate, RunStep, Vm, VmRun};
 pub use bounds::CelLimits;
 pub use check::{CheckError, TypeEnv};
@@ -92,32 +68,27 @@ pub use governed::{
     GovernedDoc, GovernedShape, RunLiveness, StreamedProgram, StreamedRun, GOVERNED_CELL_BYTES,
 };
 pub use hostfn::{HostCall, HostDispatch, NoCallHosts, TAG_OTHER};
-pub use lazy::{Access, CelKey, CelValue, DemandHandle, LazyValue, Presence};
+pub use lazy::{Access, CelKey, DemandHandle, LazyValue, Presence};
 pub use prepared::CelRuntime;
 pub use shape::{Conjunct, Literal};
 pub use sync_facts::{FactFn, SyncFacts};
 pub use ty::{CelTy, Record, Relax};
+pub use value::{CelDuration, CelMap, CelMapKey, CelValue};
 
 /// The repository README's code blocks, compiled and run as doctests so its quickstart cannot rot.
 #[cfg(doctest)]
 #[doc = include_str!("../../README.md")]
 pub struct RepositoryReadme;
 
-use magic::FromContext;
-
 #[derive(Error, Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ExecutionError {
-    #[error("Invalid argument count: expected {expected}, got {actual}")]
-    InvalidArgumentCount { expected: usize, actual: usize },
     #[error("Invalid argument type: {:?}", .target)]
-    UnsupportedTargetType { target: Value },
-    #[error("Method '{method}' not supported on type '{target:?}'")]
-    NotSupportedAsMethod { method: String, target: Value },
+    UnsupportedTargetType { target: CelValue },
     /// Indicates that the script attempted to use a value as a key in a map,
     /// but the type of the value was not supported as a key.
     #[error("Unable to use value '{0:?}' as a key")]
-    UnsupportedKeyType(Value),
+    UnsupportedKeyType(CelValue),
     #[error("Unexpected type: got '{got}', want '{want}'")]
     UnexpectedType { got: String, want: String },
     /// Indicates that the script attempted to reference a key on a type that
@@ -132,42 +103,17 @@ pub enum ExecutionError {
     /// method, or function.
     #[error("Undeclared reference to '{0}'")]
     UndeclaredReference(Arc<String>),
-    /// Indicates that a function expected to be called as a method, or to be
-    /// called with at least one parameter.
-    #[error("Missing argument or target")]
-    MissingArgumentOrTarget,
-    /// Indicates that a comparison could not be performed.
-    #[error("{0:?} can not be compared to {1:?}")]
-    ValuesNotComparable(Value, Value),
-    #[deprecated]
-    #[error("Unsupported unary operator '{0}': {1:?}")]
-    UnsupportedUnaryOperator(&'static str, Value),
     /// Indicates that an unsupported binary operator was applied on two values
     /// where it's unsupported, for example list + map.
     #[error("Unsupported binary operator '{0}': {1:?}, {2:?}")]
-    UnsupportedBinaryOperator(&'static str, Value, Value),
-    #[deprecated]
-    #[error("Cannot use value as map index: {0:?}")]
-    UnsupportedMapIndex(Value),
-    #[deprecated]
-    #[error("Cannot use value as list index: {0:?}")]
-    UnsupportedListIndex(Value),
-    /// Indicates that an unsupported type was used to index a list
-    #[error("Cannot use value {0:?} to index {1:?}")]
-    UnsupportedIndex(Value, Value),
-    #[deprecated]
-    #[error("Unsupported function call identifier type: {0:?}")]
-    UnsupportedFunctionCallIdentifierType(Expression),
-    #[deprecated]
-    #[error("Unsupported fields construction: {0:?}")]
-    UnsupportedFieldsConstruction(SelectExpr),
+    UnsupportedBinaryOperator(&'static str, CelValue, CelValue),
     /// Indicates that a function had an error during execution.
     #[error("Error executing function '{function}': {message}")]
     FunctionError { function: String, message: String },
     #[error("Overflow from binary operator '{0}': {1:?}, {2:?}")]
-    Overflow(&'static str, Value, Value),
+    Overflow(&'static str, CelValue, CelValue),
     #[error("Index out of bounds: {0:?}")]
-    IndexOutOfBounds(Value),
+    IndexOutOfBounds(CelValue),
     #[error("InternalError: {0:?}")]
     InternalError(String),
 }
@@ -181,10 +127,6 @@ impl ExecutionError {
         ExecutionError::UndeclaredReference(Arc::new(name.to_string()))
     }
 
-    pub fn invalid_argument_count(expected: usize, actual: usize) -> Self {
-        ExecutionError::InvalidArgumentCount { expected, actual }
-    }
-
     pub fn function_error<E: ToString>(function: &str, error: E) -> Self {
         ExecutionError::FunctionError {
             function: function.to_string(),
@@ -192,35 +134,21 @@ impl ExecutionError {
         }
     }
 
-    pub fn unsupported_target_type(target: Value) -> Self {
+    pub fn unsupported_target_type(target: CelValue) -> Self {
         ExecutionError::UnsupportedTargetType { target }
     }
 
-    pub fn not_supported_as_method(method: &str, target: Value) -> Self {
-        ExecutionError::NotSupportedAsMethod {
-            method: method.to_string(),
-            target,
-        }
-    }
-
-    pub fn unsupported_key_type(value: Value) -> Self {
+    pub fn unsupported_key_type(value: CelValue) -> Self {
         ExecutionError::UnsupportedKeyType(value)
-    }
-
-    pub fn missing_argument_or_target() -> Self {
-        ExecutionError::MissingArgumentOrTarget
     }
 }
 
-// The absorbed evaluator's entry: parse with no checker, run with no roster. Nothing outside the
-// crate can name it — `CelEnvironment::compile` is the only way a caller gets a program — and the
-// crate's own harnesses reach it through `fork`, behind the `conformance` feature.
+// A parsed tree. Nothing outside the crate can name it — `CelEnvironment::compile` is the only way a
+// caller gets a program.
 pub(crate) use program::Program;
 
 mod program {
-    use super::{
-        Context, Expression, ExpressionReferences, ParseErrors, Parser, ResolveResult, Value,
-    };
+    use super::{Expression, ExpressionReferences};
 
     #[derive(Debug)]
     pub struct Program {
@@ -228,30 +156,18 @@ mod program {
     }
 
     impl Program {
-        pub fn compile(source: &str) -> Result<Program, ParseErrors> {
-            let parser = Parser::default();
-            parser
-                .parse(source)
-                .map(|expression| Program { expression })
-        }
-
         /// A program running an already-built tree — a specialization's residual, which is assembled
         /// rather than parsed.
         pub(crate) fn from_expression(expression: Expression) -> Program {
             Program { expression }
         }
 
-        pub fn execute(&self, context: &Context) -> ResolveResult {
-            Value::resolve(&self.expression, context)
-        }
-
         /// Returns the variables and functions referenced by the CEL program
         ///
         /// # Example
         /// ```rust
-        /// # use typed_cel::fork::Program;
-        /// let program = Program::compile("size(foo) > 0").unwrap();
-        /// let references = program.references();
+        /// let expression = typed_cel::fork::parse("size(foo) > 0").unwrap();
+        /// let references = expression.references();
         ///
         /// assert!(references.has_function("size"));
         /// assert!(references.has_variable("foo"));
@@ -265,123 +181,14 @@ mod program {
             &self.expression
         }
     }
-
-    impl TryFrom<&str> for Program {
-        type Error = ParseErrors;
-
-        fn try_from(value: &str) -> Result<Self, Self::Error> {
-            Program::compile(value)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::context::Context;
-    use crate::objects::{ResolveResult, Value};
-    use crate::{ExecutionError, Program};
-    use std::collections::HashMap;
-    use std::convert::TryInto;
-
-    /// Tests the provided script and returns the result. An optional context can be provided.
-    pub(crate) fn test_script(script: &str, ctx: Option<Context>) -> ResolveResult {
-        let program = match Program::compile(script) {
-            Ok(p) => p,
-            Err(e) => panic!("{}", e),
-        };
-        program.execute(&ctx.unwrap_or_default())
-    }
-
-    #[test]
-    fn parse() {
-        Program::compile("1 + 1").unwrap();
-    }
-
-    #[test]
-    fn from_str() {
-        let input = "1.1";
-        let _p: Program = input.try_into().unwrap();
-    }
-
-    #[test]
-    fn variables() {
-        fn assert_output(script: &str, expected: ResolveResult) {
-            let mut ctx = Context::default();
-            ctx.add_variable_from_value("foo", HashMap::from([("bar", 1i64)]));
-            ctx.add_variable_from_value("arr", vec![1i64, 2, 3]);
-            ctx.add_variable_from_value("str", "foobar".to_string());
-            assert_eq!(test_script(script, Some(ctx)), expected);
-        }
-
-        // Test methods
-        assert_output("size([1, 2, 3]) == 3", Ok(true.into()));
-        assert_output("size([size([42]), 2, 3]) == 3", Ok(true.into()));
-        assert_output("size([]) == 3", Ok(false.into()));
-
-        // Test variable attribute traversals
-        assert_output("foo.bar == 1", Ok(true.into()));
-
-        // Test that we can index into an array
-        assert_output("arr[0] == 1", Ok(true.into()));
-
-        // Test that we cannot index into a string
-        assert_output("str[0]", Err(ExecutionError::NoSuchOverload));
-    }
-
-    #[test]
-    fn references() {
-        let p = Program::compile("[1, 1].map(x, x * 2)").unwrap();
-        assert!(p.references().has_variable("x"));
-        assert_eq!(p.references().variables().len(), 1);
-    }
-
-    #[test]
-    fn test_execution_errors() {
-        let tests = vec![
-            (
-                "no such key",
-                "foo.baz.bar == 1",
-                ExecutionError::no_such_key("baz"),
-            ),
-            (
-                "undeclared reference",
-                "missing == 1",
-                ExecutionError::undeclared_reference("missing"),
-            ),
-            (
-                "undeclared method",
-                "1.missing()",
-                ExecutionError::undeclared_reference("missing"),
-            ),
-            (
-                "undeclared function",
-                "missing(1)",
-                ExecutionError::undeclared_reference("missing"),
-            ),
-            (
-                "unsupported key type",
-                "{null: true}",
-                ExecutionError::unsupported_key_type(Value::Null),
-            ),
-        ];
-
-        for (name, script, error) in tests {
-            let mut ctx = Context::default();
-            ctx.add_variable_from_value("foo", HashMap::from([("bar", 1)]));
-            let res = test_script(script, Some(ctx));
-            assert_eq!(res, error.into(), "{name}");
-        }
-    }
 }
 
 // ------------------------------------------------------------------------------------------
-// The absorbed evaluator, for THIS CRATE'S OWN harnesses only.
+// The absorbed data model and the compile pipeline's pieces, for THIS CRATE'S OWN harnesses only.
 //
-// The cel-spec conformance corpus, the differentials and `tests/dialect.rs` drive the raw evaluator
-// on purpose: it is the executable specification the fast backend is held to, and a corpus case
-// answers a value of any type where the public contract answers a `bool`. The corpus harness runs a
-// case only after `CelEnvironment::compile` admits it. They are not callers — they are the crate
-// testing itself.
+// The cel-spec conformance lane, the specializer's and the unparser's tests reach values, trees and
+// the backend's boundary value through these doors: a corpus case answers a value of any type where
+// the public contract answers a `bool`. They are not callers — they are the crate testing itself.
 //
 // Gated on `conformance`, which the self dev-dependency turns on for the whole test build and
 // which nothing else enables. So a real consumer links a crate where the fork is entirely private,
@@ -389,19 +196,14 @@ mod tests {
 #[cfg(feature = "conformance")]
 #[doc(hidden)]
 pub mod fork {
-    pub use crate::context::Context;
-    pub use crate::env::Env;
-    pub use crate::objects::Value;
-    pub use crate::program::Program;
-    pub use crate::ser::Duration;
-
-    /// The argument extractors a function registered on a [`Context`] is written with.
-    pub mod extractors {
-        pub use crate::magic::{Arguments, Identifier, IntoFunction, IntoResolveResult, This};
-    }
 
     pub use crate::specialize::{check_no_known_read, expression_of, reify, renumber};
     pub use crate::unparse::{unparse, UnparseError};
+
+    /// Parse `src` — no desugaring, no check. For the tests that inspect a tree.
+    pub fn parse(src: &str) -> Result<crate::IdedExpr, crate::parser::ParseErrors> {
+        crate::parser::Parser::default().parse(src)
+    }
 
     /// `CelEnvironment::compile` without the `bool` requirement, for the typed conformance lane,
     /// whose cases have results of every type.
@@ -412,12 +214,12 @@ pub mod fork {
         env.compile_checked(expression).map(|(p, _)| p)
     }
 
-    /// The fast backend's value over an evaluator context, as `Program::execute` returns it.
+    /// The backend's value over `activation`'s bound values.
     pub fn fast_value(
         p: &crate::FastProgram,
-        ctx: &crate::context::Context,
-    ) -> crate::objects::ResolveResult {
-        crate::fast::run_value(p, ctx)
+        activation: &crate::CelActivation,
+    ) -> Result<crate::CelValue, crate::ExecutionError> {
+        crate::fast::run_value(p, activation.roots())
     }
 
     /// `CelEnvironment::specialize`, also handing back each constant slot's name and type.
@@ -429,8 +231,14 @@ pub mod fork {
         env.specialize_slots(program, known)
     }
 
-    pub mod objects {
-        pub use crate::objects::{Key, Map, Opaque, Value};
+    /// `CelEnvironment::specialize` with every fold lowering refused — for the test that pins a
+    /// refusal as LOUD.
+    pub fn specialize_with_lowering_refused(
+        env: &crate::CelEnvironment,
+        program: &crate::CelProgram,
+        known: &crate::CelActivation,
+    ) -> Result<crate::CelProgram, crate::CelError> {
+        env.specialize_inner(program, known, true).map(|(p, _)| p)
     }
 
     pub mod ast {
@@ -440,19 +248,11 @@ pub mod fork {
     pub mod parser {
         pub use crate::parser::Parser;
     }
-
-    pub mod common {
-        pub use crate::common::{types, value};
-    }
-
-    pub mod context {
-        pub use crate::context::VariableResolver;
-    }
 }
 
 // The public contract.
 //
-// The absorbed types stay internal — no `pub mod` and no `pub use` of a parser or evaluator type
+// The absorbed types stay internal — no `pub mod` and no `pub use` of a parser or value-model type
 // here — so the fork's internals remain ours to change without breaking a caller. Enforced by
 // `tests/purity.rs::the_fork_is_not_public`, because the claim is otherwise one nobody checks.
 //
@@ -478,9 +278,6 @@ pub struct Span {
 pub struct CelEnvironment {
     env: TypeEnv,
     limits: CelLimits,
-    /// The function table, built ONCE here and shared by every activation this environment (or its
-    /// [`CelRuntime`]) makes. Rebuilding it per activation is a whole stdlib per evaluation.
-    functions: Arc<env::Env>,
     /// The functions this environment registered ([`register_host`](CelEnvironment::register_host)).
     hosts: Arc<hostfn::HostTable>,
     /// The closed string sets it declared ([`declare_enum`](CelEnvironment::declare_enum)).
@@ -511,7 +308,6 @@ impl CelEnvironment {
         CelEnvironment {
             env: TypeEnv::new(),
             limits,
-            functions: Arc::new(env::Env::stdlib()),
             hosts: Arc::new(hostfn::HostTable::default()),
             enums: Arc::new(hostfn::EnumTable::default()),
         }
@@ -631,7 +427,9 @@ impl CelEnvironment {
                 "a host function's name is an identifier: a letter, then letters, digits or `_`",
             );
         }
-        if check::is_dialect_name(name) || self.functions.declares(name) {
+        // Every name the retired evaluator's standard library declared is a dialect name too
+        // (`tests/host_functions.rs::register_host_refuses_every_name_the_retired_stdlib_declared`).
+        if check::is_dialect_name(name) {
             return refuse("the dialect owns this name; a host function never shadows it");
         }
         if self.env.host(name).is_some() {
@@ -681,18 +479,13 @@ impl CelEnvironment {
     /// An empty activation over this environment's roster. Binding a name it did not declare is
     /// refused rather than silently ignored.
     pub fn activation(&self) -> CelActivation {
-        CelActivation::new(
-            self.env.clone(),
-            self.functions.clone(),
-            &self.hosts,
-            self.limits,
-        )
+        CelActivation::new(self.env.clone(), self.limits)
     }
 
-    /// The run-time half of this environment: the function table and the limits, and no roster.
+    /// The run-time half of this environment: the limits, and no roster.
     /// Cheap to keep, `Send + Sync`, and independent of the environment once built.
     pub fn runtime(&self) -> CelRuntime {
-        CelRuntime::new(self.functions.clone(), self.limits)
+        CelRuntime::new(self.limits)
     }
 
     /// Desugar, bound, parse, check. Every mistake a policy can make in an expression is found
@@ -805,6 +598,7 @@ impl CelEnvironment {
                 result: ResultKind::of(&ty).unwrap_or(ResultKind::Bool),
                 hosts: self.hosts.clone(),
                 enums: self.enums.clone(),
+                lowered: std::sync::OnceLock::new(),
             },
             ty,
         ))
@@ -812,7 +606,7 @@ impl CelEnvironment {
 }
 
 /// The node kinds the fast backend lowers by, from the checker's type of every node.
-fn kinds_of(types: &std::collections::HashMap<u64, CelTy>) -> fast::Kinds {
+pub(crate) fn kinds_of(types: &std::collections::HashMap<u64, CelTy>) -> fast::Kinds {
     types
         .iter()
         .map(|(id, ty)| {
@@ -859,6 +653,17 @@ impl CelEnvironment {
         program: &CelProgram,
         known: &CelActivation,
     ) -> Result<(CelProgram, Vec<(String, CelTy)>), CelError> {
+        self.specialize_inner(program, known, false)
+    }
+
+    /// [`specialize_slots`](CelEnvironment::specialize_slots); `refuse_all` fails every lowering of
+    /// a closed subtree (the test door `fork::specialize_with_lowering_refused`).
+    pub(crate) fn specialize_inner(
+        &self,
+        program: &CelProgram,
+        known: &CelActivation,
+        refuse_all: bool,
+    ) -> Result<(CelProgram, Vec<(String, CelTy)>), CelError> {
         let refuse = |message: String| CelError::Specialize {
             source: program.source_arc(),
             message,
@@ -881,8 +686,28 @@ impl CelEnvironment {
                 let first = errors.first().map(|e| e.message.as_str()).unwrap_or("");
                 refuse(format!("the original does not type-check: {first}"))
             })?;
-        let (mut residual, slots) =
-            specialize::fold_typed(original, known.context(), roots, self.limits, &types);
+        let kinds = kinds_of(&types);
+        let (mut residual, slots, refused) = specialize::fold_typed(
+            original,
+            known.roots(),
+            roots,
+            self.limits,
+            &types,
+            specialize::Lowering {
+                kinds: &kinds,
+                hosts: &self.hosts,
+                enums: &self.enums,
+                refuse_all,
+            },
+        );
+        // Every closed subtree of a checked tree lowers; one that does not is a defect of the
+        // backend, never a reason to leave a known read in the residual.
+        if let Some(first) = refused.first() {
+            return Err(refuse(format!(
+                "the backend could not lower a closed subtree ({} time(s)); first: {first}",
+                refused.len()
+            )));
+        }
         specialize::renumber(&mut residual);
         specialize::check_no_known_read(&residual, roots).map_err(|path| {
             refuse(format!(
@@ -931,6 +756,7 @@ impl CelEnvironment {
                 result: program.result,
                 hosts: self.hosts.clone(),
                 enums: self.enums.clone(),
+                lowered: std::sync::OnceLock::new(),
             },
             decls,
         ))
@@ -970,6 +796,25 @@ pub struct CelProgram {
     hosts: Arc<hostfn::HostTable>,
     /// The closed string sets of that environment.
     enums: Arc<hostfn::EnumTable>,
+    /// This program on the backend, lowered on first use and then shared by `evaluate`, `emit` and
+    /// every clone of its bytecode. `Err` holds the lowering refusal's message (a backend defect).
+    lowered: std::sync::OnceLock<Result<Arc<FastProgram>, Arc<str>>>,
+}
+
+impl CelProgram {
+    /// The lowered program, built on first use.
+    pub(crate) fn lowered(&self) -> Result<&Arc<FastProgram>, CelError> {
+        let slot = self.lowered.get_or_init(|| {
+            FastProgram::new(self).map(Arc::new).map_err(|e| match e {
+                CelError::Emit { message, .. } => Arc::from(message),
+                other => Arc::from(other.to_string()),
+            })
+        });
+        slot.as_ref().map_err(|message| CelError::Emit {
+            source: self.source_arc(),
+            message: message.to_string(),
+        })
+    }
 }
 
 /// The type a program is required to produce ([`CelEnvironment::compile_returning`]). `Copy` and
@@ -1141,7 +986,7 @@ impl CelError {
         match self {
             CelError::Bind { .. }
             | CelError::Registration { .. }
-            // A lazy view has no idea which expression is reading it; the evaluator adds the
+            // A lazy view has no idea which expression is reading it; the backend adds the
             // source when it wraps this into an `Evaluation`.
             | CelError::NoSuchMember { .. } => None,
             CelError::Desugar { source, .. }

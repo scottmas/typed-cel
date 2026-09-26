@@ -33,8 +33,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use crate::demand::{DemandSet, Segment};
 use crate::event::Event;
 use crate::fast::{FactPoll, Facts, FieldId, Paused, Resumed};
-use crate::lazy::{Access, CelValue, DemandHandle, LazyValue, Presence};
+use crate::lazy::{Access, DemandHandle, LazyValue, Presence};
 use crate::ty::CelTy;
+use crate::CelValue;
 use crate::{
     CelActivation, CelBindings, CelBytecode, CelEnvironment, CelError, CelProgram, CelTemplate,
     FastProgram, Vm,
@@ -583,7 +584,8 @@ impl DocState {
             .cells
             .iter()
             .map(|c| match c {
-                Cell::Accumulating(s) | Cell::Value(CelValue::Str(s)) => s.capacity(),
+                Cell::Accumulating(s) => s.capacity(),
+                Cell::Value(CelValue::Str(s)) => s.len(),
                 Cell::Failed(m) => m.capacity(),
                 _ => 0,
             })
@@ -865,11 +867,14 @@ impl DocState {
                     Kind::Leaf(Leaf::Duration) => {
                         self.held -= s.len();
                         match crate::duration::parse_duration(&s) {
-                            Ok((_, d)) => Cell::Value(CelValue::Duration(d.num_milliseconds())),
+                            // Full precision: `1500ns` stays 1500 nanoseconds.
+                            Ok((_, d)) => {
+                                Cell::Value(CelValue::Duration(crate::CelDuration::of(d)))
+                            }
                             Err(e) => Cell::Failed(format!("`{}`: not a duration: {e}", node.path)),
                         }
                     }
-                    _ => Cell::Value(CelValue::Str(s)),
+                    _ => Cell::Value(CelValue::Str(s.into())),
                 };
                 self.settle(n, cell);
             }
@@ -1013,7 +1018,7 @@ impl Facts for DocFacts<'_> {
 
     fn duration_ms(&self, f: FieldId) -> Option<i64> {
         match self.leaf(f)? {
-            CelValue::Duration(ms) => Some(*ms),
+            CelValue::Duration(d) => Some(d.as_millis()),
             _ => None,
         }
     }
@@ -1277,7 +1282,7 @@ impl StreamedRun {
         };
         match self.fast.resume(
             paused,
-            self.bindings.context(),
+            self.bindings.roots(),
             Some((&facts, &self.mine[..])),
         ) {
             Resumed::Done(r) => self.vm = Run::Decided(r),

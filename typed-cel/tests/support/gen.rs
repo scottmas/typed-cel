@@ -1,35 +1,30 @@
-//! Holding the backend to the evaluator: the comparison helpers every differential shares, and the
-//! generator `tests/vm_differential.rs` runs them over.
+//! The generators every generated test runs over (`tests/generated_golden.rs`,
+//! `tests/metamorphic.rs`, `tests/backend_generated.rs`), the comparison helpers they share, and
+//! `JsonFacts`, the `Facts` over JSON bindings.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use typed_cel::fork::objects::Value;
-use typed_cel::{CelEnvironment, CelError, CelKey, CelTy, CelValue, ExecutionError, LazyValue};
+use typed_cel::{
+    CelEnvironment, CelError, CelKey, CelTy, CelValue, ExecutionError, Facts, FieldId, FieldPath,
+    LazyValue,
+};
 
-/// Kind-strict structural equality. `Value`'s own `PartialEq` says `NaN != NaN`, which is not what
-/// "the VM agrees" means. Maps compare by
-/// length and per-key lookup, never by `Debug` text — each `HashMap` iterates in its own random
-/// order.
-pub fn same_value(a: &Value, b: &Value) -> bool {
+/// Kind-strict structural equality. `CelValue`'s own `PartialEq` says `NaN != NaN`, which is not
+/// what "the same answer" means.
+pub fn same_value(a: &CelValue, b: &CelValue) -> bool {
     match (a, b) {
-        (Value::Null, Value::Null) => true,
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Float(x), Value::Float(y)) => (x.is_nan() && y.is_nan()) || x == y,
-        (Value::String(x), Value::String(y)) => x == y,
-        (Value::Bytes(x), Value::Bytes(y)) => x == y,
-        (Value::Duration(x), Value::Duration(y)) => x == y,
-        (Value::List(x), Value::List(y)) => {
+        (CelValue::Num(x), CelValue::Num(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (CelValue::List(x), CelValue::List(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| same_value(p, q))
         }
-        (Value::Map(x), Value::Map(y)) => {
-            x.map.len() == y.map.len()
-                && x.map
-                    .iter()
-                    .all(|(k, v)| y.map.get(k).is_some_and(|w| same_value(v, w)))
+        (CelValue::Map(x), CelValue::Map(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|((k, v), (l, w))| k == l && same_value(v, w))
         }
-        (Value::Opaque(_), Value::Opaque(_)) => a == b,
-        _ => false,
+        _ => a == b,
     }
 }
 
@@ -40,7 +35,10 @@ pub fn same_error(a: &ExecutionError, b: &ExecutionError) -> bool {
 }
 
 /// Both `Ok` with [`same_value`]s, or both `Err` with [`same_error`]s.
-pub fn same_outcome(a: &Result<Value, ExecutionError>, b: &Result<Value, ExecutionError>) -> bool {
+pub fn same_outcome(
+    a: &Result<CelValue, ExecutionError>,
+    b: &Result<CelValue, ExecutionError>,
+) -> bool {
     match (a, b) {
         (Ok(x), Ok(y)) => same_value(x, y),
         (Err(x), Err(y)) => same_error(x, y),
@@ -64,11 +62,41 @@ type Typed = (&'static str, bool);
 /// xorshift64*. The crate has no RNG dependency and this needs none.
 pub struct Gen {
     s: u64,
+    /// Spell every literal a typed program draws (a number, a string, `true`/`false`) as a fresh
+    /// root `k0`, `k1`, … instead, recording its name, type and value in [`Gen::lits`]. The random
+    /// stream is consumed identically either way — the value is drawn first, then spelled — so one
+    /// seed gives the same program in both spellings.
+    pub lits_as_roots: bool,
+    pub lits: Vec<(String, CelTy, serde_json::Value)>,
 }
 
 impl Gen {
     pub fn new(seed: u64) -> Gen {
-        Gen { s: seed.max(1) }
+        Gen {
+            s: seed.max(1),
+            lits_as_roots: false,
+            lits: Vec::new(),
+        }
+    }
+
+    /// `lit`, a literal the typed grammar drew, as written or — under [`Gen::lits_as_roots`] — as
+    /// a fresh root bound to its value. Anything that is not a literal comes back as written.
+    fn spell(&mut self, lit: &'static str) -> String {
+        if !self.lits_as_roots {
+            return lit.to_string();
+        }
+        let (ty, v) = match lit {
+            "true" | "false" => (CelTy::Bool, serde_json::Value::Bool(lit == "true")),
+            "''" => (CelTy::Str, serde_json::Value::from("")),
+            "'a'" => (CelTy::Str, serde_json::Value::from("a")),
+            _ => match lit.parse::<f64>() {
+                Ok(n) => (CelTy::Num, serde_json::Value::from(n)),
+                Err(_) => return lit.to_string(),
+            },
+        };
+        let name = format!("k{}", self.lits.len());
+        self.lits.push((name.clone(), ty, v));
+        name
     }
 
     pub fn next(&mut self) -> u64 {
@@ -97,9 +125,8 @@ impl Gen {
 
     fn boolean(&mut self, depth: u32, scope: &mut Vec<Typed>) -> String {
         if depth == 0 {
-            return self
-                .pick(&["f", "true", "false", "has(r.o)", "('a' in m)"])
-                .to_string();
+            let leaf = self.pick(&["f", "true", "false", "has(r.o)", "('a' in m)"]);
+            return self.spell(leaf);
         }
         let d = depth - 1;
         const CMP: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
@@ -111,7 +138,10 @@ impl Gen {
             roll = 19;
         }
         match roll {
-            0 => self.pick(&["f", "true", "false"]).to_string(),
+            0 => {
+                let leaf = self.pick(&["f", "true", "false"]);
+                self.spell(leaf)
+            }
             1 | 2 => {
                 let op = self.pick(CMP);
                 format!("({} {op} {})", self.num(d, scope), self.num(d, scope))
@@ -173,11 +203,11 @@ impl Gen {
             if !vars.is_empty() && g.below(3) == 0 {
                 return vars[g.below(vars.len())].to_string();
             }
-            g.pick(&[
+            let leaf = g.pick(&[
                 "n", "r.a", "r.o", "xs[0]", "m['a']", "m['z']", "0.0", "1.0", "2.5", "1", "0",
                 "size(xs)",
-            ])
-            .to_string()
+            ]);
+            g.spell(leaf)
         };
         if depth == 0 || self.below(2) == 0 {
             return leaf(self);
@@ -196,7 +226,8 @@ impl Gen {
             if !vars.is_empty() && self.below(3) == 0 {
                 return vars[self.below(vars.len())].to_string();
             }
-            return self.pick(&["s", "r.t", "ss[0]", "'a'", "''"]).to_string();
+            let leaf = self.pick(&["s", "r.t", "ss[0]", "'a'", "''"]);
+            return self.spell(leaf);
         }
         format!(
             "({} + {})",
@@ -225,6 +256,47 @@ pub fn roster() -> CelEnvironment {
         ),
     );
     e
+}
+
+/// Programs per seed in [`typed_batch`].
+pub const TYPED_PER_SEED: usize = 1000;
+/// Activations generated per program, in both batches.
+pub const ACTIVATIONS_PER_EXPRESSION: usize = 3;
+/// Programs per seed in [`host_batch`].
+pub const HOST_PER_SEED: usize = 300;
+
+/// A generated batch: each program's source, with its activations' JSON.
+pub type Batch = Vec<(String, Vec<Vec<(&'static str, serde_json::Value)>>)>;
+
+/// Seed `seed`'s typed programs over `roster()`, each with its activations. The ONE copy: the
+/// frozen golden (`tests/generated_golden.rs`) and every generated test regenerate from it, so a
+/// change here moves the golden rather than drifting away from it.
+pub fn typed_batch(seed: u64) -> Batch {
+    let mut g = Gen::new(seed);
+    (0..TYPED_PER_SEED)
+        .map(|_| {
+            let src = g.typed_bool(4);
+            let acts = (0..ACTIVATIONS_PER_EXPRESSION)
+                .map(|_| typed_json(&mut g))
+                .collect();
+            (src, acts)
+        })
+        .collect()
+}
+
+/// Seed `seed`'s host-call programs over `host_roster()`, each with its activations — drawn in the
+/// order `tests/host_functions.rs` has always drawn them.
+pub fn host_batch(seed: u64) -> Batch {
+    let mut g = Gen::new(seed ^ 0x4057);
+    (0..HOST_PER_SEED)
+        .map(|_| {
+            let src = g.host_bool(4);
+            let acts = (0..ACTIVATIONS_PER_EXPRESSION)
+                .map(|_| host_typed_json(&mut g))
+                .collect();
+            (src, acts)
+        })
+        .collect()
 }
 
 /// One binding per root of `roster()`.
@@ -291,7 +363,7 @@ impl LazyValue for JsonLazy {
         self.members.fetch_add(1, Ordering::SeqCst);
         match self.fields.get(name) {
             Some(serde_json::Value::Number(n)) => Ok(CelValue::Num(n.as_f64().expect("finite"))),
-            Some(serde_json::Value::String(s)) => Ok(CelValue::Str(s.clone())),
+            Some(serde_json::Value::String(s)) => Ok(CelValue::Str(s.as_str().into())),
             Some(serde_json::Value::Bool(b)) => Ok(CelValue::Bool(*b)),
             Some(other) => panic!("JsonLazy serves scalars only, not {other}"),
             None => Err(CelError::NoSuchMember {
@@ -344,7 +416,7 @@ pub fn host_roster() -> CelEnvironment {
         CelTy::Str,
         false,
         Arc::new(|a: &[CelValue]| match a {
-            [CelValue::Str(s)] if s != "b" => Ok(CelValue::Str(format!("#{s}"))),
+            [CelValue::Str(s)] if &**s != "b" => Ok(CelValue::from(format!("#{s}"))),
             _ => Err(fail("tag")),
         }),
     )
@@ -355,7 +427,7 @@ pub fn host_roster() -> CelEnvironment {
         CelTy::Str,
         true,
         Arc::new(|a: &[CelValue]| match a {
-            [CelValue::Str(s)] => Ok(CelValue::Str(s.chars().rev().collect())),
+            [CelValue::Str(s)] => Ok(CelValue::from(s.chars().rev().collect::<String>())),
             _ => Err(fail("rev")),
         }),
     )
@@ -456,5 +528,73 @@ impl Gen {
                 self.hstr(depth - 1, scope)
             ),
         }
+    }
+}
+
+/// One field's value, resolved once.
+enum FactVal {
+    Bool(bool),
+    Num(f64),
+    Str(String),
+    Absent,
+}
+
+/// A [`Facts`] over JSON bindings: every field a program reads resolved ONCE at construction,
+/// answered by [`FieldId::index`]. `Facts` answers scalars only, so a program that reads a list or
+/// a record whole — or a field whose value is not a bool, a number or a string — has none
+/// ([`JsonFacts::new`] is `None`).
+pub struct JsonFacts {
+    vals: Vec<FactVal>,
+}
+
+impl JsonFacts {
+    pub fn new(fields: &[FieldPath], json: &[(&str, serde_json::Value)]) -> Option<JsonFacts> {
+        use serde_json::Value as J;
+        let mut vals = Vec::with_capacity(fields.len());
+        for field in fields {
+            let mut at = json
+                .iter()
+                .find(|(n, _)| *n == field.root())
+                .map(|(_, v)| v);
+            for seg in field.segments() {
+                at = match at {
+                    Some(J::Object(o)) => o.get(seg),
+                    Some(_) => return None,
+                    None => None,
+                };
+            }
+            vals.push(match at {
+                None => FactVal::Absent,
+                Some(J::Bool(b)) => FactVal::Bool(*b),
+                Some(J::Number(n)) => FactVal::Num(n.as_f64()?),
+                Some(J::String(s)) => FactVal::Str(s.clone()),
+                Some(_) => return None,
+            });
+        }
+        Some(JsonFacts { vals })
+    }
+}
+
+impl Facts for JsonFacts {
+    fn bool(&self, f: FieldId) -> Option<bool> {
+        match &self.vals[f.index()] {
+            FactVal::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+    fn num(&self, f: FieldId) -> Option<f64> {
+        match &self.vals[f.index()] {
+            FactVal::Num(n) => Some(*n),
+            _ => None,
+        }
+    }
+    fn str(&self, f: FieldId) -> Option<&str> {
+        match &self.vals[f.index()] {
+            FactVal::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn has(&self, f: FieldId) -> bool {
+        !matches!(self.vals[f.index()], FactVal::Absent)
     }
 }

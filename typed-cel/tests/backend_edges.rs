@@ -1,0 +1,451 @@
+//! The backend's answers at the edges: operators, absorption, comprehension errors, `has`, keys,
+//! scoping, and lazy reads — each PINNED, value and error alike.
+//!
+//! Every source here type-checks (`fork::compile_any`) and runs on the backend (`FastProgram::new`,
+//! `fork::fast_value`); a source the checker refuses has no run to pin. The pins are the backend's
+//! answers; they were the tree evaluator's too while it existed, and `tests/generated_golden.rs`
+//! pins the generated programs' answers the same way.
+
+#[path = "support/mod.rs"]
+mod support;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use support::gen::{same_error, same_outcome};
+use support::record;
+use typed_cel::fork;
+use typed_cel::CelValue as Value;
+use typed_cel::{CelEnvironment, CelError, CelKey, CelTy, CelValue, ExecutionError, LazyValue};
+
+type Outcome = Result<Value, ExecutionError>;
+
+fn env_of(vars: &[(&str, CelTy)]) -> CelEnvironment {
+    let mut env = CelEnvironment::new();
+    for (name, ty) in vars {
+        env.declare(*name, ty.clone());
+    }
+    env
+}
+
+/// `src` on the backend over `binds`, whose variables `vars` declares.
+fn run_in(src: &str, binds: &[(&str, Value)], vars: &[(&str, CelTy)]) -> Outcome {
+    support::run(&env_of(vars), src, binds)
+}
+
+fn run(src: &str) -> Outcome {
+    run_in(src, &[], &[])
+}
+
+/// `src` answers exactly `want`, as `Debug` renders the outcome.
+fn pin(src: &str, want: &str) {
+    assert_eq!(format!("{:?}", run(src)), want, "`{src}`");
+}
+
+fn assert_ok(src: &str, want: Value) {
+    let got = run(src);
+    assert!(
+        matches!(&got, Ok(v) if support::gen::same_value(v, &want)),
+        "`{src}`: want Ok({want:?}), got {got:?}"
+    );
+}
+
+fn assert_err(src: &str, want: ExecutionError) {
+    let got = run(src);
+    assert!(
+        matches!(&got, Err(e) if same_error(e, &want)),
+        "`{src}`: want Err({want:?}), got {got:?}"
+    );
+}
+
+fn is_no_such_key(src: &str) {
+    let got = run(src);
+    assert!(
+        matches!(got, Err(ExecutionError::NoSuchKey(_))),
+        "`{src}`: want a missing key, got {got:?}"
+    );
+}
+
+#[test]
+fn fast_arithmetic() {
+    assert_ok("1 + 2 * 3", Value::Num(7.0));
+}
+
+#[test]
+fn every_operator_answers_as_pinned() {
+    let pins = [
+        // Add
+        ("1 + 2", "Ok(Float(3.0))"),
+        ("1.5 + 2.25", "Ok(Float(3.75))"),
+        ("'a' + 'b'", "Ok(String(\"ab\"))"),
+        ("[1] + [2]", "Ok(List([Float(1.0), Float(2.0)]))"),
+        ("1 + 1.0", "Ok(Float(2.0))"),
+        ("9223372036854775807 + 1", "Ok(Float(9.223372036854776e18))"),
+        // Sub
+        ("5 - 7", "Ok(Float(-2.0))"),
+        ("5.5 - 0.5", "Ok(Float(5.0))"),
+        (
+            "-9223372036854775807 - 2",
+            "Ok(Float(-9.223372036854776e18))",
+        ),
+        // Mul
+        ("6 * 7", "Ok(Float(42.0))"),
+        ("1.5 * 2.0", "Ok(Float(3.0))"),
+        (
+            "9223372036854775807 * 2",
+            "Ok(Float(1.8446744073709552e19))",
+        ),
+        // Div
+        ("7 / 2", "Ok(Float(3.5))"),
+        ("7.0 / 2.0", "Ok(Float(3.5))"),
+        ("5.0 / 0.0", "Ok(Float(inf))"),
+        ("0.0 / 0.0", "Ok(Float(NaN))"),
+        ("-5.0 / 0.0", "Ok(Float(-inf))"),
+        ("1 / 0", "Ok(Float(inf))"),
+        // Eq / Ne
+        ("1 == 1", "Ok(Bool(true))"),
+        ("1 == 1.0", "Ok(Bool(true))"),
+        ("'a' == 'a'", "Ok(Bool(true))"),
+        ("[1, 2] == [1, 2]", "Ok(Bool(true))"),
+        ("{'a': 1} == {'a': 1}", "Ok(Bool(true))"),
+        ("null == null", "Ok(Bool(true))"),
+        ("1 != 2", "Ok(Bool(true))"),
+        ("b'a' != b'a'", "Ok(Bool(false))"),
+        ("[1] != [1, 2]", "Ok(Bool(true))"),
+        // Lt / Le / Gt / Ge
+        ("1 < 2", "Ok(Bool(true))"),
+        ("2.0 <= 2.0", "Ok(Bool(true))"),
+        ("'b' > 'a'", "Ok(Bool(true))"),
+        ("1 < 2.5", "Ok(Bool(true))"),
+        ("3 >= 3", "Ok(Bool(true))"),
+        ("3 > 3", "Ok(Bool(false))"),
+        // In
+        ("2 in [1, 2]", "Ok(Bool(true))"),
+        ("3 in [1, 2]", "Ok(Bool(false))"),
+        ("'a' in {'a': 1}", "Ok(Bool(true))"),
+        // Unary
+        ("-1", "Ok(Float(-1.0))"),
+        ("-1.5", "Ok(Float(-1.5))"),
+        (
+            "-(-9223372036854775807 - 1)",
+            "Ok(Float(9.223372036854776e18))",
+        ),
+        ("!true", "Ok(Bool(false))"),
+        ("!false", "Ok(Bool(true))"),
+    ];
+    assert!(pins.len() >= 40, "{} sources", pins.len());
+    for (src, want) in pins {
+        pin(src, want);
+    }
+}
+
+/// The checker refuses each of these (a plain type error, an undeclared name), so none reaches the
+/// backend. The removals with a dialect row
+/// of their own — logic on non-bools, bytes `+`, `%`, ordering and heterogeneous equality — are
+/// pinned in `tests/dialect.rs`; these are plain type errors.
+#[test]
+fn a_type_error_never_reaches_the_backend() {
+    for src in [
+        "'a' - 'b'",
+        "[1] - [1]",
+        "'a' * 2",
+        "-'a'",
+        "{'a': 1} + 1",
+        "null + 1",
+        "1 in 1",
+        "'a' in 'abc'",
+        "size(1, 2)",
+        "[1, 2]['a']",
+        "1.all(x, true)",
+        "missing",
+        "1.missing()",
+    ] {
+        assert!(
+            fork::compile_any(&CelEnvironment::new(), src).is_err(),
+            "`{src}` must be refused by the checker"
+        );
+    }
+}
+
+#[test]
+fn errors_are_pinned() {
+    pin("{}.a", "Err(NoSuchKey(\"a\"))");
+    pin("{'a': 1}.b", "Err(NoSuchKey(\"b\"))");
+    pin("[1][5]", "Err(IndexOutOfBounds(Float(5.0)))");
+    pin("[1][-1]", "Err(IndexOutOfBounds(Float(-1.0)))");
+    pin("{null: true}", "Err(UnsupportedKeyType(Null))");
+    assert_err("{}.a", ExecutionError::NoSuchKey(Arc::new("a".to_string())));
+    assert_err(
+        "{null: true}",
+        ExecutionError::UnsupportedKeyType(Value::Null),
+    );
+}
+
+/// `m` is `{'a': 1}`, so `m['x']` and `m['y']` are missing keys: a bool operand that is an
+/// error, which is the only operand besides `true` and `false` a checked `&&`/`||` can have.
+fn absorbing(src: &str) -> Outcome {
+    let ctx: Vec<(&str, Value)> = vec![(
+        "m",
+        (Value::record([(CelKey::new("a"), Value::Num(1.0))])).into(),
+    )];
+    run_in(src, &ctx, &[("m", CelTy::map(CelTy::Str, CelTy::Num))])
+}
+
+fn no_such_key(key: &str) -> ExecutionError {
+    ExecutionError::NoSuchKey(Arc::new(key.to_string()))
+}
+
+fn assert_absorbs(src: &str, want: Outcome) {
+    let got = absorbing(src);
+    assert!(
+        same_outcome(&got, &want),
+        "`{src}`: want {want:?}, got {got:?}"
+    );
+}
+
+#[test]
+fn or_absorption_table() {
+    let t = || Ok(Value::Bool(true));
+    let f = || Ok(Value::Bool(false));
+    assert_absorbs("true || true", t());
+    assert_absorbs("true || false", t());
+    assert_absorbs("true || (m['y'] == 1.0)", t());
+    assert_absorbs("false || true", t());
+    assert_absorbs("false || false", f());
+    assert_absorbs("false || (m['y'] == 1.0)", Err(no_such_key("y")));
+    assert_absorbs("(m['x'] == 1.0) || true", t());
+    assert_absorbs("(m['x'] == 1.0) || false", Err(no_such_key("x")));
+    // When both sides fail, the RIGHT operand's error is the one reported.
+    assert_absorbs("(m['x'] == 1.0) || (m['y'] == 1.0)", Err(no_such_key("y")));
+}
+
+#[test]
+fn and_absorption_table() {
+    let t = || Ok(Value::Bool(true));
+    let f = || Ok(Value::Bool(false));
+    assert_absorbs("true && true", t());
+    assert_absorbs("true && false", f());
+    assert_absorbs("true && (m['y'] == 1.0)", Err(no_such_key("y")));
+    assert_absorbs("false && true", f());
+    assert_absorbs("false && false", f());
+    assert_absorbs("false && (m['y'] == 1.0)", f());
+    assert_absorbs("(m['x'] == 1.0) && false", f());
+    assert_absorbs("(m['x'] == 1.0) && true", Err(no_such_key("x")));
+    assert_absorbs("(m['x'] == 1.0) && (m['y'] == 1.0)", Err(no_such_key("y")));
+}
+
+#[test]
+fn comprehension_errors_are_absorbed_only_by_a_deciding_value() {
+    // `{1: true, 3: false}[e]` is true at 1, a missing key at 2 and false at 3 — an error with a
+    // deciding value on either side of it. (Division by zero was this test's error once; IEEE
+    // division has none.)
+    assert_ok(
+        "[1, 2, 3].all(e, {1: true, 3: false}[e])",
+        Value::Bool(false),
+    );
+    is_no_such_key("[2, 1].all(e, {1: true, 3: false}[e])");
+    assert_ok(
+        "[2, 1].exists(e, {1: true, 3: false}[e])",
+        Value::Bool(true),
+    );
+    assert_err(
+        "[1, 0].map(x, {1: 1}[x])",
+        ExecutionError::NoSuchKey(Arc::new("0".to_string())),
+    );
+    // exists_one's step never absorbs.
+    pin(
+        "[0, 1].exists_one(x, {1: 1}[x] == 1)",
+        "Err(NoSuchKey(\"0\"))",
+    );
+    pin(
+        "[1, 2, 3].filter(x, {1: 1, 3: 3}[x] > 0)",
+        "Err(NoSuchKey(\"2\"))",
+    );
+    pin("[1, 2].map(x, x > 1, x * 2)", "Ok(List([Float(4.0)]))");
+    pin("[].all(x, {}.a == 1)", "Ok(Bool(true))");
+    pin("[1, 2, 3].exists(e, e == 2)", "Ok(Bool(true))");
+}
+
+#[test]
+fn a_nested_loop_error_unwinds_to_the_outer_step() {
+    is_no_such_key("[[1, 0], [1]].all(xs, xs.all(x, {1: true}[x]))");
+    assert_ok(
+        "[[1, 0], [1]].exists(xs, xs.all(x, {1: true}[x]))",
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn has_on_maps_and_non_maps() {
+    assert_ok("has({'a': 1}.a)", Value::Bool(true));
+    assert_ok("has({'a': 1}.b)", Value::Bool(false));
+    pin(
+        "has([1].a)",
+        "Err(UnexpectedType { got: \"string\", want: \"double\" })",
+    );
+    pin("has(1.a)", "Err(NoSuchOverload)");
+}
+
+#[test]
+fn duplicate_map_keys_keep_the_last() {
+    pin("{'a': 1, 'a': 2}['a']", "Ok(Float(2.0))");
+}
+
+#[test]
+fn comprehension_variables_shadow_and_restore() {
+    let ctx: Vec<(&str, Value)> = vec![("x", (Value::Num(10.0)).into())];
+    let got = run_in(
+        "x + [1, 2].map(x, x * 2)[1] + x",
+        &ctx,
+        &[("x", CelTy::Num)],
+    );
+    assert!(matches!(got, Ok(Value::Num(24.0))), "{got:?}");
+}
+
+// ---- the public API, over lazy values ----
+
+fn no_such(key: &str) -> CelError {
+    CelError::NoSuchMember {
+        key: key.to_string(),
+    }
+}
+
+/// `r`: `a` is a number, `t` answers `NoSuchMember`. Counts every member resolution.
+#[derive(Debug)]
+struct CountingRecord {
+    reads: Arc<AtomicUsize>,
+}
+
+impl LazyValue for CountingRecord {
+    fn member(&self, name: &str) -> Result<CelValue, CelError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        match name {
+            "a" => Ok(CelValue::Num(1.0)),
+            other => Err(no_such(other)),
+        }
+    }
+}
+
+/// `m`: keys `a`, `b`, numbers behind them. Counts member reads and `keys()` calls.
+#[derive(Debug)]
+struct CountingMap {
+    keys: Vec<CelKey>,
+    reads: Arc<AtomicUsize>,
+    iterations: Arc<AtomicUsize>,
+}
+
+impl LazyValue for CountingMap {
+    fn member(&self, name: &str) -> Result<CelValue, CelError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        let ix = self
+            .keys
+            .iter()
+            .position(|k| k.as_str() == name)
+            .ok_or_else(|| no_such(name))?;
+        Ok(CelValue::Num(ix as f64))
+    }
+
+    fn keys(&self) -> Option<Box<dyn Iterator<Item = &CelKey> + '_>> {
+        self.iterations.fetch_add(1, Ordering::SeqCst);
+        Some(Box::new(self.keys.iter()))
+    }
+}
+
+fn lazy_env() -> CelEnvironment {
+    let mut env = CelEnvironment::new();
+    env.declare("r", record("r", &[("a", CelTy::Num), ("t", CelTy::Str)]));
+    env.declare("m", CelTy::map(CelTy::Str, CelTy::Num));
+    env
+}
+
+/// What one evaluation observed: its answer (as comparable text) and the three counters.
+#[derive(Debug, PartialEq)]
+struct Observed {
+    answer: (bool, Option<bool>, String),
+    record_reads: usize,
+    map_reads: usize,
+    map_iterations: usize,
+}
+
+fn observe(
+    env: &CelEnvironment,
+    run: &dyn Fn(&typed_cel::CelActivation) -> Result<bool, CelError>,
+) -> Observed {
+    let record_reads = Arc::new(AtomicUsize::new(0));
+    let map_reads = Arc::new(AtomicUsize::new(0));
+    let map_iterations = Arc::new(AtomicUsize::new(0));
+    let mut act = env.activation();
+    act.bind_lazy(
+        "r",
+        CelValue::Lazy(Arc::new(CountingRecord {
+            reads: Arc::clone(&record_reads),
+        })),
+    )
+    .unwrap();
+    act.bind_lazy(
+        "m",
+        CelValue::Lazy(Arc::new(CountingMap {
+            keys: vec![CelKey::new("a"), CelKey::new("b")],
+            reads: Arc::clone(&map_reads),
+            iterations: Arc::clone(&map_iterations),
+        })),
+    )
+    .unwrap();
+    let out = run(&act);
+    Observed {
+        answer: (
+            out.is_ok(),
+            out.as_ref().ok().copied(),
+            out.as_ref()
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default(),
+        ),
+        record_reads: record_reads.load(Ordering::SeqCst),
+        map_reads: map_reads.load(Ordering::SeqCst),
+        map_iterations: map_iterations.load(Ordering::SeqCst),
+    }
+}
+
+/// What `src` observes through the PUBLIC API (`CelProgram::evaluate`), on a fresh activation.
+fn observe_one(src: &str) -> Observed {
+    let env = lazy_env();
+    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    observe(&env, &|act| program.evaluate(act))
+}
+
+#[test]
+fn lazy_reads_are_counted() {
+    let e = observe_one("false && r.a == 1.0");
+    assert_eq!(e.record_reads, 0);
+    // The left errors through the lazy `NoSuchMember`, is captured, and the right is still read.
+    let e = observe_one("r.t == 'x' || r.a == 1.0");
+    assert_eq!(e.record_reads, 2);
+    assert_eq!(e.answer.1, Some(true));
+    let e = observe_one("r.a + r.a > 0.0");
+    assert_eq!(e.record_reads, 2);
+    let e = observe_one("m.exists(k, k == 'b')");
+    assert!(e.map_iterations > 0, "{e:?}");
+    let e = observe_one("m.exists(k, m[k] > 0.0)");
+    assert_eq!(e.answer, (true, Some(true), String::new()));
+    let e = observe_one("m.all(k, m[k] >= 0.0) && r.a == 1.0");
+    assert_eq!(e.answer, (true, Some(true), String::new()));
+}
+
+#[test]
+fn lazy_answers_are_pinned() {
+    let e = observe_one("r.a > 0.0");
+    assert_eq!(e.answer, (true, Some(true), String::new()));
+    let e = observe_one("r.t == 'x'");
+    assert!(!e.answer.0);
+    assert!(
+        e.answer
+            .2
+            .contains("could not be evaluated: No such key: t"),
+        "{}",
+        e.answer.2
+    );
+    // `has()` on a lazy is an existence question in both, never the member's value.
+    let e = observe_one("has(r.a)");
+    assert_eq!(e.answer, (true, Some(true), String::new()));
+}

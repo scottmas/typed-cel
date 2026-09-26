@@ -10,6 +10,7 @@ subtractions.
 ## Contents
 
 - [Quickstart](#quickstart) · [Installation](#installation) · [Core Concepts](#core-concepts)
+- [Why a typed dialect](#why-a-typed-dialect) — what the dialect gives up, and what it buys, measured
 - [Usage](#usage) — declaring, compiling, evaluating, bytecode, specializing, demand, shape queries,
   lazy values
 - [API Reference](#api-reference) and [Signatures](#signatures) — every function the dialect has
@@ -104,6 +105,78 @@ The pieces, in the order a caller meets them:
 The crate is environment-agnostic. It knows about types, not about what a `body`, a `listener` or
 a `grant` is; each roster is just a declaration, made by the application that embeds it.
 
+## Why a typed dialect
+
+This dialect gives up most of spec CEL's dynamic surface — on purpose — in exchange for two things
+spec CEL cannot have: every program is checked before it can run, and a checked program compiles to
+register bytecode over unboxed values. The table measures each step of that trade, in ns per
+decision (allocations per decision); the columns are defined in
+[`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md).
+
+<!-- ablation:begin -->
+| workload | Rust | (1) upstream | (2) typed tree † | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
+|---|---:|---:|---:|---:|---:|---:|
+| `fs_open_allow_all` | 8.0 ns (0) | 4762 ns† (92) | 4612 ns (92) | 843 ns† (2) | n/a (composite root: `policy.fs.writable_roots`) | 57.9 ns (0) |
+| `fs_open_13` | 32.6 ns (0) | 10.8 µs (248.8) | 11.0 µs (248.8) | 2877 ns (9) | n/a (composite root: `policy.fs.writable_roots`) | 140 ns (0) |
+| `fs_open_1000` | 1367 ns (0) | 827.5 µs (17064.4) | 829.6 µs (17064.4) | 215.8 µs (578.8) | n/a (composite root: `policy.fs.writable_roots`) | 390 ns† (0) |
+| `prefix_13` | 35.1 ns (0) | 11.6 µs (247.8) | 11.7 µs (247.8) | 4068 ns (15) | n/a (composite root: `policy.roots`) | 74.7 ns (0) |
+| `nested_fields` | 8.7 ns (0) | 8293 ns† (193) | 8460 ns (193) | 338 ns† (1) | 86.6 ns (0) | — (reads no policy) |
+| `all_items` | 17.9 ns (0) | 21.1 µs (455.4) | 20.7 µs (481.8) | 3227 ns (2) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `policy_residual` | 24.0 ns (0) | 6329 ns (143.1) | 6223 ns (143.1) | 2099 ns (9.4) | n/a (composite root: `policy.methods`) | 144 ns (0) |
+
+† Column (2) is historical: measured on the typed dialect's first engine, since deleted (docs/PERFORMANCE.md, "Historical"). Every other column is this run.
+<!-- ablation:end -->
+
+**What you give up.** Each is a row in [Relationship to spec CEL](#relationship-to-spec-cel):
+
+- integers and `uint` — one `f64` number kind, so `7 / 2` is `3.5` (`removed: integer values`, `removed: uint`)
+- `%` (`removed: modulo`)
+- `dyn()` and every dyn value: heterogeneous lists and maps, branches of different types (`removed: dyn()`, `removed: dyn values`)
+- heterogeneous equality (`diverges: equality is homogeneous`)
+- ordering beyond numbers, strings and durations (`removed: ordering beyond numbers and strings`)
+- timestamps and every clock read (`removed: timestamp`)
+- protobuf messages and enums (`removed: protobuf`)
+- optional syntax: `.?`, `[?]`, `optional.*` (`removed: optional syntax`)
+- type values and conversion functions: `type()`, `int()`, `string()`, … (`removed: type values`, `removed: type conversion functions`)
+- `size()` on strings (`removed: size() on strings`)
+- bytes concatenation (`removed: bytes concatenation`)
+- the extension libraries (`removed: extension libraries`)
+- two-variable comprehensions (`not implemented: two-variable comprehension macros`)
+- container name resolution (`not implemented: container name resolution`)
+- backtick field selection (`not implemented: backtick-quoted field selection`)
+- custom functions, except typed host functions an embedder declares (`added: host functions`)
+
+Against cel-spec v0.25.1 that is 1875 of 2344 cases excluded (the block in
+[Compatibility](#compatibility)).
+
+**What you get.**
+
+- Mistakes at compile time, with a caret: `body.no_such_field`, `elapsed > 300`,
+  `body.amount == session.user_id` and an unknown function are all build errors, never a runtime deny.
+- One engine. Every program — evaluated, specialized, streamed, paused and resumed — runs on the same
+  register backend. There is no second implementation to disagree with.
+- Speed: `fs_open_1000` with its policy bound decides in 390 ns — 2121.8× faster than upstream
+  cel-rust 0.14.2 (827.5 µs) and 3.5× faster than the hand-written Rust reference (1367 ns), which
+  scans the 1000 roots linearly. `policy_residual` decides in 144 ns against upstream's 6329 ns, 44.0×.
+- Zero allocations per decision on the facts path: every (3b) and (4) cell reads `(0)`, and
+  `tests/fast_alloc.rs` holds it at exactly 0 over 10 000 decisions.
+- Partial evaluation: bind the policy once, and the per-request program reads only the request (the
+  [Specializing](#specializing) example; the `policy_residual` row).
+- Predictable cost: depth, cost and input size are bounded at build time (`CelLimits`); a decision is
+  a loop over a fixed op list with no allocation and no dynamic dispatch on values.
+
+**What it costs.** A compile runs the checker and the lowering, so it is slower than upstream's
+parse: `policy_residual` compiles and emits in 151.9 µs against upstream's 91.8 µs, and `fs_open_13`
+in 630.5 µs against 551.0 µs. A policy compiles once per process.
+
+<!-- historical:begin -->
+Column (2) was measured once, on the typed tree evaluator this crate forked from cel-rust, before
+that evaluator was deleted — on the last revision that still carried it (typed-cel `55d75a8`, whose
+engine source is identical to the measured one up to formatting). It isolates what typing alone
+bought (1.0× on every headline row). See [`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md),
+"Historical".
+<!-- historical:end -->
+
 ## Usage
 
 ### Declaring an environment
@@ -194,10 +267,11 @@ let vm = typed_cel::Vm::new();
 vm.eval(&bytecode, &activation)?;                 // Result<bool, CelError> — same answers as program.evaluate
 ```
 
-`Vm::eval` and `CelProgram::evaluate` answer identically, including the text of their errors. A
-failure means the same thing it means under [Evaluating](#evaluating): the caller decides what it
-causes. There is one backend (`src/fast/`); the tree evaluator behind `evaluate` is the executable
-specification it is held to. `FastProgram::decide` runs the same program over a caller's own
+`Vm::eval` and `CelProgram::evaluate` are the same backend run over an activation, so they answer
+identically, including the text of their errors. A failure means the same thing it means under
+[Evaluating](#evaluating): the caller decides what it causes. There is one backend (`src/fast/`),
+and every way of running a program — evaluated, emitted, specialized, streamed, paused and resumed —
+runs on it. `FastProgram::decide` runs the same program over a caller's own
 `Facts` — fields read by index, nothing packed into values — and a `VmRun` pauses and resumes it
 for data still arriving.
 
@@ -219,7 +293,7 @@ residual.demand();   // [req ▸ path]
 The residual evaluates, emits and runs on the backend like any compiled program, and agrees with the
 original on every value of the roots it still reads. Three rules a caller relies on:
 
-- **`bind` roots are folded.** Every subtree reading only them is computed by the one evaluator and
+- **`bind` roots are folded.** Every subtree reading only them is computed by the backend and
   written back — a scalar as a literal, a list or map as a typed constant slot (`$k0`, spelled in a
   `// $k0 = …` line of `source()`); `exists`/`all`/`map` over a bound list unroll, up to
   `CelLimits::max_unroll` elements.
@@ -315,8 +389,22 @@ a comprehension over it is an error rather than a silently empty one. Keys come 
 (`&CelKey`), because a signature handing back owned `String`s would allocate per key per tick and
 undo the whole point.
 
-Everything crossing the boundary is a `CelValue` — `Bool`, `Num`, `Str`, `Duration(millis)`,
-`Lazy` — a closed enum, so no absorbed type appears in a signature a caller writes.
+Everything crossing the boundary is a `CelValue`, the crate's one value type — what a caller binds,
+what a lazy value or a host function returns, and what a program's result is:
+
+```rust
+pub enum CelValue {
+    Bool(bool), Num(f64), Str(Arc<str>), Duration(CelDuration), Bytes(Arc<[u8]>),
+    List(Arc<[CelValue]>), Map(CelMap), Null, Lazy(Arc<dyn LazyValue>),
+}
+
+CelValue::record([(CelKey::from("user_id"), CelValue::from("u1"))]);   // a record is a string-keyed map
+CelDuration::from_millis(40_000);                                       // the unit is always explicit
+```
+
+A `CelMap` holds its entries sorted by `CelMapKey` (`Num < Bool < Str`), so lookup is a binary
+search and a comprehension over a map is deterministic. A number key is integral: `1` and `1.0` name
+one key, and `1.5` names none. Every variant is cheap to clone — composites and strings are shared.
 
 **The fork is private.** `common`, `context`, `objects`, `functions` and `parser` are private
 modules and no parser or evaluator type is re-exported, so the fork's internals stay ours to change
@@ -326,10 +414,10 @@ checker, run with no roster — is crate-private too, so `CelEnvironment::compil
 caller gets a program. One gap remains: the fork's `ExecutionError` is still declared `pub` directly
 in `lib.rs`. Treat it as internal; it is not part of the contract.
 
-The crate's own harnesses — the cel-spec corpus, the differentials and `tests/dialect.rs` — do
-drive the raw evaluator, because it is the executable specification the fast backend is held to and
-a corpus case's answer is a value of any type, not a `bool`. The corpus harness runs a case only
-after the checker admits it. They reach the evaluator through `typed_cel::fork`, which is `#[doc(hidden)]` and gated on the `conformance` feature that
+The crate's own harnesses — the cel-spec corpus and `tests/dialect.rs` — need a program's value
+of any type, not only a `bool`, because a corpus case's answer can be a list or a string. They run
+the backend for it through `typed_cel::fork::fast_value`, after the checker admits the case
+(`fork::compile_any`). `fork` is `#[doc(hidden)]` and gated on the `conformance` feature that
 nothing but this crate's own test build enables. Nothing under `fork` is contract, and changing it
 is not a breaking change.
 
@@ -341,13 +429,14 @@ is not a breaking change.
 |---|---|
 | `CelEnvironment` | `new`, `with_limits`, `declare(name, ty)`, `compile`, `specialize`, `activation`, `limits`, `types` |
 | `CelProgram` | `evaluate(&CelActivation) -> Result<bool, CelError>`, `source`, `demand`, `conjuncts` |
-| `CelActivation` | `bind(name, &serde_json::Value)` (schema-directed), `bind_lazy(name, CelValue)` |
+| `CelActivation` | `bind(name, &serde_json::Value)` (schema-directed), `bind_lazy(name, CelValue)`, `bind_fact(name, CelValue)` |
 | `CelError` | `source`, `span`, `available`, `all`; `Display` renders the first error only |
 | `CelTy`, `Record`, `Relax` | the type lattice: `CelTy::list`, `CelTy::map`, `Record::new`/`with_optional`/`with_index`, `admits`/`admits_relaxed` |
 | `DemandSet`, `Segment` | what a program reads: `paths`, `roots`, `wide_roots`, `keyed_reads`, `union`, `reverse_index` |
 | `Conjunct`, `Literal` | the top-level `&&` shape of a program |
-| `LazyValue`, `CelValue`, `CelKey` | values served on access |
-| `emit`, `CelBytecode`, `Vm` | lower a `CelProgram` for the fast backend; `Vm::new().eval(&bytecode, &activation)` answers exactly as `evaluate` does |
+| `CelValue`, `CelMap`, `CelMapKey`, `CelDuration` | the one value type: `CelValue::record`, `CelValue::list`, `From<bool/f64/&str/String>`; `CelMap::new`/`get`/`iter` |
+| `LazyValue`, `CelKey` | values served on access |
+| `emit`, `CelBytecode`, `Vm` | a `CelProgram`'s bytecode, run explicitly; `Vm::new().eval(&bytecode, &activation)` is the backend `evaluate` runs |
 | `CelLimits` | bounds (see [Configuration](#configuration)) |
 | `desugar`, `SpanMap`, `DesugarError`, `Span` | the `30s` alias expansion and its authored-column map |
 | `TypeEnv`, `CheckError`, `BindError` | the checker's roster and its individual errors |
@@ -537,16 +626,16 @@ keeps working, nobody notices, and a policy gets written against something this 
 | `removed: type conversion functions` | `bool()`, `int()`, `string()`, `double()`, `bytes()` | `type_conversion_functions_are_gone` | one numeric type leaves nothing for `int()` to convert to, `bool('true')` is string-typed truthiness that the checker exists to prevent, and `string()` on a bytes value is lossy in a way the caller would not notice (`conversions/string/bytes_invalid` turns invalid UTF-8 into U+FFFD). `double()` converts to the number every value already is, `bytes('…')` is the literal `b'…'`, and `uint()` rides `removed: uint` |
 | `removed: integer values` | an integer at RUN time — `int64` arithmetic, integer division, integer overflow, division-by-zero errors | `integer_values_are_gone` | the checker already had one numeric type, and a runtime that kept a second one broke checked programs: `x + 1` with `x: double` type-checked and then failed as `Float + Int`. An integer LITERAL still parses as written and widens to a double the moment a value is built from it |
 | `removed: dyn values` | a value of no static type: a heterogeneous list or map literal, a conditional whose branches differ, and any use of a `dyn`-typed expression except `has()` (and `size()` of a list or map holding them) | `dyn_values_are_gone` | a typed backend holds every value unboxed at a known type, and a `dyn` is what would force it to keep a boxed escape hatch. No program cynch generates needs one. Refused by the CHECKER |
-| `removed: ordering beyond numbers and strings` | `<`, `<=`, `>`, `>=` on anything but numbers, strings and durations — bools, bytes, lists, maps, `null` | `ordering_beyond_numbers_and_strings_is_gone` | no generated program orders a bool or a byte string, and each extra ordering is a comparison a typed backend carries for nobody. Refused by the checker and gone from both runtimes |
+| `removed: ordering beyond numbers and strings` | `<`, `<=`, `>`, `>=` on anything but numbers, strings and durations — bools, bytes, lists, maps, `null` | `ordering_beyond_numbers_and_strings_is_gone` | no generated program orders a bool or a byte string, and each extra ordering is a comparison a typed backend carries for nobody. Refused by the checker, and the backend has no op for it |
 | `removed: logic on non-bools` | the logical operators (and, or, `!`) with an operand that is not a `bool` — including spec CEL's `false && 32`, which short-circuits past the number | `logic_on_non_bools_is_gone` | a number where a truth value goes is a bug the checker exists to report, whether or not a short circuit would have hidden it. Refused by the CHECKER; at run time a non-bool operand is an error like any other |
-| `removed: bytes concatenation` | `+` on two `bytes` | `bytes_concatenation_is_gone` | nothing a program reads is assembled from byte strings. Refused by the checker and gone from both runtimes |
-| `removed: modulo` | `%` | `modulo_is_on_doubles_or_gone` | no generated program uses it, and over one number kind it could only be a floating-point remainder nobody asked for. Refused by the checker and gone from both runtimes |
+| `removed: bytes concatenation` | `+` on two `bytes` | `bytes_concatenation_is_gone` | nothing a program reads is assembled from byte strings. Refused by the checker, and the backend has no op for it |
+| `removed: modulo` | `%` | `modulo_is_on_doubles_or_gone` | no generated program uses it, and over one number kind it could only be a floating-point remainder nobody asked for. Refused by the checker, and the backend has no op for it |
 
 Every program is checked before it runs, so the evaluator carries no arm for a construct the
 checker refuses: `size()` on a string or a byte string, `string()`, `double()`, `bytes()`, ordering
 on bools, bytes and `null`, and `+` on bytes are refused by the [signature table](#signatures) first
 and have no overload left in the evaluator either. `removed: type values` is the one row that bites
-at check alone — `type()` was never in the absorbed evaluator. The two corpus rows where the
+at check alone — `type()` never had a runtime implementation in this crate. The two corpus rows where the
 byte/codepoint difference of `size()` is observable are excluded like the rest.
 
 Every other row's construct is gone from the implementation, not merely from the API: the
@@ -624,12 +713,12 @@ not a status report — it either has its API or it is in the test's output.
 | `added: record builders` | a record without naming `Rc` or `BTreeSet` | `Record::new`, `Record::with_optional`, `Record::with_index` | the struct-literal form needs four fields at every roster site, and the same private `record()` helper had already been written twice — in the embedding application and in this crate's test support. Two copies is the signal |
 | `added: all check errors` | every error the checker found, not just the first | `CelError::all`, `CheckError` | `Display` still renders only the first, because a cascade is a diagnostic nobody reads — but a policy compiler listing a file's problems wants every one, and dropping them at the boundary meant it could never have them |
 | `added: structural query` | the top-level `&&` conjuncts of a compiled expression | `CelProgram::conjuncts`, `Conjunct`, `Literal` | a caller that lints an expression's SHAPE — "is there a guard conjunct for each window this reads?" — would otherwise re-parse the authored source, which is a second parser that disagrees with the first the day either changes. `&&` is the only connective a guard can be proven through, so a `||` is ONE opaque conjunct |
-| `added: the lazy seam` | activations that are read, not materialized | `LazyValue`, `CelValue`, `CelKey`, `CelActivation::bind_lazy` | an expression may be evaluated on every tick for the life of a process. Building a map of the process's state per tick makes the cost of a policy proportional to that state rather than to the policy. The trait is the crate's ONLY extension point, and a closed `CelValue` crosses it so the absorbed evaluator's own value trait never reaches a caller. See [Serving values on access](#serving-values-on-access) |
-| `added: specialization` | fold the roots an activation binds out of a compiled expression, leaving a residual over the rest | `CelEnvironment::specialize`, `CelError::Specialize` | a decision whose configuration is fixed for a process's life is compiled against it ONCE; the per-call program reads only the per-call input. The fold runs the one evaluator, so it adds no second semantics. See [Specializing](#specializing) |
-| `added: host functions` | typed, pure functions an embedding environment declares | `CelEnvironment::register_host`, `HostCall` | an embedder's matching engines (route tables, schema checks) are exposed as calls the checker types and partial evaluation treats as opaque until every argument is known, instead of being re-implemented in CEL or left outside it. Both engines dispatch them, and the fast backend builds a matcher through one over a known list |
+| `added: the lazy seam` | activations that are read, not materialized | `LazyValue`, `CelValue`, `CelKey`, `CelActivation::bind_lazy` | an expression may be evaluated on every tick for the life of a process. Building a map of the process's state per tick makes the cost of a policy proportional to that state rather than to the policy. The trait is the crate's ONLY extension point, and what crosses it is `CelValue`, the crate's one value type. See [Serving values on access](#serving-values-on-access) |
+| `added: specialization` | fold the roots an activation binds out of a compiled expression, leaving a residual over the rest | `CelEnvironment::specialize`, `CelError::Specialize` | a decision whose configuration is fixed for a process's life is compiled against it ONCE; the per-call program reads only the per-call input. The fold runs on the backend, so it adds no second semantics. See [Specializing](#specializing) |
+| `added: host functions` | typed, pure functions an embedding environment declares | `CelEnvironment::register_host`, `HostCall` | an embedder's matching engines (route tables, schema checks) are exposed as calls the checker types and partial evaluation treats as opaque until every argument is known, instead of being re-implemented in CEL or left outside it. The backend dispatches them, and builds a matcher through one over a known list |
 | `added: closed string sets` | an environment may declare that a string field holds one of a fixed list of values; nothing about its meaning changes | `CelEnvironment::declare_enum`, `TAG_OTHER`, `Facts` | a field like an access mode is compared with a handful of literals on every decision. The fast backend compares a listed literal as a TAG — the value's index — which a `Facts` provider may answer without producing a string at all; `f == "a" \|\| f == "b"` over listed values is one mask test. A literal outside the list is still an ordinary string comparison |
 | `added: typed results` | programs that must produce a declared non-bool type, and the runtime to run them | `CelEnvironment::compile_returning`, `ResultKind`, `CelRuntime`, `CelActivation::bind_fact`, `Vm::eval_result`, `FastProgram::decide_tag` | a decision point with more than two outcomes (allow / read-only / a specific errno) needs a result the checker can still prove the type of, and a specialization of it keeps that type. The fast backend answers such a program with the index of a tag rather than a string value, so the answer allocates nothing |
-| `added: bytecode` | a CHECKED expression lowered to a register program over unboxed values and run by one fast backend (`src/fast/`); an unchecked expression has no lowering | `emit`, `CelBytecode`, `Vm::eval`, `FastProgram`, `Facts` | one evaluation is a loop over explicit state rather than a recursive walk, which is what lets an evaluation stop and resume, and it reads host data by field rather than packing it into values. Held to the absorbed evaluator by differentials over generated typed expressions, eager and lazy, and the conformance corpus (`tests/vm_differential.rs`, `tests/fast_eval.rs`) |
+| `added: bytecode` | a CHECKED expression lowered to a register program over unboxed values and run by one fast backend (`src/fast/`); an unchecked expression has no lowering | `emit`, `CelBytecode`, `Vm::eval`, `FastProgram`, `Facts` | one evaluation is a loop over explicit state rather than a recursive walk, which is what lets an evaluation stop and resume, and it reads host data by field rather than packing it into values. Held to its answers by the cel-spec corpus, a frozen golden of every generated program's answer, single-engine laws over generated programs (every host alike, eager and lazy) and pinned edges (`tests/generated_golden.rs`, `tests/metamorphic.rs`, `tests/backend_edges.rs`) |
 
 ## Testing
 

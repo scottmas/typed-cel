@@ -15,19 +15,15 @@
 //! unevaluatable REVOCATION look like "do not revoke". Absorption needs a real `false`; it is not
 //! error suppression.
 
-use typed_cel::fork::objects::Value;
-use typed_cel::fork::{Context, Program};
+#[path = "support/mod.rs"]
+mod support;
 
-/// The evaluator's answer for `src`, which must type-check: a program the checker refuses never
+use typed_cel::CelValue as Value;
+
+/// The backend's answer for `src`, which must type-check: a program the checker refuses never
 /// runs, so its answer would prove nothing.
 fn eval(src: &str) -> Result<Value, String> {
-    if let Err(e) = typed_cel::fork::compile_any(&typed_cel::CelEnvironment::new(), src) {
-        panic!("`{src}` does not type-check: {e}");
-    }
-    Program::compile(src)
-        .map_err(|e| format!("parse: {e}"))?
-        .execute(&Context::default())
-        .map_err(|e| format!("eval: {e}"))
+    support::run_closed(src).map_err(|e| format!("eval: {e}"))
 }
 
 fn evaluates_to(src: &str, expected: &str) {

@@ -5,27 +5,18 @@
 //! program built. There is no `Arc` and no per-read allocation: a read of a string field is a
 //! `&str` copied into a register.
 //!
-//! Every function here mirrors one trait method of the absorbed value model (`common::types`) —
-//! the same comparison, the same error constructor — because the evaluator is the specification
-//! the backend is held to, error text included.
+//! Every function here states one rule of the dialect — a comparison, an index, a key — and the
+//! error each failure is. The error TEXT is part of the contract (callers render it);
+//! `tests/backend_edges.rs` and `tests/generated_golden.rs` pin it.
 
 use std::sync::Arc;
 
-use crate::common::types::map::{AsKeyRef, KeyRef};
-use crate::common::types::{
-    CelBool, CelBytes, CelDouble, CelDuration, CelList, CelMap, CelMapKey, CelNull, CelString,
-};
-use crate::common::value::Val;
-use crate::lazy::{pending_error, Access, LazyAdapter};
-use crate::objects::{integral_key, Key, Map, Value};
+use crate::lazy::{self, LazyValue};
+use crate::value::integral_key;
 use crate::ExecutionError;
+use crate::{CelKey, CelMap, CelMapKey, CelValue};
 
 /// One register.
-///
-/// The `bool` on a composite is whether the evaluator would hold that value OWNED at this point
-/// (`Cow::Owned`) rather than borrowed. It is observable in exactly one place: indexing a map with
-/// a key that is no key (a fractional number) is `NoSuchKey` on a borrowed map (`Indexer::get`)
-/// and `UnsupportedKeyType` on an owned one (`Indexer::steal`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Reg<'a> {
     Unset,
@@ -35,44 +26,24 @@ pub(crate) enum Reg<'a> {
     Dur(chrono::Duration),
     Str(&'a str),
     Bytes(&'a [u8]),
-    /// A value of the absorbed model: a host or constant list or map, a lazy view, an opaque.
-    Dyn(&'a dyn Val, bool),
+    /// A composite or a lazy view someone else OWNS: a bound root or one of its members, a
+    /// constant, or an owned value the run keeps in its `Store`. Never a scalar: `of_cel` unboxes
+    /// those.
+    Val(&'a CelValue),
     /// A list the program built.
-    List(&'a [Reg<'a>], bool),
+    List(&'a [Reg<'a>]),
     /// A map the program built: keys are `Str`, integral `Num` or `Bool`, each at most once.
-    Map(&'a [(Reg<'a>, Reg<'a>)], bool),
+    Map(&'a [(Reg<'a>, Reg<'a>)]),
     /// A caught error, by index into the run's error list.
     Err(u32),
 }
 
-impl<'a> Reg<'a> {
-    /// The same value, as the evaluator holds a variable it reads back: borrowed.
-    #[inline]
-    pub(crate) fn borrowed(self) -> Reg<'a> {
-        match self {
-            Reg::Dyn(v, _) => Reg::Dyn(v, false),
-            Reg::List(l, _) => Reg::List(l, false),
-            Reg::Map(m, _) => Reg::Map(m, false),
-            other => other,
-        }
-    }
-
-    pub(crate) fn owned(self) -> Reg<'a> {
-        match self {
-            Reg::Dyn(v, _) => Reg::Dyn(v, true),
-            Reg::List(l, _) => Reg::List(l, true),
-            Reg::Map(m, _) => Reg::Map(m, true),
-            other => other,
-        }
-    }
-}
-
-/// What a run builds and hands out references into: strings, lists, maps, and values of the
-/// absorbed model a lazy read produced. Append-only for the life of one run; held only to be
+/// What a run builds and hands out references into: strings, lists, maps, and the values a lazy
+/// read or a host function produced. Append-only for the life of one run; held only to be
 /// dropped when the run ends.
 #[allow(dead_code)]
 pub(crate) enum Keep<'a> {
-    Val(Box<dyn Val>),
+    Owned(Box<CelValue>),
     Str(Box<str>),
     Bytes(Box<[u8]>),
     Regs(Box<[Reg<'a>]>),
@@ -99,9 +70,10 @@ impl<'a> Store<'a> {
     // use of any reference it handed out (`fast::run`); no reference escapes a run, because
     // a run returns only owned values. A PAUSED run keeps its store, and the references into it,
     // together (`fast::Paused`).
-    pub(crate) fn val(&mut self, v: Box<dyn Val>) -> &'a dyn Val {
-        let p: *const dyn Val = &*v;
-        self.items.push(Keep::Val(v));
+    pub(crate) fn value(&mut self, v: CelValue) -> &'a CelValue {
+        let b = Box::new(v);
+        let p: *const CelValue = &*b;
+        self.items.push(Keep::Owned(b));
         unsafe { &*p }
     }
 
@@ -134,101 +106,78 @@ impl<'a> Store<'a> {
     }
 }
 
-/// A value of the absorbed model, as a register. Scalars are unboxed; everything else stays a
-/// reference.
-pub(crate) fn of_val(v: &dyn Val, owned: bool) -> Reg<'_> {
-    if let Some(b) = v.downcast_ref::<CelBool>() {
-        Reg::Bool(*b.inner())
-    } else if let Some(n) = v.downcast_ref::<CelDouble>() {
-        Reg::Num(*n.inner())
-    } else if let Some(s) = v.downcast_ref::<CelString>() {
-        Reg::Str(s.inner())
-    } else if let Some(b) = v.downcast_ref::<CelBytes>() {
-        Reg::Bytes(b.inner())
-    } else if v.downcast_ref::<CelNull>().is_some() {
-        Reg::Null
-    } else if let Some(d) = v.downcast_ref::<CelDuration>() {
-        Reg::Dur(*d.inner())
-    } else {
-        Reg::Dyn(v, owned)
-    }
-}
-
-/// A `Cow` the absorbed model produced, as a register; an owned one is kept in the store.
-pub(crate) fn of_cow<'a>(
-    v: std::borrow::Cow<'a, dyn Val>,
-    owned: bool,
-    st: &mut Store<'a>,
-) -> Reg<'a> {
+/// A borrowed value as a register: scalars unboxed, composites and lazy views by reference.
+pub(crate) fn of_cel(v: &CelValue) -> Reg<'_> {
     match v {
-        std::borrow::Cow::Borrowed(v) => of_val(v, owned),
-        std::borrow::Cow::Owned(b) => {
-            // A scalar needs no keeping unless it borrows (a string, bytes).
-            if let Some(n) = b.downcast_ref::<CelDouble>() {
-                return Reg::Num(*n.inner());
-            }
-            if let Some(x) = b.downcast_ref::<CelBool>() {
-                return Reg::Bool(*x.inner());
-            }
-            of_val(st.val(b), true)
-        }
+        CelValue::Bool(b) => Reg::Bool(*b),
+        CelValue::Num(n) => Reg::Num(*n),
+        CelValue::Str(s) => Reg::Str(s),
+        CelValue::Bytes(b) => Reg::Bytes(b),
+        CelValue::Duration(d) => Reg::Dur(d.delta()),
+        CelValue::Null => Reg::Null,
+        CelValue::List(_) | CelValue::Map(_) | CelValue::Lazy(_) => Reg::Val(v),
     }
 }
 
-/// The boundary value, exactly as `Value::resolve` would convert the same value.
-pub(crate) fn to_value(r: Reg<'_>, errs: &[ExecutionError]) -> Result<Value, ExecutionError> {
+/// A value the run produced (a lazy member, a host's result), as a register; a composite is kept
+/// in the store.
+pub(crate) fn of_owned<'a>(v: CelValue, st: &mut Store<'a>) -> Reg<'a> {
+    match v {
+        CelValue::Bool(b) => Reg::Bool(b),
+        CelValue::Num(n) => Reg::Num(n),
+        CelValue::Null => Reg::Null,
+        CelValue::Duration(d) => Reg::Dur(d.delta()),
+        other => of_cel(st.value(other)),
+    }
+}
+
+/// The value a register holds.
+pub(crate) fn to_cel(r: Reg<'_>, errs: &[ExecutionError]) -> Result<CelValue, ExecutionError> {
     Ok(match r {
-        Reg::Unset => Value::Null,
-        Reg::Bool(b) => Value::Bool(b),
-        Reg::Num(n) => Value::Float(n),
-        Reg::Null => Value::Null,
-        Reg::Dur(d) => Value::Duration(d),
-        Reg::Str(s) => Value::String(Arc::new(s.to_string())),
-        Reg::Bytes(b) => Value::Bytes(Arc::new(b.to_vec())),
-        Reg::Dyn(v, _) => Value::try_from(v)?,
-        Reg::List(items, _) => Value::List(Arc::new(
+        Reg::Unset => CelValue::Null,
+        Reg::Bool(b) => CelValue::Bool(b),
+        Reg::Num(n) => CelValue::Num(n),
+        Reg::Null => CelValue::Null,
+        Reg::Dur(d) => CelValue::Duration(crate::CelDuration::of(d)),
+        Reg::Str(s) => CelValue::Str(s.into()),
+        Reg::Bytes(b) => CelValue::Bytes(b.into()),
+        Reg::Val(v) => v.clone(),
+        Reg::List(items) => CelValue::List(
             items
                 .iter()
-                .map(|r| to_value(*r, errs))
+                .map(|r| to_cel(*r, errs))
                 .collect::<Result<_, _>>()?,
-        )),
-        Reg::Map(pairs, _) => {
-            let mut m = std::collections::HashMap::with_capacity(pairs.len());
+        ),
+        Reg::Map(pairs) => {
+            let mut m = Vec::with_capacity(pairs.len());
             for (k, v) in pairs {
                 let key = match k {
-                    Reg::Str(s) => Key::String(Arc::new(s.to_string())),
-                    Reg::Num(n) => Key::Num(*n as i64),
-                    Reg::Bool(b) => Key::Bool(*b),
+                    Reg::Str(s) => CelMapKey::Str(CelKey::new(s)),
+                    Reg::Num(n) => CelMapKey::Num(*n as i64),
+                    Reg::Bool(b) => CelMapKey::Bool(*b),
                     _ => return Err(ExecutionError::InternalError("a map key".into())),
                 };
-                m.insert(key, to_value(*v, errs)?);
+                m.push((key, to_cel(*v, errs)?));
             }
-            Value::Map(Map { map: Arc::new(m) })
+            CelValue::Map(CelMap::new(m))
         }
         Reg::Err(i) => return Err(errs[i as usize].clone()),
     })
 }
 
-/// A register as a value of the absorbed model, for the rare path that hands one to it.
-pub(crate) fn to_val(r: Reg<'_>, errs: &[ExecutionError]) -> Result<Box<dyn Val>, ExecutionError> {
-    Box::<dyn Val>::try_from(to_value(r, errs)?)
-}
-
 // ---- lists and maps, whichever side built them ----
 
-/// A list's length and elements, over a list the program built or one of the absorbed model's.
+/// A list's length and elements, over a list the program built or a bound one.
 pub(crate) enum ListView<'a> {
     Regs(&'a [Reg<'a>]),
-    Vals(&'a [Box<dyn Val>]),
+    Vals(&'a [CelValue]),
 }
 
 impl<'a> ListView<'a> {
     pub(crate) fn of(r: Reg<'a>) -> Option<ListView<'a>> {
         match r {
-            Reg::List(l, _) => Some(ListView::Regs(l)),
-            Reg::Dyn(v, _) => v
-                .downcast_ref::<CelList>()
-                .map(|l| ListView::Vals(l.inner())),
+            Reg::List(l) => Some(ListView::Regs(l)),
+            Reg::Val(CelValue::List(l)) => Some(ListView::Vals(l)),
             _ => None,
         }
     }
@@ -243,40 +192,49 @@ impl<'a> ListView<'a> {
     pub(crate) fn get(&self, i: usize) -> Reg<'a> {
         match self {
             ListView::Regs(l) => l[i],
-            ListView::Vals(l) => of_val(l[i].as_ref(), false),
+            ListView::Vals(l) => of_cel(&l[i]),
         }
     }
 }
 
-/// A map key as the absorbed model's `KeyRef`, or `None` for a value that names no key.
-pub(crate) fn key_ref<'k>(k: Reg<'k>) -> Option<KeyRef<'k>> {
+/// A map key, borrowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyRef<'k> {
+    Num(i64),
+    Bool(bool),
+    Str(&'k str),
+}
+
+/// A register as a map key, or `None` for a value that names no key.
+pub(crate) fn key_ref(k: Reg<'_>) -> Option<KeyRef<'_>> {
     match k {
-        Reg::Str(s) => Some(KeyRef::String(s)),
+        Reg::Str(s) => Some(KeyRef::Str(s)),
         Reg::Num(n) => integral_key(n).map(KeyRef::Num),
         Reg::Bool(b) => Some(KeyRef::Bool(b)),
         _ => None,
     }
 }
 
-fn key_reg(k: &CelMapKey) -> Reg<'_> {
+/// A map key as the register a comprehension over the map binds.
+pub(crate) fn key_reg(k: &CelMapKey) -> Reg<'_> {
     match k {
-        CelMapKey::Bool(b) => Reg::Bool(*b.inner()),
-        CelMapKey::Num(n) => Reg::Num(*n.inner()),
-        CelMapKey::String(s) => Reg::Str(s.inner()),
+        CelMapKey::Bool(b) => Reg::Bool(*b),
+        CelMapKey::Num(n) => Reg::Num(*n as f64),
+        CelMapKey::Str(s) => Reg::Str(s.as_str()),
     }
 }
 
-/// A map, over one the program built or one of the absorbed model's.
+/// A map, over one the program built or a bound one.
 pub(crate) enum MapView<'a> {
     Pairs(&'a [(Reg<'a>, Reg<'a>)]),
-    Vals(&'a std::collections::HashMap<CelMapKey, Box<dyn Val>>),
+    Vals(&'a CelMap),
 }
 
 impl<'a> MapView<'a> {
     pub(crate) fn of(r: Reg<'a>) -> Option<MapView<'a>> {
         match r {
-            Reg::Map(m, _) => Some(MapView::Pairs(m)),
-            Reg::Dyn(v, _) => v.downcast_ref::<CelMap>().map(|m| MapView::Vals(m.inner())),
+            Reg::Map(m) => Some(MapView::Pairs(m)),
+            Reg::Val(CelValue::Map(m)) => Some(MapView::Vals(m)),
             _ => None,
         }
     }
@@ -294,9 +252,12 @@ impl<'a> MapView<'a> {
                 .iter()
                 .find(|(key, _)| key_ref(*key) == Some(k))
                 .map(|(_, v)| *v),
-            MapView::Vals(m) => m
-                .get(&k as &dyn AsKeyRef)
-                .map(|v| of_val(v.as_ref(), false)),
+            MapView::Vals(m) => match k {
+                KeyRef::Str(s) => m.get(s),
+                KeyRef::Num(n) => m.get_key(&CelMapKey::Num(n)),
+                KeyRef::Bool(b) => m.get_key(&CelMapKey::Bool(b)),
+            }
+            .map(of_cel),
         }
     }
 
@@ -304,10 +265,16 @@ impl<'a> MapView<'a> {
     pub(crate) fn for_each(&self, mut f: impl FnMut(Reg<'a>, Reg<'a>) -> bool) -> bool {
         match self {
             MapView::Pairs(m) => m.iter().all(|(k, v)| f(*k, *v)),
-            MapView::Vals(m) => m
-                .iter()
-                .all(|(k, v)| f(key_reg(k), of_val(v.as_ref(), false))),
+            MapView::Vals(m) => m.iter().all(|(k, v)| f(key_reg(k), of_cel(v))),
         }
+    }
+}
+
+/// The lazy view a register holds.
+pub(crate) fn lazy_of(r: Reg<'_>) -> Option<&dyn LazyValue> {
+    match r {
+        Reg::Val(CelValue::Lazy(l)) => Some(l.as_ref()),
+        _ => None,
     }
 }
 
@@ -323,8 +290,8 @@ pub(crate) fn equals(a: Reg<'_>, b: Reg<'_>) -> bool {
         (Reg::Null, Reg::Null) => true,
         (Reg::Dur(x), Reg::Dur(y)) => x == y,
         (
-            Reg::List(..) | Reg::Dyn(..) | Reg::Map(..),
-            Reg::List(..) | Reg::Dyn(..) | Reg::Map(..),
+            Reg::List(..) | Reg::Val(..) | Reg::Map(..),
+            Reg::List(..) | Reg::Val(..) | Reg::Map(..),
         ) => {
             if let (Some(x), Some(y)) = (ListView::of(a), ListView::of(b)) {
                 return x.len() == y.len() && (0..x.len()).all(|i| equals(x.get(i), y.get(i)));
@@ -337,24 +304,20 @@ pub(crate) fn equals(a: Reg<'_>, b: Reg<'_>) -> bool {
                             .is_some_and(|w| equals(v, w))
                     });
             }
-            match (a, b) {
-                (Reg::Dyn(x, _), Reg::Dyn(y, _)) => x.equals(y),
-                _ => false,
-            }
+            // A lazy view equals nothing, itself included.
+            false
         }
         _ => false,
     }
 }
 
-/// `in` — `objects.rs`'s `operators::IN` arm: a lazy container first, then any container.
+/// `in`: a lazy container first, then any container.
 pub(crate) fn contains(needle: Reg<'_>, hay: Reg<'_>) -> Result<bool, ExecutionError> {
-    if let Reg::Dyn(v, _) = hay {
-        if let Some(lazy) = v.downcast_ref::<LazyAdapter>() {
-            let Reg::Str(name) = needle else {
-                return Err(ExecutionError::NoSuchOverload);
-            };
-            return lazy.presence(name);
-        }
+    if let Some(lazy) = lazy_of(hay) {
+        let Reg::Str(name) = needle else {
+            return Err(ExecutionError::NoSuchOverload);
+        };
+        return lazy::presence(lazy, name);
     }
     if let Some(l) = ListView::of(hay) {
         return Ok((0..l.len()).any(|i| equals(l.get(i), needle)));
@@ -363,102 +326,87 @@ pub(crate) fn contains(needle: Reg<'_>, hay: Reg<'_>) -> Result<bool, ExecutionE
         return match needle {
             Reg::Str(_) | Reg::Bool(_) => Ok(m.get(key_ref(needle).expect("a key")).is_some()),
             Reg::Num(n) => Ok(integral_key(n).is_some_and(|k| m.get(KeyRef::Num(k)).is_some())),
-            // `Container::contains` converts any other key and fails the conversion.
+            // Any other needle is no key.
             other => Err(unsupported_key(other)),
         };
     }
-    match hay {
-        Reg::Dyn(v, _) => match v.as_container() {
-            Some(c) => c.contains(to_val(needle, &[])?.as_ref()),
-            None => Err(ExecutionError::NoSuchOverload),
-        },
-        _ => Err(ExecutionError::NoSuchOverload),
-    }
+    Err(ExecutionError::NoSuchOverload)
 }
 
 /// The error a value that is no map key converts to.
 pub(crate) fn unsupported_key(k: Reg<'_>) -> ExecutionError {
-    ExecutionError::UnsupportedKeyType(to_value(k, &[]).unwrap_or(Value::Null))
+    ExecutionError::UnsupportedKeyType(to_cel(k, &[]).unwrap_or(CelValue::Null))
 }
 
-/// `x.name` (not a presence test): `objects.rs`'s `Expr::Select` arm.
+/// `x.name` (not a presence test): a map's missing member is `no such key`, a lazy view answers
+/// through `LazyValue`, and a list refuses a string index.
 pub(crate) fn select<'a>(
     obj: Reg<'a>,
-    key: &'a CelString,
+    key: &'a CelKey,
     st: &mut Store<'a>,
 ) -> Result<Reg<'a>, ExecutionError> {
+    let name = key.as_str();
     match obj {
-        Reg::Map(m, _) => MapView::Pairs(m)
-            .get(KeyRef::String(key.inner()))
-            .map(Reg::owned)
-            .ok_or_else(|| ExecutionError::no_such_key(key.inner())),
-        Reg::Dyn(v, _) => {
-            let is_map = v.downcast_ref::<CelMap>().is_some();
-            let got = match v.as_indexer() {
-                Some(ix) => ix.get(key)?,
-                None if is_map => return Err(ExecutionError::no_such_key(key.inner())),
-                None => return Err(ExecutionError::NoSuchOverload),
-            };
-            Ok(of_cow(got, true, st).owned())
-        }
+        Reg::Map(m) => MapView::Pairs(m)
+            .get(KeyRef::Str(name))
+            .ok_or_else(|| ExecutionError::no_such_key(name)),
+        Reg::Val(CelValue::Map(m)) => m
+            .get(name)
+            .map(of_cel)
+            .ok_or_else(|| ExecutionError::no_such_key(name)),
+        Reg::Val(CelValue::Lazy(l)) => Ok(of_owned(lazy::read(l.as_ref(), name)?, st)),
+        // A bound list's index refuses a string; a list the program built has no member at all.
+        Reg::Val(CelValue::List(_)) => Err(string_index()),
         _ => Err(ExecutionError::NoSuchOverload),
     }
 }
 
-/// `has(x.name)`: `objects.rs`'s `Expr::Select` arm with `test` set.
-pub(crate) fn has(obj: Reg<'_>, key: &CelString) -> Result<bool, ExecutionError> {
-    // The fork's non-map arm reads the member through the indexer: a list's indexer refuses a
-    // string index, and the checker admits `has(list.f)`.
+/// A list indexed by a string.
+fn string_index() -> ExecutionError {
+    ExecutionError::UnexpectedType {
+        got: "string".into(),
+        want: "double".into(),
+    }
+}
+
+/// `has(x.name)`: presence of the member.
+pub(crate) fn has(obj: Reg<'_>, key: &CelKey) -> Result<bool, ExecutionError> {
+    let name = key.as_str();
+    // A list reads the member through its index, and refuses a string one; the checker admits
+    // `has(list.f)`.
     if ListView::of(obj).is_some() {
-        return Err(ExecutionError::UnexpectedType {
-            got: "string".into(),
-            want: "double".into(),
-        });
+        return Err(string_index());
     }
     match obj {
-        Reg::Map(m, _) => Ok(MapView::Pairs(m).get(KeyRef::String(key.inner())).is_some()),
-        Reg::Dyn(v, _) => {
-            if let Some(lazy) = v.downcast_ref::<LazyAdapter>() {
-                return lazy.presence(key.inner());
-            }
-            if let Some(m) = v.downcast_ref::<CelMap>() {
-                return Ok(m.inner().contains_key(key as &dyn AsKeyRef));
-            }
-            // The fork's non-map arm returns the member itself; a checked program never gets here.
-            Err(ExecutionError::NoSuchOverload)
-        }
+        Reg::Map(m) => Ok(MapView::Pairs(m).get(KeyRef::Str(name)).is_some()),
+        Reg::Val(CelValue::Map(m)) => Ok(m.get(name).is_some()),
+        Reg::Val(CelValue::Lazy(l)) => lazy::presence(l.as_ref(), name),
         _ => Err(ExecutionError::NoSuchOverload),
     }
 }
 
-/// `a[b]`: `objects.rs`'s `operators::INDEX` arm — `Indexer::get` on a borrowed container,
-/// `Indexer::steal` on an owned one.
+/// `a[b]`: a list by an integral in-range number, else `IndexOutOfBounds`; a map by a key of its
+/// key type, else `NoSuchKey` — including a number that names no key (`1.5`) — wherever the map
+/// lives.
 pub(crate) fn index<'a>(
     a: Reg<'a>,
     b: Reg<'a>,
     st: &mut Store<'a>,
-    errs: &[ExecutionError],
 ) -> Result<Reg<'a>, ExecutionError> {
     if let Some(l) = ListView::of(a) {
-        let owned = matches!(a, Reg::List(_, true) | Reg::Dyn(_, true));
         let Reg::Num(f) = b else {
             return Err(match b {
-                Reg::Str(_) => ExecutionError::UnexpectedType {
-                    got: "string".into(),
-                    want: "double".into(),
-                },
+                Reg::Str(_) => string_index(),
                 _ => ExecutionError::NoSuchOverload,
             });
         };
         return if f.fract() == 0.0 && f >= 0.0 && f < l.len() as f64 {
-            let r = l.get(f as usize);
-            Ok(if owned { r.owned() } else { r })
+            Ok(l.get(f as usize))
         } else {
-            Err(ExecutionError::IndexOutOfBounds(f.into()))
+            Err(ExecutionError::IndexOutOfBounds(CelValue::Num(f)))
         };
     }
     if let Some(m) = MapView::of(a) {
-        let owned = matches!(a, Reg::Map(_, true) | Reg::Dyn(_, true));
         let name = |k: Reg<'_>| match k {
             Reg::Str(s) => s.to_string(),
             Reg::Num(n) => n.to_string(),
@@ -469,45 +417,20 @@ pub(crate) fn index<'a>(
             Reg::Str(_) | Reg::Bool(_) => key_ref(b).expect("a key"),
             Reg::Num(n) => match integral_key(n) {
                 Some(k) => KeyRef::Num(k),
-                // `get` reports the number it could not find; `steal` fails converting it.
-                None if owned => return Err(unsupported_key(b)),
+                // A number that names no key is not in the map — the one answer, wherever
+                // the map lives.
                 None => return Err(ExecutionError::NoSuchKey(Arc::new(n.to_string()))),
             },
-            _ if owned => return Err(unsupported_key(b)),
+            // Unreachable from a checked program (`_[_]` is `(map(K, V), K) -> V`).
             _ => return Err(ExecutionError::NoSuchOverload),
         };
         return match m.get(key) {
-            Some(r) => Ok(if owned { r.owned() } else { r }),
+            Some(r) => Ok(r),
             None => Err(ExecutionError::NoSuchKey(Arc::new(name(b)))),
         };
     }
-    match a {
-        Reg::Dyn(v, owned) => {
-            if let Some(lazy) = v.downcast_ref::<LazyAdapter>() {
-                let Reg::Str(name) = b else {
-                    return Err(ExecutionError::NoSuchOverload);
-                };
-                return match lazy.poll_read(name)? {
-                    Access::Ready(v) => Ok(of_val(st.val(v.into_val()), true)),
-                    Access::Pending(h) => Err(pending_error(name, h)),
-                };
-            }
-            let idx = to_val(b, errs)?;
-            if owned {
-                let got = v
-                    .clone_as_boxed()
-                    .into_indexer()
-                    .ok_or(ExecutionError::NoSuchOverload)?
-                    .steal(idx.as_ref())?;
-                Ok(of_val(st.val(got), true))
-            } else {
-                let got = v
-                    .as_indexer()
-                    .ok_or(ExecutionError::NoSuchOverload)?
-                    .get(idx.as_ref())?;
-                Ok(of_cow(got, false, st))
-            }
-        }
+    match (lazy_of(a), b) {
+        (Some(lazy), Reg::Str(name)) => Ok(of_owned(lazy::read(lazy, name)?, st)),
         _ => Err(ExecutionError::NoSuchOverload),
     }
 }
@@ -520,16 +443,11 @@ pub(crate) fn size(a: Reg<'_>) -> Result<f64, ExecutionError> {
     if let Some(m) = MapView::of(a) {
         return Ok(m.len() as f64);
     }
-    match a {
-        Reg::Dyn(v, _) => match v.as_sizer() {
-            Some(s) => Ok(*s.size().inner()),
-            None => Err(ExecutionError::NoSuchOverload),
-        },
-        _ => Err(ExecutionError::NoSuchOverload),
-    }
+    // A lazy view has no size.
+    Err(ExecutionError::NoSuchOverload)
 }
 
-/// A map literal's key, converted before its value runs: `TryFrom<Box<dyn Val>> for CelMapKey`.
+/// A map literal's key, checked before its value runs.
 pub(crate) fn check_key(k: Reg<'_>) -> Result<(), ExecutionError> {
     match k {
         Reg::Str(_) | Reg::Bool(_) => Ok(()),
@@ -538,7 +456,7 @@ pub(crate) fn check_key(k: Reg<'_>) -> Result<(), ExecutionError> {
     }
 }
 
-/// The ordering behind `<`, `<=`, `>`, `>=`: `Comparer::compare`. Numbers, strings and durations,
+/// The ordering behind `<`, `<=`, `>`, `>=`. Numbers, strings and durations,
 /// and nothing else (`removed: ordering beyond numbers and strings`).
 pub(crate) fn compare(a: Reg<'_>, b: Reg<'_>) -> Result<std::cmp::Ordering, ExecutionError> {
     match (a, b) {
@@ -556,11 +474,11 @@ pub(crate) fn elements<'a>(r: Reg<'a>) -> Option<Vec<Reg<'a>>> {
 }
 
 /// `CelMapKey` for a key the program built, to build a constant map at compile time.
-pub(crate) fn map_key(k: &Value) -> Option<CelMapKey> {
+pub(crate) fn map_key(k: &CelValue) -> Option<CelMapKey> {
     match k {
-        Value::String(s) => Some(CelMapKey::String(CelString::from(s.as_str()))),
-        Value::Float(f) => integral_key(*f).map(|_| CelMapKey::Num(CelDouble::from(*f))),
-        Value::Bool(b) => Some(CelMapKey::Bool(CelBool::from(*b))),
+        CelValue::Str(s) => Some(CelMapKey::Str(CelKey::new(s))),
+        CelValue::Num(f) => integral_key(*f).map(CelMapKey::Num),
+        CelValue::Bool(b) => Some(CelMapKey::Bool(*b)),
         _ => None,
     }
 }

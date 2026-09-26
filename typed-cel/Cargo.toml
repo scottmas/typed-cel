@@ -38,7 +38,7 @@ path = "src/lib.rs"
 default = ["regex", "chrono", "json", "bytes"]
 bytes = ["dep:bytes"]
 chrono = ["dep:chrono"]
-json = ["dep:serde_json", "dep:base64"]
+json = ["dep:serde_json"]
 regex = ["dep:regex"]
 # The cel-spec conformance harness — the corpus reader, EXCLUSIONS.toml and the report bin.
 # Feature-gated so `toml` and serde's derive machinery stay OUT of what a consumer of the dialect
@@ -54,7 +54,6 @@ nom = "7.1.3"
 pastey = "0.2.1"
 serde = "1.0"
 thiserror = "2"
-base64 = { version = "0.22.1", optional = true }
 bytes = { version = "1", optional = true }
 chrono = { version = "0.4", default-features = false, features = [
     "alloc",
@@ -76,12 +75,6 @@ path = "src/bin/conformance-report.rs"
 required-features = ["conformance"]
 
 [dev-dependencies]
-serde_bytes = "0.11.14"
-# The absorbed `ser.rs` tests `#[derive(Serialize)]` their fixture structs. Upstream got the
-# derive macro by accident, via feature unification with criterion's serde; we dropped the
-# benches (ATTRIBUTION.md), so we ask for it directly — and only for the test build, which is
-# the only thing that uses it.
-serde = { version = "1.0", features = ["derive"] }
 # typed-cel dev-depends on ITSELF to switch `conformance` on for the test targets. Cargo unifies
 # features across the graph, so `cargo test -p typed-cel` builds with the corpus reader available
 # and `tests/conformance.rs` runs — without `conformance` leaking into what a consumer links.

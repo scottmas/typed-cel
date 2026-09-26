@@ -182,10 +182,10 @@ fn an_or_chain_of_listed_values_is_one_tag_test() {
     );
 }
 
-/// Fast (with and without a tag-answering provider, and over an evaluator context) against the
-/// evaluator, over generated tag programs and every listed value plus two outside the list.
+/// Every host alike — a JSON binding, a fact binding, and `Facts` with and without a tag-answering
+/// provider — over generated tag programs and every listed value plus two outside the list.
 #[test]
-fn generated_tag_programs_agree_with_the_evaluator() {
+fn generated_tag_programs_answer_alike_on_every_host() {
     let env = env();
     let mut g = Gen::new(0x7A65);
     let values: Vec<&str> = ACCESS.iter().copied().chain(["bogus", ""]).collect();
@@ -211,12 +211,11 @@ fn generated_tag_programs_agree_with_the_evaluator() {
                 )
                 .expect("binds");
                 let want = p.evaluate(&act).map_err(|e| e.to_string());
-                let over_ctx = Vm::new().eval(&code, &act).map_err(|e| e.to_string());
                 let mut prepared = env.runtime().activation();
                 prepared.bind_fact(
                     "req",
-                    CelValue::Record(vec![
-                        ("access".into(), CelValue::Str(access.to_string())),
+                    CelValue::record([
+                        ("access".into(), CelValue::from(*access)),
                         ("other".into(), CelValue::Str(other.into())),
                         ("n".into(), CelValue::Num(1.0)),
                     ]),
@@ -233,10 +232,10 @@ fn generated_tag_programs_agree_with_the_evaluator() {
                         .decide(&req, &mut FastScratch::default())
                         .map_err(|e| e.to_string());
                     compared += 1;
-                    if got != want || over_ctx != want || over_fact != want {
+                    if got != want || over_fact != want {
                         mismatches.push(format!(
                             "#{index} `{src}` access={access:?} other={other:?} by_tag={by_tag}: \
-                             evaluator {want:?}, ctx {over_ctx:?}, bound {over_fact:?}, facts {got:?}"
+                             bound json {want:?}, bound fact {over_fact:?}, facts {got:?}"
                         ));
                     }
                 }

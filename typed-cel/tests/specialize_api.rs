@@ -720,3 +720,44 @@ fn the_absent_field_case_specializes_without_gradual_typing() {
     assert_eq!(tail(&spec_err), tail(&native));
     assert_eq!(tail(&vm_err), tail(&native));
 }
+
+/// A closed subtree the backend cannot lower is a backend DEFECT, and specialization says so: it
+/// refuses, rather than leaving the known read in the residual.
+#[test]
+fn a_fold_that_cannot_lower_is_refused_not_kept() {
+    let env = env();
+    let src = "policy.limit > 3.0 && req.size > 1.0";
+    let program = compile(&env, src);
+    let k = known(&env, &policy(true));
+    // The same program, unrefused, DID fold — so the door below had a lowering to refuse.
+    let residual = env.specialize(&program, &k).expect("specializes");
+    assert!(
+        !residual.source().contains("policy"),
+        "nothing folded: {}",
+        residual.source()
+    );
+    match typed_cel::fork::specialize_with_lowering_refused(&env, &program, &k) {
+        Err(CelError::Specialize { message, .. }) => assert!(
+            message.contains("could not lower a closed subtree"),
+            "{message}"
+        ),
+        other => panic!("want a Specialize refusal, got {other:?}"),
+    }
+}
+
+/// A comprehension variable shadows a known root of the same name while the fold runs it.
+#[test]
+fn folding_reads_known_locals_before_roots() {
+    let mut env = CelEnvironment::new();
+    env.declare(
+        "policy",
+        record("policy", &[("xs", CelTy::list(CelTy::Str))]),
+    );
+    env.declare("x", CelTy::Str);
+    let program = compile(&env, r#"policy.xs.exists(x, x == "a")"#);
+    let mut k = env.activation();
+    k.bind("policy", &json!({"xs": ["a", "b"]})).expect("binds");
+    k.bind("x", &json!("b")).expect("binds");
+    let residual = env.specialize(&program, &k).expect("specializes");
+    assert_eq!(residual.source(), "true");
+}

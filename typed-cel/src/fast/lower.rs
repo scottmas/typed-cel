@@ -1,10 +1,11 @@
 //! Lowering a CHECKED tree to the fast backend's register code.
 //!
-//! One walk, in the evaluator's own evaluation order (`objects.rs::resolve_val`): the order a
-//! node's operands are lowered is the order they run, so the same reads happen and the same error
-//! is the one reported. Errors do not unwind: every op that can fail names the handler its failure
-//! jumps to, which is known here because handlers are LEXICAL — the left operand of `&&`/`||`, the
-//! argument of `@not_strictly_false`, a comprehension's step, or the top.
+//! One walk, in the dialect's evaluation order (left to right; a member call's arguments before its
+//! target): the order a node's operands are lowered is the order they run, so the reads happen in
+//! that order and the error reported is the one the order meets. Errors do not unwind: every op
+//! that can fail names the handler its failure jumps to, which is known here because handlers are
+//! LEXICAL — the left operand of `&&`/`||`, the argument of `@not_strictly_false`, a
+//! comprehension's step, or the top.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,9 +13,8 @@ use std::sync::Arc;
 use crate::common::ast::{
     operators, CallExpr, ComprehensionExpr, EntryExpr, Expr, IdedExpr, LiteralValue,
 };
-use crate::common::types::CelString;
-use crate::common::value::Val;
-use crate::objects::Value;
+use crate::CelKey;
+use crate::CelValue;
 use crate::ExecutionError;
 
 use super::host::{FieldPath, Step, Want};
@@ -49,7 +49,7 @@ const MIN_CHAIN: usize = 2;
 pub(crate) fn lower(
     e: &IdedExpr,
     kinds: &HashMap<u64, Kind>,
-    slots: &[(Arc<str>, Value)],
+    slots: &[(Arc<str>, CelValue)],
     hosts: &Arc<crate::hostfn::HostTable>,
     enums: &crate::hostfn::EnumTable,
 ) -> Result<Code, String> {
@@ -70,9 +70,7 @@ pub(crate) fn lower(
         next: 0,
     };
     for (name, value) in slots {
-        let val = Box::<dyn Val>::try_from(value.clone())
-            .map_err(|e| format!("the constant slot `{name}` has no run-time form: {e}"))?;
-        let k = l.konst(CVal::Dyn(val, false));
+        let k = l.konst(CVal::Val(value.clone()));
         l.slots.push((name.to_string(), k, value.clone()));
     }
     let fail = l.label();
@@ -101,7 +99,7 @@ struct Lower<'k> {
     /// Comprehension variables in scope, innermost last.
     scope: Vec<(String, R)>,
     /// A residual's constant slots: name, constant, value.
-    slots: Vec<(String, u32, Value)>,
+    slots: Vec<(String, u32, CelValue)>,
     next: u16,
 }
 
@@ -165,7 +163,7 @@ impl Lower<'_> {
         if let Some(i) = self.names.get(n) {
             return *i;
         }
-        self.code.names.push(CelString::from(n));
+        self.code.names.push(CelKey::new(n));
         let i = (self.code.names.len() - 1) as u32;
         self.names.insert(n.to_string(), i);
         i
@@ -180,9 +178,8 @@ impl Lower<'_> {
             root: root.to_string(),
             steps: steps
                 .iter()
-                .map(|(n, indexed)| Step {
-                    name: CelString::from(n.as_str()),
-                    indexed: *indexed,
+                .map(|(n, _)| Step {
+                    name: CelKey::new(n),
                 })
                 .collect(),
         });
@@ -254,7 +251,7 @@ impl Lower<'_> {
             .map(|(_, r)| *r)
     }
 
-    fn slot(&self, name: &str) -> Option<&(String, u32, Value)> {
+    fn slot(&self, name: &str) -> Option<&(String, u32, CelValue)> {
         self.slots.iter().find(|(n, ..)| n == name)
     }
 
@@ -368,7 +365,7 @@ impl Lower<'_> {
                     let EntryExpr::MapEntry(me) = &entry.expr;
                     let k = start + 2 * i as R;
                     self.expr(&me.key, k, h)?;
-                    // objects.rs: the key is converted BEFORE its value runs.
+                    // A map literal checks each key BEFORE its value runs.
                     self.push(Op::CheckKey { r: k, err: h });
                     self.expr(&me.value, k + 1, h)?;
                 }
@@ -421,52 +418,51 @@ impl Lower<'_> {
     fn constant(&self, e: &IdedExpr) -> Option<CVal> {
         let v = self.constant_value(e)?;
         Some(match v {
-            Value::Bool(b) => CVal::Bool(b),
-            Value::Float(f) => CVal::Num(f),
-            Value::Null => CVal::Null,
-            Value::String(s) => CVal::Str(Box::from(s.as_str())),
-            Value::Bytes(b) => CVal::Bytes(b.to_vec().into_boxed_slice()),
-            Value::Duration(d) => CVal::Dur(d),
-            // A literal list or map is OWNED where the evaluator builds it.
-            other => CVal::Dyn(Box::<dyn Val>::try_from(other).ok()?, true),
+            CelValue::Bool(b) => CVal::Bool(b),
+            CelValue::Num(f) => CVal::Num(f),
+            CelValue::Null => CVal::Null,
+            CelValue::Str(s) => CVal::Str(Box::from(&*s)),
+            CelValue::Bytes(b) => CVal::Bytes(b.to_vec().into_boxed_slice()),
+            CelValue::Duration(d) => CVal::Dur(d.delta()),
+            // A literal list or map: one constant.
+            other => CVal::Val(other),
         })
     }
 
-    fn constant_value(&self, e: &IdedExpr) -> Option<Value> {
+    fn constant_value(&self, e: &IdedExpr) -> Option<CelValue> {
         match &e.expr {
             Expr::Literal(l) => Some(match l {
-                LiteralValue::Boolean(b) => Value::Bool(*b.inner()),
-                LiteralValue::Int(i) => Value::Float(*i as f64),
-                LiteralValue::Double(d) => Value::Float(*d.inner()),
-                LiteralValue::String(s) => Value::String(Arc::new(s.inner().to_string())),
-                LiteralValue::Bytes(b) => Value::Bytes(Arc::new(b.inner().to_vec())),
-                LiteralValue::Null => Value::Null,
+                LiteralValue::Boolean(b) => CelValue::Bool(*b.inner()),
+                LiteralValue::Int(i) => CelValue::Num(*i as f64),
+                LiteralValue::Double(d) => CelValue::Num(*d.inner()),
+                LiteralValue::String(s) => CelValue::Str(s.inner().into()),
+                LiteralValue::Bytes(b) => CelValue::Bytes(b.inner().into()),
+                LiteralValue::Null => CelValue::Null,
             }),
-            Expr::List(l) => Some(Value::List(Arc::new(
+            Expr::List(l) => Some(CelValue::List(
                 l.elements
                     .iter()
                     .map(|el| self.constant_value(el))
-                    .collect::<Option<Vec<_>>>()?,
-            ))),
+                    .collect::<Option<_>>()?,
+            )),
             // `!` of a bool constant, `-` of a number constant: nothing to read, nothing to fail.
             Expr::Call(c) if c.target.is_none() && c.args.len() == 1 => {
                 match (c.func_name.as_str(), self.constant_value(&c.args[0])?) {
-                    (operators::LOGICAL_NOT, Value::Bool(b)) => Some(Value::Bool(!b)),
-                    (operators::NEGATE, Value::Float(f)) => Some(Value::Float(-f)),
+                    (operators::LOGICAL_NOT, CelValue::Bool(b)) => Some(CelValue::Bool(!b)),
+                    (operators::NEGATE, CelValue::Num(f)) => Some(CelValue::Num(-f)),
                     _ => None,
                 }
             }
             Expr::Map(m) => {
-                let mut out = HashMap::with_capacity(m.entries.len());
+                let mut out = Vec::with_capacity(m.entries.len());
                 for entry in &m.entries {
                     let EntryExpr::MapEntry(me) = &entry.expr;
-                    let k = self.constant_value(&me.key)?;
-                    map_key(&k)?;
+                    let k = map_key(&self.constant_value(&me.key)?)?;
                     let v = self.constant_value(&me.value)?;
-                    let key: crate::objects::Key = k.try_into().ok()?;
-                    out.insert(key, v);
+                    out.push((k, v));
                 }
-                Some(Value::Map(crate::objects::Map { map: Arc::new(out) }))
+                // A later duplicate key wins, as a map literal's does.
+                Some(CelValue::Map(crate::CelMap::new(out)))
             }
             _ => None,
         }
@@ -478,11 +474,13 @@ impl Lower<'_> {
             Expr::Ident(n) if self.local(n).is_none() => self.slot(n)?.2.clone(),
             _ => self.constant_value(e)?,
         };
-        let Value::List(items) = v else { return None };
+        let CelValue::List(items) = v else {
+            return None;
+        };
         items
             .iter()
             .map(|v| match v {
-                Value::String(s) => Some(s.to_string()),
+                CelValue::Str(s) => Some(s.to_string()),
                 _ => None,
             })
             .collect()
@@ -499,9 +497,9 @@ impl Lower<'_> {
                     return Ok(());
                 }
                 // The LEFT operand's error is caught; the right one's propagates, even when the
-                // left was an error too (objects.rs, `LOGICAL_OR` / `LOGICAL_AND`). The right
-                // operand lands in `dst` directly: when the left passed it on, it IS the answer,
-                // and `Absorb` has work only when the left was an error.
+                // left was an error too: when both sides fail, the RIGHT side's error is reported.
+                // The right operand lands in `dst` directly: when the left passed it on, it IS the
+                // answer, and `Absorb` has work only when the left was an error.
                 let a = self.tmp()?;
                 let (caught, right, short, end) =
                     (self.label(), self.label(), self.label(), self.label());
@@ -540,8 +538,8 @@ impl Lower<'_> {
             }
             (operators::IN, None, 2) => {
                 // `"k" in x` for a record or map `x` read from a root: a presence question on the
-                // member `k`, asked exactly as `has(x.k)` asks it (`objects.rs`, `operators::IN`:
-                // a lazy answers `presence`, a map `contains_key`) — so a provider that answers by
+                // member `k`, asked exactly as `has(x.k)` asks it (a lazy answers `presence`, a map
+                // `contains_key`) — so a provider that answers by
                 // field, a streamed document among them, never has to hand over the whole of `x`.
                 if let (Some(k), true) =
                     (string_literal(&args[0]), self.kind_is_container(&args[1]))
@@ -665,7 +663,7 @@ impl Lower<'_> {
                     "endsWith" => StrOp::EndsWith,
                     _ => StrOp::Contains,
                 };
-                // Every argument runs BEFORE the target (objects.rs, the member-call arm).
+                // Every argument runs BEFORE the target.
                 let (b, a) = self.two(&args[0], t, h)?;
                 self.push(Op::StrOp {
                     dst,
@@ -730,8 +728,7 @@ impl Lower<'_> {
                 for _ in 0..count {
                     self.tmp()?;
                 }
-                // Every argument runs BEFORE the target (objects.rs, the member-call arm); the
-                // target is the call's first argument.
+                // Every argument runs BEFORE the target; the target is the call's first argument.
                 for (i, a) in args.iter().enumerate() {
                     self.expr(a, start + (member + i) as R, h)?;
                 }
@@ -778,7 +775,7 @@ impl Lower<'_> {
     /// Lower the bool `e` as a branch: jump to `target` when its value is `jump_if`, fall through
     /// otherwise; an error (or a non-bool) fails to `h`, as `try_bool(e)?` does.
     ///
-    /// `&&`/`||` keep the evaluator's absorption without building a bool: an erroring left
+    /// `&&`/`||` keep their absorption without building a bool: an erroring left
     /// operand is caught (out of line) and the right one still decides — and where the right one
     /// would have been passed on the left's value, `RaiseIfErr` raises the left's error instead.
     fn branch(
@@ -1139,8 +1136,8 @@ impl Lower<'_> {
                         let Some(call) = hosts.entries[*ix as usize].closure() else {
                             return Ok(false);
                         };
-                        match call(&[crate::CelValue::Str(item.clone())]) {
-                            Ok(crate::CelValue::Str(p)) => prefix.push(p),
+                        match call(&[crate::CelValue::Str(item.as_str().into())]) {
+                            Ok(crate::CelValue::Str(p)) => prefix.push(p.to_string()),
                             _ => return Ok(false),
                         }
                     }
@@ -1156,7 +1153,7 @@ impl Lower<'_> {
 
     // ---- comprehensions ----
 
-    /// `objects.rs`'s `Expr::Comprehension` arm:
+    /// A comprehension: the first pending step error is kept, and an absorbing accumulator clears it.
     ///
     /// ```text
     ///        <accu_init → A>                enclosing scope
@@ -1173,7 +1170,7 @@ impl Lower<'_> {
     ///        Jump HEAD
     /// STEP_ERR: CatchPending P; Jump HEAD   the FIRST error is the one kept
     /// EXIT:  RaisePending P
-    ///        <result → dst>; Own dst
+    ///        <result → dst>
     /// ```
     fn comprehension(&mut self, c: &ComprehensionExpr, dst: R, h: Label) -> Result<(), String> {
         if c.iter_var2.is_some() {
@@ -1190,7 +1187,6 @@ impl Lower<'_> {
         if empty_collection(&c.iter_range) {
             self.scope.push((c.accu_var.clone(), accu));
             self.expr(&c.result, dst, h)?;
-            self.push(Op::Own { r: dst });
             self.scope.truncate(depth);
             return Ok(());
         }
@@ -1247,7 +1243,6 @@ impl Lower<'_> {
         self.place(exit);
         self.push(Op::RaisePending { pend, err: h });
         self.expr(&c.result, dst, h)?;
-        self.push(Op::Own { r: dst });
         self.scope.truncate(depth);
         Ok(())
     }
@@ -1264,8 +1259,7 @@ fn want(k: Kind) -> Want {
     }
 }
 
-/// Which accumulator value settles a step: `false` for `&&`, `true` for `||` (`objects.rs`,
-/// `absorbs`).
+/// Which accumulator value settles a step: `false` for `&&`, `true` for `||`.
 fn absorb_of(step: &IdedExpr) -> Absorb {
     match &step.expr {
         Expr::Call(c) if c.func_name == operators::LOGICAL_AND => Absorb::OnFalse,

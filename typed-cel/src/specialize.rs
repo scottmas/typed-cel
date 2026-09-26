@@ -1,13 +1,14 @@
 //! Partial evaluation: folding the values that are known now out of a desugared tree.
 //!
-//! The tree is a CHECKED one: the fold computes every value with the crate's one evaluator
-//! (`objects::Value::resolve`) and places a scalar back into the tree through [`reify`], the single
+//! The tree is a CHECKED one: the fold computes every value on the backend that runs the residual
+//! (a closed subtree is lowered with `FastProgram::lower_node` and run) and places a scalar back into the tree through [`reify`], the single
 //! conversion from a value to the literal expression that evaluates to it, and a composite into a
 //! typed constant slot.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use crate::bindings::Bindings;
 use crate::bounds::CelLimits;
 use crate::check::{build_parts, classify, Fold};
 use crate::check::{Checker, TypeEnv};
@@ -15,52 +16,50 @@ use crate::common::ast::{
     operators, CallExpr, ComprehensionExpr, EntryExpr, Expr, IdedEntryExpr, IdedExpr, ListExpr,
     LiteralValue, MapEntryExpr, MapExpr, SelectExpr,
 };
-use crate::context::Context;
 use crate::demand::DemandSet;
-use crate::objects::{Key, Value};
+use crate::fast::{FastProgram, Kinds};
+use crate::hostfn::{EnumTable, HostTable};
 use crate::ty::CelTy;
-use crate::ExecutionError;
+use crate::CelValue;
 
 /// The literal expression that evaluates to `v`, or `None` when no CEL literal can spell it.
 ///
 /// Reify-then-evaluate is the identity: every number is a `Float` and reifies as a `Double`
 /// literal, integral or not — there is no runtime integer to reify (`removed: integer values`). A duration becomes the `duration("…")` call the desugarer
 /// produces for a duration literal. Map entries are sorted by key so the rendering is
-/// deterministic. Refused: a non-finite double (the parser has no literal for it), an opaque host
-/// value, a function value, and any container holding one of those.
+/// deterministic. Refused: a non-finite double (the parser has no literal for it), a lazy view, and
+/// any container holding one of those.
 ///
 /// Ids are 0; the caller that assembles a finished tree numbers it.
-pub fn reify(v: &Value) -> Option<IdedExpr> {
+pub fn reify(v: &CelValue) -> Option<IdedExpr> {
     let lit = |l: LiteralValue| Some(node(Expr::Literal(l)));
     match v {
-        Value::Bool(b) => lit(LiteralValue::Boolean((*b).into())),
-        Value::Float(f) if f.is_finite() => lit(LiteralValue::Double((*f).into())),
-        Value::Float(_) => None,
-        Value::String(s) => lit(LiteralValue::String(s.as_str().to_string().into())),
-        Value::Bytes(b) => lit(LiteralValue::Bytes(b.as_slice().to_vec().into())),
-        Value::Null => lit(LiteralValue::Null),
-        #[cfg(feature = "chrono")]
-        Value::Duration(d) => Some(node(Expr::Call(CallExpr {
+        CelValue::Bool(b) => lit(LiteralValue::Boolean((*b).into())),
+        CelValue::Num(f) if f.is_finite() => lit(LiteralValue::Double((*f).into())),
+        CelValue::Num(_) => None,
+        CelValue::Str(s) => lit(LiteralValue::String(s.to_string().into())),
+        CelValue::Bytes(b) => lit(LiteralValue::Bytes(b.to_vec().into())),
+        CelValue::Null => lit(LiteralValue::Null),
+        CelValue::Duration(d) => Some(node(Expr::Call(CallExpr {
             func_name: "duration".to_string(),
             target: None,
             args: vec![node(Expr::Literal(LiteralValue::String(
-                duration_spelling(d).into(),
+                duration_spelling(&d.delta()).into(),
             )))],
         }))),
-        Value::List(items) => {
+        CelValue::List(items) => {
             let elements = items.iter().map(reify).collect::<Option<Vec<_>>>()?;
             Some(node(Expr::List(ListExpr::new(elements))))
         }
-        Value::Map(m) => {
-            let mut entries: Vec<(&Key, &Value)> = m.map.iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(b.0));
-            let entries = entries
-                .into_iter()
+        // A map's entries are already in key order.
+        CelValue::Map(m) => {
+            let entries = m
+                .iter()
                 .map(|(k, v)| {
                     Some(IdedEntryExpr {
                         id: 0,
                         expr: EntryExpr::MapEntry(MapEntryExpr {
-                            key: reify(&Value::from(k))?,
+                            key: reify(&k.to_value())?,
                             value: reify(v)?,
                         }),
                     })
@@ -68,13 +67,12 @@ pub fn reify(v: &Value) -> Option<IdedExpr> {
                 .collect::<Option<Vec<_>>>()?;
             Some(node(Expr::Map(MapExpr { entries })))
         }
-        Value::Function(..) | Value::Opaque(..) => None,
+        CelValue::Lazy(_) => None,
     }
 }
 
 /// A spelling `duration()` parses back to exactly `d`: sign, whole seconds, remaining
 /// nanoseconds, each part omitted when zero, and `0s` for zero.
-#[cfg(feature = "chrono")]
 fn duration_spelling(d: &chrono::Duration) -> String {
     let neg = *d < chrono::Duration::zero();
     let abs = if neg { -*d } else { *d };
@@ -106,7 +104,7 @@ fn node(expr: Expr) -> IdedExpr {
 /// original program was checked at for the node it replaces — never a type inferred from the value.
 pub(crate) struct Slot {
     pub(crate) name: String,
-    pub(crate) value: Value,
+    pub(crate) value: CelValue,
     pub(crate) ty: CelTy,
 }
 
@@ -118,11 +116,11 @@ pub(crate) struct Slot {
 /// exist while the residual is re-checked, inside `specialize`.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ConstPool {
-    slots: Vec<(Arc<str>, Value)>,
+    slots: Vec<(Arc<str>, CelValue)>,
 }
 
 impl ConstPool {
-    pub(crate) fn new(slots: Vec<(Arc<str>, Value)>) -> ConstPool {
+    pub(crate) fn new(slots: Vec<(Arc<str>, CelValue)>) -> ConstPool {
         ConstPool { slots }
     }
 
@@ -130,7 +128,7 @@ impl ConstPool {
         self.slots.is_empty()
     }
 
-    pub(crate) fn slots(&self) -> &[(Arc<str>, Value)] {
+    pub(crate) fn slots(&self) -> &[(Arc<str>, CelValue)] {
         &self.slots
     }
 
@@ -162,19 +160,22 @@ pub(crate) fn is_slot_name(name: &str) -> bool {
 ///
 /// Returns the raw residual: no id renumbering and no check that it reads no known root. The slots are numbered in the order the
 /// residual first reads them (pre-order), and a slot the fold made and then dropped is not kept.
+///
+/// The third value is every lowering refusal the fold met (see [`Folder::refused`]).
 pub(crate) fn fold_typed(
     e: &IdedExpr,
-    known: &Context<'static>,
+    known: &Bindings,
     roots: &BTreeSet<String>,
     limits: CelLimits,
     types: &HashMap<u64, CelTy>,
-) -> (IdedExpr, Vec<Slot>) {
-    let mut f = Folder::new(known, roots, limits, types);
+    lowering: Lowering<'_>,
+) -> (IdedExpr, Vec<Slot>, Vec<String>) {
+    let mut f = Folder::new(known, roots, limits, types, lowering);
     let folded = f.fold(e);
     let mut residual = f.residualize(folded, e);
     let made = std::mem::take(&mut f.pool.slots);
     let slots = compact(&mut residual, made);
-    (residual, slots)
+    (residual, slots, f.refused)
 }
 
 /// Keep the slots `e` reads, renamed `$k0`, `$k1`, … in pre-order of first read.
@@ -251,44 +252,44 @@ struct Pooling<'t> {
 }
 
 /// A container value: what a slot holds. Everything else is a scalar and reifies to a literal.
-fn is_composite(v: &Value) -> bool {
-    matches!(v, Value::List(_) | Value::Map(_))
+fn is_composite(v: &CelValue) -> bool {
+    matches!(v, CelValue::List(_) | CelValue::Map(_))
 }
 
 /// Are `a` and `b` the SAME value — not CEL-equal: `0.0` and `-0.0` differ, and a NaN is itself?
 /// Two reads that intern to one slot must be indistinguishable to every operation.
-fn same(a: &Value, b: &Value) -> bool {
+fn same(a: &CelValue, b: &CelValue) -> bool {
     match (a, b) {
-        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
-        (Value::List(x), Value::List(y)) => {
+        (CelValue::Num(x), CelValue::Num(y)) => x.to_bits() == y.to_bits(),
+        (CelValue::List(x), CelValue::List(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| same(p, q))
         }
-        (Value::Map(x), Value::Map(y)) => {
-            x.map.len() == y.map.len()
-                && x.map
-                    .iter()
-                    .all(|(k, v)| y.map.get(k).is_some_and(|w| same(v, w)))
+        (CelValue::Map(x), CelValue::Map(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|((k, v), (l, w))| k == l && same(v, w))
         }
-        (Value::Bool(_), Value::Bool(_))
-        | (Value::String(_), Value::String(_))
-        | (Value::Bytes(_), Value::Bytes(_))
-        | (Value::Null, Value::Null) => a == b,
-        #[cfg(feature = "chrono")]
-        (Value::Duration(_), Value::Duration(_)) => a == b,
+        (CelValue::Bool(_), CelValue::Bool(_))
+        | (CelValue::Str(_), CelValue::Str(_))
+        | (CelValue::Bytes(_), CelValue::Bytes(_))
+        | (CelValue::Null, CelValue::Null)
+        | (CelValue::Duration(_), CelValue::Duration(_)) => a == b,
+        // A lazy view is never interned.
         _ => false,
     }
 }
 
 /// What folding one node produced: a value (the node is gone) or an expression (the node stays).
 pub(crate) enum Folded {
-    Value(Value),
+    Value(CelValue),
     Expr(IdedExpr),
 }
 
 /// A comprehension variable in scope, innermost last.
 enum Local {
     /// Bound to one element of a known range while that range is being unrolled.
-    Known(String, Value),
+    Known(String, CelValue),
     /// The iteration or accumulator variable of a loop that stays in the residual.
     Unknown(String),
 }
@@ -301,25 +302,45 @@ impl Local {
     }
 }
 
-/// The partial evaluator. Every value it folds is computed by `Value::resolve` — the crate's one
-/// evaluator — on a subtree whose every free identifier is known; everything else is rebuilt from
-/// folded children, with only the rewrites the evaluator's own semantics license.
+/// The partial evaluator. Every value it folds is computed by the backend
+/// ([`FastProgram::lower_node`]) — the engine that runs the residual — on a subtree whose every free
+/// identifier is known; everything else is rebuilt from folded children, with only the rewrites
+/// the dialect's semantics license.
 pub(crate) struct Folder<'k> {
-    known: &'k Context<'static>,
+    known: &'k Bindings,
     roots: &'k BTreeSet<String>,
     locals: Vec<Local>,
     // Read by the unroll of a known range, which bounds how many copies of a body it makes.
     limits: CelLimits,
     /// The constant slots a known composite becomes.
     pool: Pooling<'k>,
+    /// The checker's kind of every node of the tree being folded, for lowering a closed subtree.
+    kinds: &'k Kinds,
+    hosts: &'k Arc<HostTable>,
+    enums: &'k EnumTable,
+    /// Why a closed subtree did not lower, first one first. Non-empty makes the specialization fail.
+    pub(crate) refused: Vec<String>,
+    /// Test door: fail every lowering (`fork::specialize_with_lowering_refused`).
+    refuse_all: bool,
+}
+
+/// What the backend needs to lower a closed subtree: the kind of every node of the original tree,
+/// and the environment's host functions and closed string sets.
+pub(crate) struct Lowering<'k> {
+    pub(crate) kinds: &'k Kinds,
+    pub(crate) hosts: &'k Arc<HostTable>,
+    pub(crate) enums: &'k EnumTable,
+    /// Test door: refuse every lowering.
+    pub(crate) refuse_all: bool,
 }
 
 impl<'k> Folder<'k> {
     pub(crate) fn new(
-        known: &'k Context<'static>,
+        known: &'k Bindings,
         roots: &'k BTreeSet<String>,
         limits: CelLimits,
         types: &'k HashMap<u64, CelTy>,
+        lowering: Lowering<'k>,
     ) -> Folder<'k> {
         Folder {
             known,
@@ -330,13 +351,18 @@ impl<'k> Folder<'k> {
                 types,
                 slots: Vec::new(),
             },
+            kinds: lowering.kinds,
+            hosts: lowering.hosts,
+            enums: lowering.enums,
+            refused: Vec::new(),
+            refuse_all: lowering.refuse_all,
         }
     }
 
     /// The expression that stands for the known value `v` in place of `at`: a literal for a scalar;
     /// a constant slot for a composite, typed as the checker typed `at`. `None` when neither exists,
     /// and the caller keeps the node that produced `v`.
-    fn place(&mut self, v: &Value, at: &IdedExpr) -> Option<IdedExpr> {
+    fn place(&mut self, v: &CelValue, at: &IdedExpr) -> Option<IdedExpr> {
         let pool = &mut self.pool;
         if !is_composite(v) {
             return reify(v);
@@ -362,7 +388,7 @@ impl<'k> Folder<'k> {
     /// Can a known element be placed WITHOUT the node that produced it, as a literal? Unrolling
     /// needs this of every element, so it unrolls only over scalars: an element that is itself a
     /// composite keeps the loop, over its slot.
-    fn placeable_element(&self, v: &Value) -> bool {
+    fn placeable_element(&self, v: &CelValue) -> bool {
         !is_composite(v) && reify(v).is_some()
     }
 
@@ -400,15 +426,32 @@ impl<'k> Folder<'k> {
         }
     }
 
-    fn eval(&self, e: &IdedExpr) -> Result<Value, ExecutionError> {
-        let mut scope = self.known.new_inner_scope();
+    /// A closed subtree's value, computed by the backend — the engine that runs the residual.
+    /// `Err(())` keeps the node: the error recurs at run time, in place. A lowering refusal is
+    /// recorded in `refused`, which fails the whole specialization.
+    fn eval(&mut self, e: &IdedExpr) -> Result<CelValue, ()> {
+        let lowered = if self.refuse_all {
+            Err("lowering refused by the test door".to_string())
+        } else {
+            FastProgram::lower_node(e, self.kinds, self.hosts, self.enums)
+        };
+        let program = match lowered {
+            Ok(p) => p,
+            Err(why) => {
+                self.refused.push(why);
+                return Err(());
+            }
+        };
+        let mut scope = self.known.clone();
         for l in &self.locals {
             if let Local::Known(n, v) = l {
-                // Later (inner) locals are added last and win.
-                scope.add_variable_from_value(n.clone(), v.clone());
+                // Later (inner) locals are set last and win, over a root of the same name too —
+                // an unbound identifier in the lowered subtree is a root READ, served from this
+                // scope.
+                scope.set(n, v.clone());
             }
         }
-        Value::resolve(e, &scope)
+        program.eval_value(&scope).map_err(|_| ())
     }
 
     /// Every free identifier of `e` is a known root or a known local. A function NAME is not an
@@ -524,23 +567,21 @@ impl<'k> Folder<'k> {
         })
     }
 
-    /// `_&&_` (`absorbing == false`) and `_||_` (`absorbing == true`), mirroring the evaluator's
-    /// special case for them in `objects.rs` exactly.
+    /// `_&&_` (`absorbing == false`) and `_||_` (`absorbing == true`), by the dialect's rule for them.
     fn logic(&mut self, e: &IdedExpr, c: &CallExpr, absorbing: bool) -> Folded {
         let l = self.fold(&c.args[0]);
         let r = self.fold(&c.args[1]);
         let lb = as_bool(&l);
         let rb = as_bool(&r);
         // The absorbing value on EITHER side decides, whatever the other side is — an error
-        // included: the evaluator answers `(Err, Some(false))` with `false` for `&&` and
-        // `(Err, Some(true))` with `true` for `||`, and it evaluates the right side whenever the
-        // left alone does not decide.
+        // included: `(Err, Some(false))` is `false` for `&&` and `(Err, Some(true))` is `true` for
+        // `||`, and the right side runs whenever the left alone does not decide.
         if lb == Some(absorbing) || rb == Some(absorbing) {
-            return Folded::Value(Value::Bool(absorbing));
+            return Folded::Value(CelValue::Bool(absorbing));
         }
         // Both sides are the identity value: the answer is the identity value.
         if lb.is_some() && rb.is_some() {
-            return Folded::Value(Value::Bool(!absorbing));
+            return Folded::Value(CelValue::Bool(!absorbing));
         }
         // The identity value drops out: the tree is checked, so the other operand is a bool, and
         // `true && x` answers exactly what `x` does — its value, or its error.
@@ -561,7 +602,7 @@ impl<'k> Folder<'k> {
         })
     }
 
-    /// `_?_:_`: the evaluator fails on a non-bool condition and then evaluates ONLY the chosen
+    /// `_?_:_`: a non-bool condition fails, and ONLY the chosen
     /// branch, so a known bool condition picks its branch and the other is dropped unevaluated.
     fn ternary(&mut self, e: &IdedExpr, c: &CallExpr) -> Folded {
         let cond = self.fold(&c.args[0]);
@@ -615,24 +656,21 @@ impl<'k> Folder<'k> {
     /// `exists`, a balanced `&&` chain for `all` (over a list's elements, or a map's keys in sorted
     /// order), and a list literal for a two-argument `map` over a list. `None` keeps the loop:
     /// `exists_one`, `filter`, three-argument `map`, a `map` over a map (whose iteration order the
-    /// evaluator does not fix), a range over `max_unroll`, an element no literal can spell, and any
+    /// dialect does not fix), a range over `max_unroll`, an element no literal can spell, and any
     /// step or result that is not the expander's.
     ///
     /// Each copy of the body is folded with the element bound as a known local, so an inner loop
-    /// that rebinds the same name shadows it exactly as the evaluator's scopes do.
-    fn unroll(&mut self, c: &ComprehensionExpr, range: &Value) -> Option<Folded> {
+    /// that rebinds the same name shadows it, as scopes do.
+    fn unroll(&mut self, c: &ComprehensionExpr, range: &CelValue) -> Option<Folded> {
         let shape = classify(c)?;
         // The loop's answer is its accumulator; anything else is not a shape this rewrite knows.
         if !matches!(&c.result.expr, Expr::Ident(n) if *n == c.accu_var) {
             return None;
         }
-        let items: Vec<Value> = match (range, &shape) {
-            (Value::List(items), _) => items.as_ref().clone(),
-            (Value::Map(m), Fold::Predicate) => {
-                let mut keys: Vec<&Key> = m.map.keys().collect();
-                keys.sort();
-                keys.into_iter().map(Value::from).collect()
-            }
+        let items: Vec<CelValue> = match (range, &shape) {
+            (CelValue::List(items), _) => items.to_vec(),
+            // Keys in sorted order: a map's entries are.
+            (CelValue::Map(m), Fold::Predicate) => m.iter().map(|(k, _)| k.to_value()).collect(),
             _ => return None,
         };
         if items.len() > self.limits.max_unroll || items.iter().any(|v| !self.placeable_element(v))
@@ -675,11 +713,11 @@ impl<'k> Folder<'k> {
                     };
                     self.locals.pop();
                     match (decided, term) {
-                        // The chain absorbs every other copy, error or unknown alike — as the
-                        // evaluator's `&&`/`||` do, and as the loop's pending error is cleared
+                        // The chain absorbs every other copy, error or unknown alike — as
+                        // `&&`/`||` do, and as the loop's pending error is cleared
                         // by an absorbing accumulator.
                         (Some(b), _) if b == absorbing => {
-                            return Some(Folded::Value(Value::Bool(absorbing)))
+                            return Some(Folded::Value(CelValue::Bool(absorbing)))
                         }
                         // The identity element drops out.
                         (Some(_), _) => {}
@@ -688,7 +726,7 @@ impl<'k> Folder<'k> {
                     }
                 }
                 Some(match terms.len() {
-                    0 => Folded::Value(Value::Bool(!absorbing)),
+                    0 => Folded::Value(CelValue::Bool(!absorbing)),
                     // The loop computed `identity op P`, and `P` is a checked bool: the identity
                     // drops out.
                     1 => Folded::Expr(terms.pop().expect("one term")),
@@ -697,7 +735,7 @@ impl<'k> Folder<'k> {
             }
             Fold::Build => {
                 let (filter, appended) = build_parts(&c.loop_step)?;
-                if filter.is_some() || !matches!(range, Value::List(_)) {
+                if filter.is_some() || !matches!(range, CelValue::List(_)) {
                     return None;
                 }
                 let mut elements = Vec::with_capacity(items.len());
@@ -716,7 +754,7 @@ impl<'k> Folder<'k> {
     /// A comprehension that stays in the residual: the range and the author's parts are folded,
     /// with the loop's variables in scope as unknowns so they shadow any known root of the same
     /// name. The expander's plumbing — `accu_init`, `loop_cond`, the step's outer operator and
-    /// `result` — is carried verbatim, because the evaluator's error absorption, the checker's
+    /// `result` — is carried verbatim, because the backend's error absorption, the checker's
     /// classification and the bytecode emitter all read it.
     fn keep_loop(&mut self, e: &IdedExpr, c: &ComprehensionExpr, range: Folded) -> Folded {
         let range = self.residualize(range, &c.iter_range);
@@ -836,7 +874,7 @@ fn balanced(op: &str, terms: Vec<IdedExpr>) -> IdedExpr {
 
 fn as_bool(f: &Folded) -> Option<bool> {
     match f {
-        Folded::Value(Value::Bool(b)) => Some(*b),
+        Folded::Value(CelValue::Bool(b)) => Some(*b),
         _ => None,
     }
 }

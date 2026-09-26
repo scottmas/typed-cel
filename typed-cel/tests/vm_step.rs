@@ -484,3 +484,30 @@ fn a_finished_run_resumed_again_is_an_error_not_a_panic() {
         RunStep::Done(Err(CelError::Bind { .. }))
     ));
 }
+
+/// A paused run holds nothing of the bindings it paused over: the bindings it started with are
+/// dropped, and it finishes over an equal set built again, with the same verdict.
+#[test]
+fn a_paused_run_outlives_its_bindings_clone() {
+    let v = scripted(&[
+        ("y", Slot::Ready(CelValue::Num(2.0))),
+        ("x", Slot::Pending(3)),
+    ]);
+    let src = "[1.0, 2.0].exists(i, i == v.y) && v.x == 1.0 && \"a\" in m";
+    let env = env();
+    let bind = || {
+        let mut act = activation(&env, &[("v", &v)]);
+        act.bind("m", &serde_json::json!({"a": 1.0}))
+            .expect("binds");
+        act.into_bindings()
+    };
+    let program = env.compile(src).expect("compiles");
+    let mut run = VmRun::new(Arc::new(typed_cel::emit(&program).expect("emits")));
+    let vm = Vm::new();
+    let first = bind();
+    need(vm.resume(&mut run, &first));
+    drop(first);
+    v.set("x", Slot::Ready(CelValue::Num(1.0)));
+    let again = bind();
+    assert!(done(vm.resume(&mut run, &again)).expect("finishes"));
+}

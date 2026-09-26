@@ -6,34 +6,15 @@
 //! None has a compiler to enforce it, so each is a source scan — the only kind of check that
 //! catches the fourth leak arriving with the next feature.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::path::{Path, PathBuf};
+
+use support::code_only;
 
 fn src() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
-}
-
-/// Strip `//`-comments. STRING LITERALS ARE KEPT.
-///
-/// Keeping them is the whole difference between a gate and a decoration. The leak this crate
-/// actually had was `if root == "metrics" && agg == "max"` — one environment's variable names, in
-/// a general-purpose data structure, entirely inside string literals. A scanner that stripped
-/// strings would have reported that file clean and this test would have been a decoration.
-///
-/// Comments go, because a doc comment explaining WHY a library file must not name a policy concept
-/// necessarily names one, and scanning prose would force the explanation out of the code.
-fn code_only(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        // Naive, and adequate: a `//` inside a string literal truncates the line early, which can
-        // only ever make this scan MISS something, never invent a leak. There are none today.
-        let line = match line.find("//") {
-            Some(ix) => &line[..ix],
-            None => line,
-        };
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 /// The absorbed fork, listed EXPLICITLY rather than as a directory glob.
@@ -252,16 +233,22 @@ fn push_first(s: &str, out: &mut Vec<String>) {
 /// `specialize`, `derive`, `ty` or `unparse` — the backend lowers the tree the checker produced
 /// and reads the node kinds the checker recorded, and nothing else of it.
 const FAST_MAY_NAME: &[&str] = &[
+    // The checked tree lowering reads (`common::ast`), and the roots a run reads.
     "common",
-    "context",
+    "bindings",
     "duration",
     // The host functions a program calls: data and closures over boundary values, named here the
     // way `lazy` is — never a forge module.
     "hostfn",
     "lazy",
-    "objects",
+    // The one value, and its map, key and duration.
+    "value",
     "CelActivation",
+    "CelDuration",
     "CelError",
+    "CelKey",
+    "CelMap",
+    "CelMapKey",
     "CelProgram",
     "CelValue",
     "ExecutionError",
@@ -314,4 +301,213 @@ fn the_path_scanner_sees_a_checker_import() {
     let paths =
         crate_paths("use crate::check::Checker;\nuse crate::{objects::Value, parser::Parser};");
     assert_eq!(paths, ["check", "objects", "parser"]);
+}
+
+/// Partial evaluation folds a closed subtree by running it on the backend — the engine that runs
+/// the residual — never on the tree evaluator. The positive half (`FastProgram::lower_node`) keeps
+/// the scan from passing on a fold that was simply deleted.
+#[test]
+fn specialize_folds_on_the_backend() {
+    let text = std::fs::read_to_string(src().join("specialize.rs")).expect("readable");
+    let code = code_only(&text);
+    for banned in ["Value::resolve", "resolve_val", ".execute("] {
+        assert!(
+            !code.contains(banned),
+            "src/specialize.rs folds on the tree evaluator: it names `{banned}`"
+        );
+    }
+    assert!(
+        code.contains("FastProgram::lower_node"),
+        "src/specialize.rs does not lower a closed subtree onto the backend"
+    );
+}
+
+/// No public entry point runs a program on the tree evaluator, or carries its function table.
+#[test]
+fn no_public_entry_reaches_the_evaluator() {
+    const ALL: &[&str] = &[
+        ".execute(",
+        "Value::resolve",
+        "env::Env",
+        "tree_host",
+        "with_env",
+    ];
+    let mut leaks = Vec::new();
+    for file in ["activation.rs", "prepared.rs", "lib.rs"] {
+        let text = std::fs::read_to_string(src().join(file)).expect("readable");
+        let code = code_only(&text);
+        for banned in ALL {
+            if code.contains(banned) {
+                leaks.push(format!("src/{file} names `{banned}`"));
+            }
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}
+
+/// Every `.rs` file under `dir`, recursively.
+fn rs_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+        let path = entry.expect("a readable dir entry").path();
+        if path.is_dir() {
+            out.extend(rs_files(&path));
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// No test drives a second engine: every program a test runs is compiled through the checker and
+/// run on the backend.
+#[test]
+fn no_test_names_a_second_engine() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The scans themselves: they name what they ban, as string data.
+    const SCANS: &[&str] = &["tests/purity.rs", "tests/conformance.rs"];
+    let mut files = rs_files(&root.join("tests"));
+    files.extend(rs_files(&root.join("conformance/harness")));
+    for f in ["src/lib.rs"] {
+        files.push(root.join(f));
+    }
+    let mut scanned = 0usize;
+    let mut leaks = Vec::new();
+    for path in files {
+        let rel = path
+            .strip_prefix(root)
+            .expect("under the crate")
+            .display()
+            .to_string();
+        if SCANS.contains(&rel.as_str()) {
+            continue;
+        }
+        scanned += 1;
+        let code = code_only(&std::fs::read_to_string(&path).expect("readable"));
+        for banned in [
+            "fork::Program",
+            "Program::compile",
+            ".execute(",
+            "test_script(",
+        ] {
+            if code.contains(banned) {
+                leaks.push(format!("{rel} names `{banned}`"));
+            }
+        }
+    }
+    assert!(scanned > 40, "only {scanned} files scanned");
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}
+
+/// The tree evaluator and its function-call machinery are deleted: the backend is the only engine.
+#[test]
+fn the_evaluator_is_gone() {
+    let root = src();
+    for gone in [
+        "functions.rs",
+        "magic.rs",
+        "resolvers.rs",
+        "macros.rs",
+        "env.rs",
+    ] {
+        assert!(!root.join(gone).exists(), "src/{gone} still exists");
+    }
+    let mut leaks = Vec::new();
+    for path in rs_files(&root) {
+        let code = code_only(&std::fs::read_to_string(&path).expect("readable"));
+        for banned in [
+            "fn resolve_val",
+            "fn resolve_all",
+            "Value::resolve",
+            "find_overload",
+            "FunctionContext",
+        ] {
+            if code.contains(banned) {
+                leaks.push(format!("{} names `{banned}`", path.display()));
+            }
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}
+
+/// No register or constant carries an ownership bit: a map is indexed one way wherever it lives.
+#[test]
+fn the_backend_tracks_no_ownership() {
+    let mut leaks = Vec::new();
+    for (rel, text) in fast_files() {
+        let code = code_only(&text);
+        for banned in ["Op::Own", "Own {", "fn owned", "fn borrowed", ".steal("] {
+            if code.contains(banned) {
+                leaks.push(format!("{} names `{banned}`", rel.display()));
+            }
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}
+
+/// ONE value model: the fork's `Value` and its serde bridges are gone; `CelValue` is the value.
+#[test]
+fn one_value_model() {
+    let root = src();
+    for gone in ["objects.rs", "ser.rs", "json.rs"] {
+        assert!(!root.join(gone).exists(), "src/{gone} still exists");
+    }
+    let mut leaks = Vec::new();
+    for path in rs_files(&root) {
+        let code = code_only(&std::fs::read_to_string(&path).expect("readable"));
+        for banned in ["objects::", "Value::Float", "into_value", "from_value"] {
+            if names_ident(&code, banned) {
+                leaks.push(format!("{} names `{banned}`", path.display()));
+            }
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}
+
+/// Does `code` name `word` as a whole identifier (or path)? `add_variable_from_value` does not name
+/// `from_value`.
+fn names_ident(code: &str, word: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    code.match_indices(word).any(|(i, _)| {
+        let before = code[..i].chars().next_back();
+        let after = code[i + word.len()..].chars().next();
+        !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+    })
+}
+
+/// ONE store: the fork's variable store, value trait and value types are gone; a register borrows a
+/// `CelValue` and a run reads its roots from `Bindings`.
+#[test]
+fn one_store() {
+    let root = src();
+    for gone in [
+        "context.rs",
+        "common/value.rs",
+        "common/traits.rs",
+        "common/types",
+    ] {
+        assert!(!root.join(gone).exists(), "src/{gone} still exists");
+    }
+    let mut leaks = Vec::new();
+    // The generated ANTLR parser downcasts its own parse-tree contexts, which have nothing to do
+    // with values.
+    let generated = root.join("parser/gen");
+    for path in rs_files(&root)
+        .into_iter()
+        .filter(|p| !p.starts_with(&generated))
+    {
+        let code = code_only(&std::fs::read_to_string(&path).expect("readable"));
+        for banned in [
+            "dyn Val",
+            "LazyAdapter",
+            "Context",
+            "downcast_ref",
+            "common::types",
+        ] {
+            if names_ident(&code, banned) {
+                leaks.push(format!("{} names `{banned}`", path.display()));
+            }
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
 }

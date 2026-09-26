@@ -1,8 +1,8 @@
 //! `CelValue` beyond scalars — bytes, lists, records, null — bound straight into an activation, and
 //! the prepared run-time half of an environment: `CelRuntime`, `bind_fact`, `Vm::eval_result`.
 //!
-//! Every value is checked on BOTH engines (the tree evaluator and the VM over `emit`), so a variant
-//! that converts correctly for one and not the other fails here rather than in a caller.
+//! Every value is run through a compiled program on the backend, so a variant that does not convert
+//! fails here rather than in a caller.
 
 use typed_cel::fork;
 use typed_cel::{
@@ -10,19 +10,12 @@ use typed_cel::{
     CelValue, Record, Vm,
 };
 
-/// `Ok(true)` on the tree evaluator AND on the VM.
-fn true_on_both(p: &CelProgram, act: &CelActivation) {
+/// `Ok(true)` on the backend.
+fn is_true(p: &CelProgram, act: &CelActivation) {
     assert_eq!(
         p.evaluate(act).map_err(|e| e.to_string()),
         Ok(true),
-        "evaluator: `{}`",
-        p.source()
-    );
-    let code = emit(p).expect("emits");
-    assert_eq!(
-        Vm::new().eval(&code, act).map_err(|e| e.to_string()),
-        Ok(true),
-        "vm: `{}`",
+        "`{}`",
         p.source()
     );
 }
@@ -38,11 +31,13 @@ fn same(a: &CelValue, b: &CelValue) -> bool {
         (V::Duration(x), V::Duration(y)) => x == y,
         (V::Bytes(x), V::Bytes(y)) => x == y,
         (V::Null, V::Null) => true,
-        (V::List(x), V::List(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q)),
-        (V::Record(x), V::Record(y)) => {
+        (V::List(x), V::List(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| same(p, q))
+        }
+        (V::Map(x), V::Map(y)) => {
             x.len() == y.len()
                 && x.iter()
-                    .zip(y)
+                    .zip(y.iter())
                     .all(|((kp, vp), (kq, vq))| kp == kq && same(vp, vq))
         }
         _ => false,
@@ -55,12 +50,12 @@ fn a_bytes_value_binds_and_compares() {
     env.declare("x", CelTy::Bytes);
     let p = env.compile(r#"x == b"/ws/\xff""#).expect("compiles");
     let mut act = env.runtime().activation();
-    act.bind_fact("x", CelValue::Bytes(b"/ws/\xff".to_vec()));
-    true_on_both(&p, &act);
+    act.bind_fact("x", CelValue::Bytes(b"/ws/\xff"[..].into()));
+    is_true(&p, &act);
 
     // And a different byte string is not equal — the comparison is on the bytes, not vacuous.
     let mut other = env.runtime().activation();
-    other.bind_fact("x", CelValue::Bytes(b"/ws/\xfe".to_vec()));
+    other.bind_fact("x", CelValue::Bytes(b"/ws/\xfe"[..].into()));
     assert_eq!(p.evaluate(&other).map_err(|e| e.to_string()), Ok(false));
 }
 
@@ -80,13 +75,13 @@ fn a_record_value_is_selectable() {
     let mut act = env.runtime().activation();
     act.bind_fact(
         "r",
-        CelValue::Record(vec![
+        CelValue::record([
             ("a".into(), CelValue::Str("x".into())),
             ("n".into(), CelValue::Num(3.0)),
             ("b".into(), CelValue::Bool(true)),
         ]),
     );
-    true_on_both(&p, &act);
+    is_true(&p, &act);
 }
 
 #[test]
@@ -96,11 +91,11 @@ fn a_list_value_is_iterable() {
     let mut act = env.runtime().activation();
     act.bind_fact(
         "l",
-        CelValue::List(vec![CelValue::Str("a".into()), CelValue::Str("b".into())]),
+        CelValue::list([CelValue::Str("a".into()), CelValue::Str("b".into())]),
     );
     for src in [r#"l.exists(s, s == "b")"#, "size(l) == 2"] {
         let p = env.compile(src).expect("compiles");
-        true_on_both(&p, &act);
+        is_true(&p, &act);
     }
 }
 
@@ -111,7 +106,7 @@ fn null_binds_as_null() {
     let p = env.compile("z == null").expect("compiles");
     let mut act = env.runtime().activation();
     act.bind_fact("z", CelValue::Null);
-    true_on_both(&p, &act);
+    is_true(&p, &act);
 }
 
 /// Bytecode for an expression of any result type, checked against an empty roster.
@@ -125,14 +120,14 @@ fn eval_result_returns_non_bool_values() {
     let act = CelEnvironment::new().runtime().activation();
     let cases: Vec<(&str, CelValue)> = vec![
         (r#""allow""#, CelValue::Str("allow".into())),
-        (r#"b"ab""#, CelValue::Bytes(b"ab".to_vec())),
+        (r#"b"ab""#, CelValue::Bytes(b"ab"[..].into())),
         (
             "[1, 2]",
-            CelValue::List(vec![CelValue::Num(1.0), CelValue::Num(2.0)]),
+            CelValue::list([CelValue::Num(1.0), CelValue::Num(2.0)]),
         ),
         (
             r#"{"k": true}"#,
-            CelValue::Record(vec![(CelKey::new("k"), CelValue::Bool(true))]),
+            CelValue::record([(CelKey::new("k"), CelValue::Bool(true))]),
         ),
         ("null", CelValue::Null),
     ];
@@ -164,7 +159,7 @@ fn bind_fact_does_not_consult_the_roster() {
     let mut declaring = CelEnvironment::new();
     declaring.declare("anything", CelTy::Num);
     let p = declaring.compile("anything == 1").expect("compiles");
-    true_on_both(&p, &act);
+    is_true(&p, &act);
 }
 
 #[test]
@@ -178,15 +173,14 @@ fn a_runtime_outlives_its_environment() {
         // `env` drops here.
     };
     let code = emit(&program).expect("emits");
-    let (mut vm_hits, mut tree_hits) = (0, 0);
+    let mut hits = 0;
     for i in 0..1000 {
         let mut act = runtime.activation();
         act.bind_fact("x", CelValue::Num(i as f64));
-        vm_hits += Vm::new().eval(&code, &act).expect("vm evaluates") as usize;
-        tree_hits += program.evaluate(&act).expect("evaluator evaluates") as usize;
+        hits += Vm::new().eval(&code, &act).expect("evaluates") as usize;
     }
     // Exactly x = 999: every activation read ITS OWN binding.
-    assert_eq!((vm_hits, tree_hits), (1, 1));
+    assert_eq!(hits, 1);
 }
 
 #[test]
@@ -195,4 +189,60 @@ fn the_runtime_is_send_and_sync() {
     assert_send_sync::<CelRuntime>();
     assert_send_sync::<CelBytecode>();
     assert_send_sync::<CelProgram>();
+}
+
+/// A record built with `CelValue::record` binds and reads back member by member.
+#[test]
+fn a_record_binds_and_reads_back() {
+    let mut env = CelEnvironment::new();
+    env.declare(
+        "r",
+        Record::new("r", [("a", CelTy::Num), ("b", CelTy::Str)]),
+    );
+    let mut act = env.runtime().activation();
+    act.bind_fact(
+        "r",
+        CelValue::record([
+            (CelKey::new("a"), 1.0.into()),
+            (CelKey::new("b"), "x".into()),
+        ]),
+    );
+    let p = env
+        .compile(r#"r.a == 1.0 && r.b == "x""#)
+        .expect("compiles");
+    is_true(&p, &act);
+    let read = fork::compile_any(&env, "r.b").expect("compiles");
+    let got = Vm::new()
+        .eval_result(&emit(&read).expect("emits"), &act)
+        .expect("evaluates");
+    assert_eq!(got, CelValue::from("x"));
+}
+
+/// A duration keeps nanoseconds: in a program, and from a host function.
+#[test]
+fn a_duration_keeps_nanoseconds() {
+    let env = CelEnvironment::new();
+    let p = env
+        .compile_returning(
+            "[duration('1ns')][0] + duration('1ns') > duration('1ns')",
+            &CelTy::Bool,
+        )
+        .expect("compiles");
+    is_true(&p, &env.runtime().activation());
+
+    let mut env = CelEnvironment::new();
+    env.register_host(
+        "tick",
+        &[],
+        CelTy::Duration,
+        false,
+        std::sync::Arc::new(|_: &[CelValue]| {
+            Ok(CelValue::Duration(typed_cel::CelDuration::from_nanos(1)))
+        }),
+    )
+    .expect("registers");
+    let p = env.compile("tick() < duration('2ns')").expect("compiles");
+    is_true(&p, &env.runtime().activation());
+    let p = env.compile("tick() > duration('0ns')").expect("compiles");
+    is_true(&p, &env.runtime().activation());
 }

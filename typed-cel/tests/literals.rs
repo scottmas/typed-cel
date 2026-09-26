@@ -6,17 +6,20 @@
 //! failures. A table here is what makes a red legible: the corpus reports a byte vector, and
 //! `\X41` versus `\x41` is not something anyone spots in a byte vector.
 //!
-//! Everything goes through `Program::compile`, so a literal is tested the way a policy reaches
-//! it — the delimiter stripping, the prefix flags and the escape table are one question, and they
-//! have been answered in two different places before.
+//! Everything goes through the compile a policy goes through and runs on the backend, so a literal
+//! is tested the way a policy reaches it — the delimiter stripping, the prefix flags and the escape
+//! table are one question, and they have been answered in two different places before.
 
-use typed_cel::fork::objects::Value;
-use typed_cel::fork::{Context, Program};
+#[path = "support/mod.rs"]
+mod support;
+
+use typed_cel::CelError;
+use typed_cel::CelValue as Value;
 
 /// Evaluate `src` and return the string it produced, or the refusal.
 fn string(src: &str) -> Result<String, String> {
     match value(src)? {
-        Value::String(s) => Ok(s.to_string()),
+        Value::Str(s) => Ok(s.to_string()),
         other => Err(format!("not a string: {other:?}")),
     }
 }
@@ -30,10 +33,12 @@ fn bytes(src: &str) -> Result<Vec<u8>, String> {
 }
 
 fn value(src: &str) -> Result<Value, String> {
-    Program::compile(src)
-        .map_err(|e| format!("parse: {e}"))?
-        .execute(&Context::default())
-        .map_err(|e| format!("eval: {e}"))
+    support::run_closed(src).map_err(|e| format!("eval: {e}"))
+}
+
+/// `src` is refused by the PARSER — never admitted, so it has no value to compare.
+fn parse_refuses(src: &str) -> bool {
+    matches!(support::refused_closed(src), CelError::Parse { .. })
 }
 
 /// A triple-quoted literal loses THREE delimiters at each end, not one.
@@ -154,7 +159,7 @@ fn every_cel_escape_decodes_in_a_bytes_literal() {
 fn an_escape_the_dialect_does_not_have_is_still_an_error() {
     for src in [r"'\q'", r"b'\q'", r#""\e""#, r"'''\q'''"] {
         assert!(
-            value(src).is_err(),
+            parse_refuses(src),
             "`{src}` decoded instead of reporting an unknown escape"
         );
     }
@@ -227,7 +232,7 @@ fn an_uppercase_hex_prefix_is_not_cel() {
     }
     for src in ["0XFF == 255", "-0XFF == -255"] {
         assert!(
-            value(src).is_err(),
+            parse_refuses(src),
             "`{src}` parsed; the reference grammar has no uppercase hex prefix"
         );
     }

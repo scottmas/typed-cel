@@ -1,9 +1,9 @@
-use crate::common::types::{CelBool, CelBytes, CelDouble, CelNull, CelString};
-use crate::common::value::Val;
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+pub mod literal;
 pub mod operators;
+
+use literal::{Bool as CelBool, Bytes as CelBytes, Double as CelDouble, String as CelString};
 
 pub struct Ast {
     pub expr: IdedExpr,
@@ -48,20 +48,6 @@ pub enum LiteralValue {
     Int(i64),
     Null,
     String(CelString),
-}
-
-impl LiteralValue {
-    pub fn to_val<'a>(&'a self) -> Cow<'a, dyn Val> {
-        // todo refactor to return Cow::Borrowed
-        match &self {
-            LiteralValue::Boolean(b) => Cow::Borrowed(b),
-            LiteralValue::Bytes(b) => Cow::Borrowed(b),
-            LiteralValue::Double(f) => Cow::Borrowed(f),
-            LiteralValue::Int(i) => Cow::<dyn Val>::Owned(Box::new(CelDouble::from(*i as f64))),
-            LiteralValue::Null => Cow::<dyn Val>::Owned(Box::new(CelNull)),
-            LiteralValue::String(s) => Cow::Borrowed(s),
-        }
-    }
 }
 
 /// The only entry a literal is built from. `removed: protobuf` took the struct-field arm with

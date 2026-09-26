@@ -1,11 +1,11 @@
 //! The mix equation: specializing a program against the roots known now, then evaluating the
 //! residual on the rest, is evaluating the program on everything — on the reference evaluator and
-//! on the backend alike.
+//! over bound values and read by field alike.
 //!
 //! ```text
-//! column 1   P.evaluate(K ∪ U)                          the reference, unspecialized
-//! column 2   env.specialize(P, K)?.evaluate(U)          the reference, on the residual
-//! column 3   Vm::eval(&emit(&env.specialize(P, K)?), U) the backend, on the residual
+//! column 1   P.evaluate(K ∪ U)                          the original, over bound values
+//! column 2   env.specialize(P, K)?.evaluate(U)          the residual, over bound values
+//! column 3   residual.decide(JsonFacts(U))              the residual, read by field
 //! ```
 //!
 //! Two outcomes agree when both are `Ok(b)` with the same `b`, or both are `Err(_)`. Error identity
@@ -17,8 +17,9 @@
 //! `LazyValue` serving a number for a `bool` field could make `true && x` (native:
 //! `NoSuchOverload`) and its residual `x` differ. Every case here binds through `bind` only.
 //!
-//! A fourth column, the VM on the original program, is a GUARD: when it disagrees with column 1 the
-//! row is reported as a VM defect, so a column-3 failure is never pinned on the specializer.
+//! A fourth column, the original read by field, is a GUARD: when it disagrees with column 1 the row
+//! is reported as a host defect, so a column-3 failure is never pinned on the specializer. Columns 3
+//! and 4 run only where every field the program reads is a scalar.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -58,15 +59,16 @@ fn rows() -> Vec<(String, Row)> {
 fn the_mix_equation_holds() {
     let rows = rows();
     assert!(rows.len() >= 2_000, "only {} rows", rows.len());
-    // Column 3 has no fallback: every residual runs on the backend.
+    // No fallback: every residual lowers.
     let fast = rows.iter().filter(|(_, r)| r.ran_fast()).count();
+    let by_field = rows.iter().filter(|(_, r)| r.c3.is_some()).count();
     println!(
-        "column 3: {fast} of {} residuals ran on the backend",
+        "{fast} of {} residuals lowered; column 3 (read by field) ran on {by_field}",
         rows.len()
     );
     let failing: Vec<&(String, Row)> = rows
         .iter()
-        .filter(|(_, r)| !r.holds() || !r.vm_guard_holds())
+        .filter(|(_, r)| !r.holds() || !r.guard_holds())
         .collect();
     // Two populations, reported apart: a residual that DISAGREES, and a program `specialize`
     // REFUSED (with default limits no generated program exceeds a bound, so every refusal is a
@@ -101,7 +103,13 @@ fn the_mix_equation_holds() {
         first(&disagree),
         first(&refused),
     );
-    assert_eq!(fast, rows.len(), "a residual did not run on the backend");
+    assert_eq!(fast, rows.len(), "a residual did not lower");
+    // Measured: 1212 of 2000. The floor keeps column 3 a real population.
+    assert!(
+        by_field * 2 >= rows.len(),
+        "column 3 ran on only {by_field} of {} rows",
+        rows.len()
+    );
 }
 
 #[test]
@@ -218,11 +226,7 @@ fn worked(src: &str, p: J, r: J, residual: &str, want: Option<bool>) {
     let env = api_env();
     let label = format!("`{src}` with req = {r}");
     let row = mix::row(&env, src, vec![("policy", p)], vec![("req", r)]);
-    assert!(
-        row.holds() && row.vm_guard_holds(),
-        "{}",
-        row.report(&label)
-    );
+    assert!(row.holds() && row.guard_holds(), "{}", row.report(&label));
     assert_eq!(row.residual_source(), residual, "{label}");
     if let Some(want) = want {
         assert_eq!(row.c1, Ok(want), "{label}");

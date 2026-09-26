@@ -1,5 +1,5 @@
 //! What an embedding ENVIRONMENT declares beyond its variables' types: host functions — typed for
-//! the checker, pure, and dispatched by both the tree evaluator and the fast backend — and closed
+//! the checker, pure, and dispatched by the backend — and closed
 //! string sets. The dialect itself stays closed — see README "There are
 //! no custom functions": these belong to one environment, not to the language.
 //!
@@ -47,7 +47,8 @@ pub(crate) enum HostImpl {
     /// A pure closure over a table fixed when the environment was built: folded when every
     /// argument is known, and callable while lowering.
     Closure(HostCall),
-    /// Answered by the run's [`HostDispatch`]; unknown to the tree evaluator and the specializer.
+    /// Answered by the run's [`HostDispatch`]; unknown to the specializer, which keeps a call to
+    /// one symbolic.
     PerCall,
 }
 

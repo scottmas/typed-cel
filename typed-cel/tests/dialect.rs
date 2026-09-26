@@ -16,18 +16,19 @@
 
 use std::rc::Rc;
 
-use typed_cel::fork::{Context, Program};
 use typed_cel::{CelEnvironment, CelTy, Record};
 
 /// What the dialect does with an expression: a value, or a refusal.
 ///
-/// Both refusal shapes collapse to `Err` on purpose. `Program::compile` and `Program::execute`
-/// are two phases of one question — "can a policy write this?" — and a removal that moved from one
-/// phase to the other is still a removal.
+/// Every refusal shape collapses to `Err` on purpose. Parse, check and run are phases of one
+/// question — "can a policy write this?" — and a removal that moved from one phase to another is
+/// still a removal. A program the checker admits runs on the backend.
 fn eval(src: &str) -> Result<String, String> {
-    let program = Program::compile(src).map_err(|e| format!("parse: {e}"))?;
-    program
-        .execute(&Context::default())
+    let program = typed_cel::fork::compile_any(&CelEnvironment::new(), src)
+        .map_err(|e| format!("refused: {e}"))?;
+    let code = typed_cel::FastProgram::new(&program)
+        .unwrap_or_else(|e| panic!("`{src}` checks but does not lower: {e}"));
+    typed_cel::fork::fast_value(&code, &CelEnvironment::new().runtime().activation())
         .map(|v| format!("{v:?}"))
         .map_err(|e| format!("eval: {e}"))
 }
@@ -64,7 +65,7 @@ fn message_construction_is_gone() {
     ]);
 
     // And the refusal happens at PARSE, so a policy carrying one never reaches an activation.
-    let err = Program::compile("TestAllTypes{single_int32: 1}")
+    let err = typed_cel::fork::parse("TestAllTypes{single_int32: 1}")
         .err()
         .expect("message construction parses today; it must not");
     let err = err.to_string();
@@ -422,30 +423,9 @@ fn backtick_field_selection_is_gone() {
     assert!(env.compile("m['content-type'] == 1").is_ok());
 }
 
-/// Both runtimes over `src`: the evaluator's answer (on the parsed tree) and the backend's (on the
-/// same source, checked — the backend runs checked programs only), rendered.
-fn eval_and_vm(src: &str) -> (Result<String, String>, Result<String, String>) {
-    let program = Program::compile(src).unwrap_or_else(|e| panic!("`{src}` must parse: {e}"));
-    let checked = typed_cel::fork::compile_any(&CelEnvironment::new(), src)
-        .unwrap_or_else(|e| panic!("`{src}` must type-check: {e}"));
-    let fast =
-        typed_cel::FastProgram::new(&checked).unwrap_or_else(|e| panic!("`{src}` must lower: {e}"));
-    let ctx = Context::default();
-    let render = |r: Result<typed_cel::fork::Value, typed_cel::ExecutionError>| {
-        r.map(|v| format!("{v:?}"))
-            .map_err(|e| format!("eval: {e}"))
-    };
-    (
-        render(program.execute(&ctx)),
-        render(typed_cel::fork::fast_value(&fast, &ctx)),
-    )
-}
-
-/// `src` evaluates to `want` on the evaluator AND on the VM.
-fn both_give(src: &str, want: &str) {
-    let (eval, vm) = eval_and_vm(src);
-    assert_eq!(eval, Ok(want.to_string()), "evaluator, `{src}`");
-    assert_eq!(vm, Ok(want.to_string()), "VM, `{src}`");
+/// `src` evaluates to `want` (its `Debug` text) on the backend.
+fn gives(src: &str, want: &str) {
+    assert_eq!(eval(src), Ok(want.to_string()), "`{src}`");
 }
 
 /// `removed: integer values`
@@ -465,55 +445,46 @@ fn integer_values_are_gone() {
     activation.bind("x", &serde_json::json!(2)).unwrap();
     assert_eq!(
         program.evaluate(&activation).map_err(|e| e.to_string()),
-        Ok(true),
-        "evaluator"
-    );
-    let bytecode = typed_cel::emit(&program).expect("emits");
-    assert_eq!(
-        typed_cel::Vm::new()
-            .eval(&bytecode, &activation)
-            .map_err(|e| e.to_string()),
-        Ok(true),
-        "VM"
+        Ok(true)
     );
 
     // Every number an expression produces is a double, whichever way it was spelled.
-    both_give("1 + 2", "Float(3.0)");
-    both_give("-7", "Float(-7.0)");
-    both_give("size([1, 2])", "Float(2.0)");
-    both_give("duration('90s').getSeconds()", "Float(90.0)");
-    both_give("[1, 2][0]", "Float(1.0)");
+    gives("1 + 2", "Float(3.0)");
+    gives("-7", "Float(-7.0)");
+    gives("size([1, 2])", "Float(2.0)");
+    gives("duration('90s').getSeconds()", "Float(90.0)");
+    gives("[1, 2][0]", "Float(1.0)");
 
     // Division is IEEE division: no truncation, and no division-by-zero error — spec CEL's
     // doubles answer `+inf`, and so does this dialect's only number.
-    both_give("7 / 2 == 3.5", "Bool(true)");
-    both_give("7 / 2", "Float(3.5)");
-    both_give("1 / 0", "Float(inf)");
-    both_give("-1 / 0", "Float(-inf)");
+    gives("7 / 2 == 3.5", "Bool(true)");
+    gives("7 / 2", "Float(3.5)");
+    gives("1 / 0", "Float(inf)");
+    gives("-1 / 0", "Float(-inf)");
 
     // A literal beyond 2^53 is read as the nearest double, not as an exact integer: the
     // negation of 9007199254740993 is -9007199254740992.
-    both_give("-(9007199254740993)", "Float(-9007199254740992.0)");
-    both_give("-(9007199254740993) == -9007199254740992.0", "Bool(true)");
+    gives("-(9007199254740993)", "Float(-9007199254740992.0)");
+    gives("-(9007199254740993) == -9007199254740992.0", "Bool(true)");
 
     // No overflow either: what was an i64 overflow is ordinary double arithmetic now.
-    both_give(
+    gives(
         "9223372036854775807 + 1 == 9223372036854775808.0",
         "Bool(true)",
     );
 
     // A map key spelled as an integer is a double key, and an integral double finds it.
-    both_give("{1: 'a'}[1.0]", "String(\"a\")");
-    both_give("{1.0: 'a'}[1]", "String(\"a\")");
+    gives("{1: 'a'}[1.0]", "String(\"a\")");
+    gives("{1.0: 'a'}[1]", "String(\"a\")");
 }
 
 /// A list index is a double. An integral one indexes; a fraction is refused with the evaluator's
 /// index error rather than rounded, because rounding would make `l[0.5]` silently mean `l[0]`.
 #[test]
 fn index_by_an_integral_double() {
-    both_give("[10, 20, 30][1.0]", "Float(20.0)");
-    both_give("[10, 20, 30][size([1])]", "Float(20.0)");
-    both_give("[10, 20, 30][4 / 2]", "Float(30.0)");
+    gives("[10, 20, 30][1.0]", "Float(20.0)");
+    gives("[10, 20, 30][size([1])]", "Float(20.0)");
+    gives("[10, 20, 30][4 / 2]", "Float(30.0)");
 }
 
 #[test]
@@ -523,17 +494,15 @@ fn index_by_a_fraction_is_refused() {
         "[10, 20, 30][1 / 2]",
         "[10, 20, 30][-1]",
     ] {
-        let (eval, vm) = eval_and_vm(src);
-        for (who, got) in [("evaluator", &eval), ("VM", &vm)] {
-            let err = got
-                .as_ref()
-                .err()
-                .unwrap_or_else(|| panic!("{who}: `{src}` must be refused, got {got:?}"));
-            assert!(
-                err.contains("Index out of bounds"),
-                "{who}: `{src}` must fail with the index error, got {err}"
-            );
-        }
+        let got = eval(src);
+        let err = got
+            .as_ref()
+            .err()
+            .unwrap_or_else(|| panic!("`{src}` must be refused, got {got:?}"));
+        assert!(
+            err.contains("Index out of bounds"),
+            "`{src}` must fail with the index error, got {err}"
+        );
     }
 }
 

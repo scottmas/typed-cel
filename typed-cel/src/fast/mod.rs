@@ -1,15 +1,21 @@
-//! The fast typed backend: a register machine over unboxed values, reading host data by field.
+//! The engine: a register machine over unboxed values, reading host data by field.
 //!
-//! A checked program has concrete types and one number kind, so its values need no box: a
-//! [`Reg`](reg::Reg) holds a bool or a double by value and a string by reference into the host's
-//! data, the constant pool, or the run's arena. Every name resolves at lowering (`lower.rs`) — a
-//! root to a [`FieldId`], a comprehension variable to a register, a function to an op — and a
-//! known list's `exists` or `in` becomes one matcher built once (`matcher.rs`).
+//! A CHECKED program is lowered once (`lower.rs`) and run by `exec`. There is no other engine and no
+//! fallback: a program the checker admitted lowers, or `FastProgram::new` refuses it as a defect.
 //!
-//! The tree evaluator is the specification. Every op mirrors one arm of `objects.rs::resolve_val`,
-//! error text included; a failing op jumps to the handler its lowering named, and `&&`/`||` absorb
-//! exactly as the evaluator does. There is NO fallback: a program the checker admitted either
-//! lowers here or `FastProgram::new` refuses it, and the gates count how many ran.
+//! The semantics, which every op and every lowering follows:
+//! - Evaluation order is left to right; a member call's arguments run before its target.
+//! - `a || b`, `a && b`: an error on the left is caught and the right side still runs; an absorbing
+//!   value (`true` for `||`, `false` for `&&`) on EITHER side decides; otherwise an error propagates,
+//!   and when both sides failed it is the RIGHT side's.
+//! - `c ? a : b` runs only the chosen branch; an error in `c` propagates.
+//! - A comprehension keeps its FIRST pending step error; an absorbing accumulator clears it.
+//! - A map literal checks each key before its value runs; a later duplicate key wins.
+//! - Indexing: a list by an integral in-range number, else `IndexOutOfBounds`; a map by a key of its
+//!   key type, else `NoSuchKey` — including a number that names no key (`1.5`).
+//! - Numbers are IEEE doubles: `1 / 0` is `+inf`, there is no integer overflow and no `%`.
+//! Error TEXT is part of the contract (callers render it); `tests/backend_edges.rs` and
+//! `tests/generated_golden.rs` pin it.
 //!
 //! This file names only the absorbed value model, the lazy seam and `fast`'s own modules — never
 //! the parser or the checker.
@@ -22,15 +28,14 @@ mod reg;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::common::types::{CelList, CelMap, CelMapKey, CelString};
-use crate::common::value::Val;
-use crate::context::Context;
-use crate::objects::Value;
+use crate::bindings::Bindings;
+use crate::CelValue;
 use crate::ExecutionError;
+use crate::{CelKey, CelMapKey};
 
-use crate::lazy::{Access, DemandHandle, LazyAdapter, Presence};
+use crate::lazy::{self, Access, DemandHandle, LazyValue, Presence};
 
-use host::{CtxHost, Dispatching, FactsHost, Host, Miss, SplitHost, Want};
+use host::{Dispatching, FactsHost, Host, Miss, RootsHost, SplitHost, Want};
 pub use host::{FactPoll, Facts, FieldId, FieldPath};
 use matcher::StrMatcher;
 use reg::{Keep, Reg, Store};
@@ -109,13 +114,10 @@ pub(crate) enum Op {
         f: u32,
         err: Pc,
     },
-    /// Read a comprehension variable — borrowed, as the evaluator reads a variable.
+    /// Read a comprehension variable.
     Local {
         dst: R,
         src: R,
-    },
-    Own {
-        r: R,
     },
     Select {
         dst: R,
@@ -285,9 +287,8 @@ pub(crate) enum Op {
     Catch {
         dst: R,
     },
-    /// `a || b` / `a && b` once `a` did not decide it and `b` is in `dst` (`objects.rs`,
-    /// `LOGICAL_OR`/`LOGICAL_AND`): an erroring `a` is absorbed by a deciding `b`, and raised
-    /// otherwise.
+    /// `a || b` / `a && b` once `a` did not decide it and `b` is in `dst`: an erroring `a` is
+    /// absorbed by a deciding `b`, and raised otherwise.
     Absorb {
         dst: R,
         a: R,
@@ -349,7 +350,7 @@ pub(crate) enum Op {
         err: Pc,
     },
     /// Call host function `h` on the `n` registers from `start` (the receiver first, for a
-    /// member): `hostfn::HostTable`'s entry, as the evaluator's registry calls it.
+    /// member): `hostfn::HostTable`'s entry.
     Host {
         dst: R,
         start: R,
@@ -369,7 +370,7 @@ pub(crate) enum Op {
 
 impl Op {
     /// The variant's name, by an exhaustive match — a new op does not compile until it is named
-    /// here, and `tests/vm_differential.rs::the_generators_reach_every_op` compares what the
+    /// here, and `tests/backend_generated.rs::the_generators_reach_every_op` compares what the
     /// generators lower to against these names.
     pub(crate) fn name(&self) -> &'static str {
         use Op::*;
@@ -379,7 +380,6 @@ impl Op {
             Read { .. } => "Read",
             Has { .. } => "Has",
             Local { .. } => "Local",
-            Own { .. } => "Own",
             Select { .. } => "Select",
             HasOf { .. } => "HasOf",
             Index { .. } => "Index",
@@ -468,7 +468,6 @@ impl Op {
             IterNext { exit, .. } => *exit = at(*exit),
             Const { .. }
             | Local { .. }
-            | Own { .. }
             | Eq { .. }
             | Ne { .. }
             | EqK { .. }
@@ -495,8 +494,8 @@ pub(crate) enum CVal {
     Dur(chrono::Duration),
     Str(Box<str>),
     Bytes(Box<[u8]>),
-    /// A list or map, and whether the evaluator holds it owned (a literal) or borrowed (a slot).
-    Dyn(Box<dyn Val>, bool),
+    /// A list or map: a literal, or a residual's constant slot.
+    Val(CelValue),
     Err(ExecutionError),
 }
 
@@ -528,7 +527,7 @@ impl CVal {
             CVal::Dur(d) => Reg::Dur(*d),
             CVal::Str(s) => Reg::Str(s),
             CVal::Bytes(b) => Reg::Bytes(b),
-            CVal::Dyn(v, owned) => Reg::Dyn(v.as_ref(), *owned),
+            CVal::Val(v) => Reg::Val(v),
             CVal::Err(_) => Reg::Unset,
         }
     }
@@ -540,7 +539,7 @@ pub(crate) struct Code {
     pub(crate) ops: Vec<Op>,
     pub(crate) consts: Vec<CVal>,
     /// Member names a computed select reads.
-    pub(crate) names: Vec<CelString>,
+    pub(crate) names: Vec<CelKey>,
     pub(crate) fields: Vec<FieldPath>,
     pub(crate) matchers: Vec<StrMatcher>,
     pub(crate) regexes: Vec<Result<regex::Regex, ExecutionError>>,
@@ -602,6 +601,22 @@ impl FastProgram {
         })
     }
 
+    /// One node of a CHECKED tree, lowered on its own — what the partial evaluator runs to fold a
+    /// closed subtree. `kinds` is the checker's kind for every node of the tree `e` belongs to; every
+    /// unbound identifier in `e` is read from the context it runs over. `Err` is a lowering refusal:
+    /// a defect of this backend, which the caller reports rather than works around.
+    pub(crate) fn lower_node(
+        e: &crate::common::ast::IdedExpr,
+        kinds: &Kinds,
+        hosts: &Arc<crate::hostfn::HostTable>,
+        enums: &crate::hostfn::EnumTable,
+    ) -> Result<FastProgram, String> {
+        Ok(FastProgram {
+            code: lower::lower(e, kinds, &[], hosts, enums)?,
+            source: Arc::from(""),
+        })
+    }
+
     /// The program's source, as [`CelProgram::source`](crate::CelProgram::source) has it.
     pub fn source(&self) -> &str {
         &self.source
@@ -660,8 +675,8 @@ impl FastProgram {
     /// The verdict over `activation`'s values — the contract, and the error text, of
     /// [`CelProgram::evaluate`](crate::CelProgram::evaluate).
     pub fn eval(&self, activation: &crate::CelActivation) -> Result<bool, crate::CelError> {
-        let host = CtxHost {
-            ctx: activation.context(),
+        let host = RootsHost {
+            roots: activation.roots(),
             fields: &self.code.fields,
             wait: false,
         };
@@ -676,17 +691,7 @@ impl FastProgram {
         &self,
         activation: &crate::CelActivation,
     ) -> Result<crate::CelValue, crate::CelError> {
-        let v = self.eval_value(activation.context());
-        match v {
-            Ok(v) => crate::CelValue::from_value(&v).ok_or_else(|| crate::CelError::Evaluation {
-                source: self.source.clone(),
-                message: format!("produced {v:?}, which has no CelValue form"),
-            }),
-            Err(e) => Err(crate::CelError::Evaluation {
-                source: self.source.clone(),
-                message: format!("could not be evaluated: {e}"),
-            }),
-        }
+        self.result_value(self.eval_value(activation.roots()))
     }
 
     /// [`eval_result`](FastProgram::eval_result), with `dispatch` answering every CALL host.
@@ -697,30 +702,24 @@ impl FastProgram {
     ) -> Result<crate::CelValue, crate::CelError> {
         let cell = std::cell::RefCell::new(dispatch);
         let host = Dispatching {
-            inner: CtxHost {
-                ctx: activation.context(),
+            inner: RootsHost {
+                roots: activation.roots(),
                 fields: &self.code.fields,
                 wait: false,
             },
             dispatch: &cell,
         };
         let mut scratch = FastScratch::default();
-        let v = run(&self.code, &host, &mut scratch, |r, errs| {
-            reg::to_value(r, errs)
-        })
-        .and_then(|v| v);
+        let v = run(&self.code, &host, &mut scratch, reg::to_cel).and_then(|v| v);
         self.result_value(v)
     }
 
     fn result_value(
         &self,
-        v: Result<Value, ExecutionError>,
+        v: Result<CelValue, ExecutionError>,
     ) -> Result<crate::CelValue, crate::CelError> {
         match v {
-            Ok(v) => crate::CelValue::from_value(&v).ok_or_else(|| crate::CelError::Evaluation {
-                source: self.source.clone(),
-                message: format!("produced {v:?}, which has no CelValue form"),
-            }),
+            Ok(v) => Ok(v),
             Err(e) => Err(crate::CelError::Evaluation {
                 source: self.source.clone(),
                 message: format!("could not be evaluated: {e}"),
@@ -742,18 +741,15 @@ impl FastProgram {
         out
     }
 
-    /// The boundary value over an evaluator context, as `Program::execute` returns it.
-    pub(crate) fn eval_value(&self, ctx: &Context) -> Result<Value, ExecutionError> {
-        let host = CtxHost {
-            ctx,
+    /// The boundary value over a context of bound values.
+    pub(crate) fn eval_value(&self, roots: &Bindings) -> Result<CelValue, ExecutionError> {
+        let host = RootsHost {
+            roots,
             fields: &self.code.fields,
             wait: false,
         };
         let mut scratch = FastScratch::default();
-        run(&self.code, &host, &mut scratch, |r, errs| {
-            reg::to_value(r, errs)
-        })
-        .and_then(|v| v)
+        run(&self.code, &host, &mut scratch, reg::to_cel).and_then(|v| v)
     }
 
     /// The verdict over the caller's own data. `scratch` is reused from call to call, so a
@@ -828,7 +824,7 @@ impl FastProgram {
         };
         let out = run(&self.code, &host, scratch, |r, errs| match r {
             Reg::Num(n) => Ok(n),
-            other => Err(reg::to_value(other, errs).unwrap_or(Value::Null)),
+            other => Err(reg::to_cel(other, errs).unwrap_or(CelValue::Null)),
         });
         match out {
             Ok(Ok(n)) => Ok(n),
@@ -851,7 +847,7 @@ impl FastProgram {
     ) -> Result<Option<usize>, crate::CelError> {
         let out = run(&self.code, host, scratch, |r, errs| match r {
             Reg::Str(s) => Ok(tags.iter().position(|t| *t == s)),
-            other => Err(reg::to_value(other, errs).unwrap_or(Value::Null)),
+            other => Err(reg::to_cel(other, errs).unwrap_or(CelValue::Null)),
         });
         match out {
             Ok(Ok(tag)) => Ok(tag),
@@ -869,10 +865,10 @@ impl FastProgram {
 
 /// A run's result as a verdict, converting only what is not a bool.
 #[inline]
-fn as_bool(r: Reg<'_>, errs: &[ExecutionError]) -> Result<bool, Value> {
+fn as_bool(r: Reg<'_>, errs: &[ExecutionError]) -> Result<bool, CelValue> {
     match r {
         Reg::Bool(b) => Ok(b),
-        other => Err(reg::to_value(other, errs).unwrap_or(Value::Null)),
+        other => Err(reg::to_cel(other, errs).unwrap_or(CelValue::Null)),
     }
 }
 
@@ -880,7 +876,7 @@ fn as_bool(r: Reg<'_>, errs: &[ExecutionError]) -> Result<bool, Value> {
 #[inline]
 fn verdict(
     source: &Arc<str>,
-    out: Result<Result<bool, Value>, ExecutionError>,
+    out: Result<Result<bool, CelValue>, ExecutionError>,
 ) -> Result<bool, crate::CelError> {
     match out {
         Ok(Ok(b)) => Ok(b),
@@ -900,9 +896,12 @@ enum Iter<'a> {
     Idle,
     Regs(&'a [Reg<'a>], usize),
     Pairs(&'a [(Reg<'a>, Reg<'a>)], usize),
-    Vals(&'a [Box<dyn Val>], usize),
-    Keys(std::collections::hash_map::Keys<'a, CelMapKey, Box<dyn Val>>),
-    Other(Box<dyn crate::common::traits::Iterator<'a> + 'a>),
+    /// A bound list's elements.
+    Vals(&'a [CelValue], usize),
+    /// A bound map's keys, in key order.
+    MapKeys(&'a [(CelMapKey, CelValue)], usize),
+    /// A lazy view's keys.
+    LazyKeys(Box<dyn Iterator<Item = &'a CelKey> + 'a>),
 }
 
 /// A run's working memory, kept between runs so a warmed decision allocates nothing.
@@ -1031,7 +1030,7 @@ fn exec<'a, H: Host<'a>>(
                     pc = to as usize;
                 }
             }
-            Op::Local { dst, src } => regs[dst as usize] = regs[src as usize].borrowed(),
+            Op::Local { dst, src } => regs[dst as usize] = regs[src as usize],
             Op::Read { dst, f, want, err } => match host.read(f, want, st) {
                 Ok(v) => regs[dst as usize] = v,
                 Err(Miss::Err(e)) => {
@@ -1205,16 +1204,13 @@ fn slow<'a, H: Host<'a>>(
             regs[dst as usize] = tryh!(host.read(f, want, st), err);
         }
         Op::Has { dst, f, err } => regs[dst as usize] = Reg::Bool(tryh!(host.has(f, st), err)),
-        Op::Local { dst, src } => regs[dst as usize] = regs[src as usize].borrowed(),
-        Op::Own { r } => regs[r as usize] = regs[r as usize].owned(),
+        Op::Local { dst, src } => regs[dst as usize] = regs[src as usize],
         Op::Select { dst, obj, key, err } => {
             let name = &code.names[key as usize];
             if let Some(lazy) = lazy_of(waits, regs[obj as usize]) {
-                // `reg::select` on a lazy: `Indexer::get`, an owned answer, held owned.
-                regs[dst as usize] = match tryr!(lazy.poll_read(name.inner()), err) {
-                    Access::Ready(v) => {
-                        reg::of_cow(std::borrow::Cow::Owned(v.into_val()), true, st).owned()
-                    }
+                // `reg::select` on a lazy: the member it answers, kept in the store.
+                regs[dst as usize] = match tryr!(lazy::poll_read(lazy, name.as_str()), err) {
+                    Access::Ready(v) => reg::of_owned(v, st),
                     Access::Pending(h) => return Flow::Need(h),
                 };
                 return Flow::Next;
@@ -1225,7 +1221,7 @@ fn slow<'a, H: Host<'a>>(
         Op::HasOf { dst, obj, key, err } => {
             let name = &code.names[key as usize];
             if let Some(lazy) = lazy_of(waits, regs[obj as usize]) {
-                regs[dst as usize] = match tryr!(lazy.poll_presence(name.inner()), err) {
+                regs[dst as usize] = match tryr!(lazy::poll_presence(lazy, name.as_str()), err) {
                     Presence::Known(b) => Reg::Bool(b),
                     Presence::Pending(h) => return Flow::Need(h),
                 };
@@ -1238,13 +1234,13 @@ fn slow<'a, H: Host<'a>>(
             if let (Some(lazy), Reg::Str(name)) =
                 (lazy_of(waits, regs[a as usize]), regs[b as usize])
             {
-                regs[dst as usize] = match tryr!(lazy.poll_read(name), err) {
-                    Access::Ready(v) => reg::of_val(st.val(v.into_val()), true),
+                regs[dst as usize] = match tryr!(lazy::poll_read(lazy, name), err) {
+                    Access::Ready(v) => reg::of_owned(v, st),
                     Access::Pending(h) => return Flow::Need(h),
                 };
                 return Flow::Next;
             }
-            let v = reg::index(regs[a as usize], regs[b as usize], st, errs);
+            let v = reg::index(regs[a as usize], regs[b as usize], st);
             regs[dst as usize] = tryr!(v, err);
         }
         Op::Not { dst, a, err } => match regs[a as usize] {
@@ -1279,7 +1275,7 @@ fn slow<'a, H: Host<'a>>(
             if let (Reg::Str(name), Some(lazy)) =
                 (regs[a as usize], lazy_of(waits, regs[b as usize]))
             {
-                regs[dst as usize] = match tryr!(lazy.poll_presence(name), err) {
+                regs[dst as usize] = match tryr!(lazy::poll_presence(lazy, name), err) {
                     Presence::Known(b) => Reg::Bool(b),
                     Presence::Pending(h) => return Flow::Need(h),
                 };
@@ -1365,7 +1361,7 @@ fn slow<'a, H: Host<'a>>(
         },
         Op::MakeList { dst, start, n } => {
             let items = regs[start as usize..start as usize + n as usize].to_vec();
-            regs[dst as usize] = Reg::List(st.regs(items), true);
+            regs[dst as usize] = Reg::List(st.regs(items));
         }
         Op::CheckKey { r, err } => tryr!(reg::check_key(regs[r as usize]), err),
         Op::MakeMap { dst, start, n } => {
@@ -1382,7 +1378,7 @@ fn slow<'a, H: Host<'a>>(
                     None => pairs.push((k, v)),
                 }
             }
-            regs[dst as usize] = Reg::Map(st.pairs(pairs), true);
+            regs[dst as usize] = Reg::Map(st.pairs(pairs));
         }
         Op::Jump { to } => *pc = to as usize,
         Op::BrTrue { r, to } => {
@@ -1473,20 +1469,15 @@ fn slow<'a, H: Host<'a>>(
         }
         Op::IterInit { slot, src, err } => {
             let it = match regs[src as usize] {
-                Reg::List(l, _) => Iter::Regs(l, 0),
-                Reg::Map(m, _) => Iter::Pairs(m, 0),
-                Reg::Dyn(v, _) => {
-                    if let Some(l) = v.downcast_ref::<CelList>() {
-                        Iter::Vals(l.inner(), 0)
-                    } else if let Some(m) = v.downcast_ref::<CelMap>() {
-                        Iter::Keys(m.inner().keys())
-                    } else {
-                        match v.as_iterable() {
-                            Some(it) => Iter::Other(it.iter()),
-                            None => fail!(ExecutionError::NoSuchOverload, err),
-                        }
-                    }
-                }
+                Reg::List(l) => Iter::Regs(l, 0),
+                Reg::Map(m) => Iter::Pairs(m, 0),
+                Reg::Val(CelValue::List(l)) => Iter::Vals(l, 0),
+                Reg::Val(CelValue::Map(m)) => Iter::MapKeys(m.entries(), 0),
+                // A view with no keys is not iterable.
+                Reg::Val(CelValue::Lazy(l)) => match l.keys() {
+                    Some(keys) => Iter::LazyKeys(keys),
+                    None => fail!(ExecutionError::NoSuchOverload, err),
+                },
                 _ => fail!(ExecutionError::NoSuchOverload, err),
             };
             iters[slot as usize] = it;
@@ -1504,10 +1495,13 @@ fn slow<'a, H: Host<'a>>(
                 }),
                 Iter::Vals(l, i) => l.get(*i).map(|v| {
                     *i += 1;
-                    reg::of_val(v.as_ref(), false)
+                    reg::of_cel(v)
                 }),
-                Iter::Keys(ks) => ks.next().map(|k| reg::of_val(k.inner(), false)),
-                Iter::Other(it) => it.next().map(|v| reg::of_val(v, false)),
+                Iter::MapKeys(m, i) => m.get(*i).map(|(k, _)| {
+                    *i += 1;
+                    reg::key_reg(k)
+                }),
+                Iter::LazyKeys(ks) => ks.next().map(|k| Reg::Str(k.as_str())),
             };
             match next {
                 Some(r) => regs[dst as usize] = r,
@@ -1603,21 +1597,21 @@ fn slow<'a, H: Host<'a>>(
                 crate::CelValue::Bool(b) => Reg::Bool(b),
                 crate::CelValue::Num(x) => Reg::Num(x),
                 crate::CelValue::Null => Reg::Null,
-                crate::CelValue::Str(x) => Reg::Str(st.str(x)),
-                crate::CelValue::Bytes(x) => Reg::Bytes(st.bytes(x)),
-                crate::CelValue::Duration(ms) => Reg::Dur(chrono::Duration::milliseconds(ms)),
+                crate::CelValue::Str(x) => Reg::Str(st.str(x.to_string())),
+                crate::CelValue::Bytes(x) => Reg::Bytes(st.bytes(x.to_vec())),
+                crate::CelValue::Duration(d) => Reg::Dur(d.delta()),
                 // A CALL host's record, read by member.
                 lazy @ crate::CelValue::Lazy(_)
                     if matches!(entry.imp, crate::hostfn::HostImpl::PerCall) =>
                 {
-                    reg::of_val(st.val(lazy.into_val()), true)
+                    reg::of_owned(lazy, st)
                 }
                 crate::CelValue::Lazy(_) => fail!(
                     crate::hostfn::failure(&entry.name, "a host function returned a lazy value"),
                     err
                 ),
-                // A composite, owned, as the evaluator holds a function's result.
-                composite => reg::of_val(st.val(composite.into_val()), true),
+                // A composite, kept in the store.
+                composite => reg::of_owned(composite, st),
             };
         }
         Op::Ret { r } => return Flow::Ret(regs[r as usize]),
@@ -1628,11 +1622,12 @@ fn slow<'a, H: Host<'a>>(
 }
 
 /// The lazy a register holds, for a run that waits; `None` otherwise, so the op takes its usual
-/// path — which is also the evaluator's, "not yet" read as an error.
-fn lazy_of<'a>(waits: bool, r: Reg<'a>) -> Option<&'a LazyAdapter> {
-    match r {
-        Reg::Dyn(v, _) if waits => v.downcast_ref::<LazyAdapter>(),
-        _ => None,
+/// path, "not yet" read as an error.
+fn lazy_of<'a>(waits: bool, r: Reg<'a>) -> Option<&'a dyn LazyValue> {
+    if waits {
+        reg::lazy_of(r)
+    } else {
+        None
     }
 }
 
@@ -1643,20 +1638,9 @@ fn in_mask(t: u8, mask: u64) -> bool {
 }
 
 /// A register as a host function's argument: a lazy view is the view itself, a string is copied
-/// out, anything else converts through the boundary value. `None` for a value with no `CelValue`
-/// spelling.
+/// out, anything else converts to its value.
 fn host_arg(r: Reg<'_>, errs: &[ExecutionError]) -> Option<crate::CelValue> {
-    match r {
-        Reg::Bool(b) => Some(crate::CelValue::Bool(b)),
-        Reg::Num(x) => Some(crate::CelValue::Num(x)),
-        Reg::Str(x) => Some(crate::CelValue::Str(x.to_string())),
-        Reg::Null => Some(crate::CelValue::Null),
-        Reg::Dyn(v, _) if v.downcast_ref::<LazyAdapter>().is_some() => {
-            let lazy = v.downcast_ref::<LazyAdapter>()?;
-            Some(crate::CelValue::Lazy(Arc::clone(&lazy.0)))
-        }
-        other => crate::CelValue::from_value(&reg::to_value(other, errs).ok()?),
-    }
+    reg::to_cel(r, errs).ok()
 }
 
 /// `a == k` for a scalar constant `k`, with the string case — a tag, an enum value — inline.
@@ -1681,8 +1665,8 @@ fn arith<'a>(
     let unsupported = |name: &'static str| {
         ExecutionError::UnsupportedBinaryOperator(
             name,
-            reg::to_value(a, errs).unwrap_or(Value::Null),
-            reg::to_value(b, errs).unwrap_or(Value::Null),
+            reg::to_cel(a, errs).unwrap_or(CelValue::Null),
+            reg::to_cel(b, errs).unwrap_or(CelValue::Null),
         )
     };
     Ok(match (op, a, b) {
@@ -1699,17 +1683,25 @@ fn arith<'a>(
         (Arith::Add, Reg::Dur(x), Reg::Dur(y)) => Reg::Dur(
             x.checked_add(&y)
                 .filter(crate::duration::in_cel_range)
-                .ok_or(ExecutionError::Overflow("add", Value::Null, Value::Null))?,
+                .ok_or(ExecutionError::Overflow(
+                    "add",
+                    CelValue::Null,
+                    CelValue::Null,
+                ))?,
         ),
         (Arith::Sub, Reg::Dur(x), Reg::Dur(y)) => Reg::Dur(
             x.checked_sub(&y)
                 .filter(crate::duration::in_cel_range)
-                .ok_or(ExecutionError::Overflow("sub", Value::Null, Value::Null))?,
+                .ok_or(ExecutionError::Overflow(
+                    "sub",
+                    CelValue::Null,
+                    CelValue::Null,
+                ))?,
         ),
         (Arith::Add, _, _) => match (reg::elements(a), reg::elements(b)) {
             (Some(mut x), Some(y)) => {
                 x.extend(y);
-                Reg::List(st.regs(x), true)
+                Reg::List(st.regs(x))
             }
             _ => return Err(unsupported("add")),
         },
@@ -1766,7 +1758,7 @@ impl std::fmt::Debug for Paused {
 enum Held<'a> {
     Idle,
     Regs(&'a [Reg<'a>], usize),
-    Vals(&'a [Box<dyn Val>], usize),
+    Vals(&'a [CelValue], usize),
 }
 
 impl Paused {
@@ -1806,19 +1798,17 @@ pub(crate) enum Resumed {
 
 impl Code {
     /// Is `v` one of this program's constants (so a paused run may keep pointing at it)?
-    fn holds(&self, v: &dyn Val) -> bool {
+    fn holds(&self, v: &CelValue) -> bool {
         self.consts.iter().any(|c| match c {
-            CVal::Dyn(b, _) => std::ptr::addr_eq(&**b as *const dyn Val, v as *const dyn Val),
+            CVal::Val(b) => std::ptr::eq(b, v),
             _ => false,
         })
     }
 
     /// Is `l` the elements of one of this program's constant lists?
-    fn holds_list(&self, l: &[Box<dyn Val>]) -> bool {
+    fn holds_list(&self, l: &[CelValue]) -> bool {
         self.consts.iter().any(|c| match c {
-            CVal::Dyn(b, _) => b
-                .downcast_ref::<CelList>()
-                .is_some_and(|x| std::ptr::eq(x.inner().as_ptr(), l.as_ptr())),
+            CVal::Val(CelValue::List(x)) => std::ptr::eq(x.as_ptr(), l.as_ptr()),
             _ => false,
         })
     }
@@ -1830,18 +1820,19 @@ fn rehome<'a>(r: Reg<'a>, code: &'a Code, out: &mut Store<'a>) -> Reg<'a> {
     match r {
         Reg::Str(s) => Reg::Str(out.str(s.to_string())),
         Reg::Bytes(b) => Reg::Bytes(out.bytes(b.to_vec())),
-        Reg::Dyn(v, _) if code.holds(v) => r,
-        Reg::Dyn(v, owned) => Reg::Dyn(out.val(v.clone_as_boxed()), owned),
-        Reg::List(l, owned) => {
+        Reg::Val(v) if code.holds(v) => r,
+        // One `Arc` bump: the value is shared, not copied.
+        Reg::Val(v) => Reg::Val(out.value(v.clone())),
+        Reg::List(l) => {
             let items = l.iter().map(|x| rehome(*x, code, out)).collect();
-            Reg::List(out.regs(items), owned)
+            Reg::List(out.regs(items))
         }
-        Reg::Map(m, owned) => {
+        Reg::Map(m) => {
             let pairs = m
                 .iter()
                 .map(|(k, v)| (rehome(*k, code, out), rehome(*v, code, out)))
                 .collect();
-            Reg::Map(out.pairs(pairs), owned)
+            Reg::Map(out.pairs(pairs))
         }
         Reg::Unset | Reg::Bool(_) | Reg::Num(_) | Reg::Null | Reg::Dur(_) | Reg::Err(_) => r,
     }
@@ -1854,18 +1845,9 @@ fn hold<'a>(it: Iter<'a>, code: &'a Code, out: &mut Store<'a>) -> Held<'a> {
         Iter::Vals(l, i) if code.holds_list(l) => return Held::Vals(l, i),
         Iter::Regs(l, i) => l[i..].to_vec(),
         Iter::Pairs(m, i) => m[i..].iter().map(|(k, _)| *k).collect(),
-        Iter::Vals(l, i) => l[i..]
-            .iter()
-            .map(|v| reg::of_val(v.as_ref(), false))
-            .collect(),
-        Iter::Keys(ks) => ks.map(|k| reg::of_val(k.inner(), false)).collect(),
-        Iter::Other(mut it) => {
-            let mut rest = Vec::new();
-            while let Some(v) = it.next() {
-                rest.push(reg::of_val(v, false));
-            }
-            rest
-        }
+        Iter::Vals(l, i) => l[i..].iter().map(reg::of_cel).collect(),
+        Iter::MapKeys(m, i) => m[i..].iter().map(|(k, _)| reg::key_reg(k)).collect(),
+        Iter::LazyKeys(ks) => ks.map(|k| Reg::Str(k.as_str())).collect(),
     };
     let rest = rest.into_iter().map(|r| rehome(r, code, out)).collect();
     Held::Regs(out.regs(rest), 0)
@@ -1882,7 +1864,7 @@ impl<'a> Held<'a> {
 }
 
 impl FastProgram {
-    /// Run `p` on until it finishes or a read is not answerable yet. The roots are `ctx`'s,
+    /// Run `p` on until it finishes or a read is not answerable yet. The roots are `roots`,
     /// except the fields `facts` marks, which its provider answers.
     ///
     /// A pause leaves `pc` on the read that asked, so the next resume executes that read again and
@@ -1890,11 +1872,11 @@ impl FastProgram {
     pub(crate) fn resume<F: Facts + ?Sized>(
         &self,
         p: Paused,
-        ctx: &Context,
+        roots: &Bindings,
         facts: Option<(&F, &[bool])>,
     ) -> Resumed {
-        let ctx = CtxHost {
-            ctx,
+        let ctx = RootsHost {
+            roots,
             fields: &self.code.fields,
             wait: true,
         };
@@ -1990,9 +1972,8 @@ impl FastProgram {
 /// The node kinds of a checked program, by expression id.
 pub(crate) type Kinds = HashMap<u64, Kind>;
 
-/// The fast backend's run over an evaluator context: the boundary value, as `Program::execute`
-/// returns it. For the crate's own harnesses.
+/// A run over a context of bound values, to the boundary value. For the crate's own harnesses.
 #[cfg(feature = "conformance")]
-pub(crate) fn run_value(p: &FastProgram, ctx: &Context) -> Result<Value, ExecutionError> {
-    p.eval_value(ctx)
+pub(crate) fn run_value(p: &FastProgram, roots: &Bindings) -> Result<CelValue, ExecutionError> {
+    p.eval_value(roots)
 }

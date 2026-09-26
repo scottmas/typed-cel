@@ -1,7 +1,9 @@
 //! Running one corpus case against this crate, and deciding whether it agreed.
 
-use typed_cel::fork::objects::{Map, Value};
-use typed_cel::fork::{Context, Program};
+use typed_cel::fork;
+// The dialect's value, beside the corpus's own `CelValue`.
+use typed_cel::CelValue as Value;
+use typed_cel::{CelKey, CelMap, CelMapKey, FastProgram};
 
 use super::case::{Binding, Case, CelValue, Expect};
 
@@ -14,7 +16,7 @@ use super::case::{Binding, Case, CelValue, Expect};
 /// an exclusion names the dialect row it cites.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
-    /// The checker admitted it, and the evaluator agreed with the corpus.
+    /// The checker admitted it, and the backend agreed with the corpus.
     Pass,
     /// The case expects an evaluation ERROR and the checker refused the program first. Both
     /// refuse it, so this is agreement — reached statically. Never for a case that expects a
@@ -34,9 +36,8 @@ impl Outcome {
 }
 
 /// Run one case: declare every binding at the type its VALUE has, compile the expression through
-/// `CelEnvironment::compile`, and — when the checker admits it — evaluate it. The evaluator is the
-/// executable specification the fast backend is held to (`tests/vm_differential.rs` runs every
-/// case this admits on the backend too); what the checker adds is the dialect.
+/// the checker a policy compiles through, and — when the checker admits it — run it on the backend,
+/// the engine every policy runs on. What the checker adds is the dialect.
 ///
 /// A non-`bool` expression is ADMITTED when the checker typed it and only the result kind stood
 /// between it and a policy: `compile` insists on `bool` because a policy is a predicate, not
@@ -44,7 +45,7 @@ impl Outcome {
 /// an element type nothing pinned rather than a value: every construct that PRODUCES a `dyn`
 /// value is refused by the checker where it is written, and a policy's result is `bool` anyway.
 ///
-/// A PANIC, in the checker or the evaluator, is a `Fail` rather than an abort: the corpus
+/// A PANIC, in the checker or the backend, is a `Fail` rather than an abort: the corpus
 /// deliberately feeds values a careless implementation mishandles, and letting one escape would
 /// take the other cases with it. Catching it here means ONE definition of the outcome, shared by
 /// the report and the generated tests.
@@ -67,22 +68,22 @@ pub fn run(case: &Case) -> Outcome {
             None => return Outcome::Fail(format!("binding `{name}`: cannot type {v:?}")),
         }
     }
+    // Compiled ONCE: `compile_any` is `compile` without the `bool` requirement, so admission is
+    // exactly `compile` succeeding or refusing only with `NotBoolean` — and the program it admits is
+    // the one that runs.
     let admitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        match env.compile(&case.expr) {
-            Ok(_) => Ok(()),
-            Err(typed_cel::CelError::NotBoolean { .. }) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
+        fork::compile_any(&env, &case.expr).map_err(|e| e.to_string())
     }));
     match admitted {
-        Ok(Ok(())) => {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| evaluate(case))) {
+        Ok(Ok(program)) => {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                evaluate(case, &program)
+            })) {
                 Ok(Ok(())) => Outcome::Pass,
                 Ok(Err(why)) => Outcome::Fail(why),
-                Err(payload) => Outcome::Fail(format!(
-                    "panicked in the evaluator: {}",
-                    panic_text(payload)
-                )),
+                Err(payload) => {
+                    Outcome::Fail(format!("panicked in the backend: {}", panic_text(payload)))
+                }
             }
         }
         Ok(Err(refusal)) if matches!(case.expect, Expect::EvalError) => {
@@ -101,20 +102,24 @@ fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "<non-string panic>".into())
 }
 
-/// Evaluate an ADMITTED case and compare it with the corpus's expectation.
-fn evaluate(case: &Case) -> Result<(), String> {
-    let program = Program::compile(&case.expr).map_err(|e| format!("parse: {e}"))?;
+/// Run an ADMITTED case on the backend and compare it with the corpus's expectation. Every checked
+/// program lowers; a refusal is a defect of the backend and FAILS the case.
+fn evaluate(case: &Case, program: &typed_cel::CelProgram) -> Result<(), String> {
+    let code = FastProgram::new(program)
+        .map_err(|e| format!("the backend refused a checked program: {e}"))?;
 
-    let mut ctx = Context::default();
+    let mut act = typed_cel::CelEnvironment::new().runtime().activation();
     for (name, binding) in &case.bindings {
         let Binding::Value(v) = binding else { continue };
         match to_runtime(v) {
-            Some(value) => ctx.add_variable_from_value(name.clone(), value),
+            Some(value) => {
+                act.bind_fact(name, value);
+            }
             None => return Err(format!("binding `{name}`: cannot represent {v:?}")),
         }
     }
 
-    match (&case.expect, program.execute(&ctx)) {
+    match (&case.expect, fork::fast_value(&code, &act)) {
         (Expect::EvalError, Err(_)) => Ok(()),
         (Expect::EvalError, Ok(v)) => Err(format!("expected an eval error, got {v:?}")),
 
@@ -140,10 +145,10 @@ pub fn to_runtime(v: &CelValue) -> Option<Value> {
         // widen a host integer (`From<i64> for Value`) and as an integer literal does. What the
         // harness keeps strict is the EXPECTATION (see `equal`): a case that wants an integer
         // back asks for a kind the runtime no longer has.
-        CelValue::Int(i) => Value::Float(*i as f64),
-        CelValue::Double(d) => Value::Float(*d),
-        CelValue::String(s) => Value::String(s.clone().into()),
-        CelValue::Bytes(b) => Value::Bytes(b.clone().into()),
+        CelValue::Int(i) => Value::Num(*i as f64),
+        CelValue::Double(d) => Value::Num(*d),
+        CelValue::String(s) => Value::Str(s.as_str().into()),
+        CelValue::Bytes(b) => Value::Bytes(b.as_slice().into()),
         CelValue::List(items) => Value::List(
             items
                 .iter()
@@ -152,11 +157,11 @@ pub fn to_runtime(v: &CelValue) -> Option<Value> {
                 .into(),
         ),
         CelValue::Map(entries) => {
-            let mut map = std::collections::HashMap::new();
+            let mut map = Vec::new();
             for (k, val) in entries {
-                map.insert(to_runtime(k)?.try_into().ok()?, to_runtime(val)?);
+                map.push((key_of(&to_runtime(k)?)?, to_runtime(val)?));
             }
-            Value::Map(Map { map: map.into() })
+            Value::Map(CelMap::new(map))
         }
         // `removed: uint` — there is no unsigned runtime type, so a uint binding or expectation
         // has no representation at all. Mapping it onto `Int` would be a silent re-typing that
@@ -166,6 +171,16 @@ pub fn to_runtime(v: &CelValue) -> Option<Value> {
         CelValue::Object { .. } | CelValue::Enum { .. } | CelValue::Type(_) => return None,
         CelValue::Unsupported(_) => return None,
     })
+}
+
+/// The map key a runtime value names: a string, a bool, or an integral number.
+fn key_of(v: &Value) -> Option<CelMapKey> {
+    match v {
+        Value::Str(s) => Some(CelMapKey::Str(CelKey::new(s))),
+        Value::Bool(b) => Some(CelMapKey::Bool(*b)),
+        Value::Num(n) if n.fract() == 0.0 => Some(CelMapKey::Num(*n as i64)),
+        _ => None,
+    }
 }
 
 /// Does the runtime value match what the corpus expects?
@@ -181,20 +196,20 @@ fn equal(want: &CelValue, got: &Value) -> bool {
         // values`), so an integer expectation fails by kind and its case is EXCLUDED.
         // NaN is not equal to itself, but "the expression produced NaN" is exactly what several
         // fp_math cases assert, so the expectation is compared structurally rather than by `==`.
-        (CelValue::Double(a), Value::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
-        (CelValue::String(a), Value::String(b)) => a.as_str() == b.as_str(),
-        (CelValue::Bytes(a), Value::Bytes(b)) => a.as_slice() == b.as_slice(),
+        (CelValue::Double(a), Value::Num(b)) => a == b || (a.is_nan() && b.is_nan()),
+        (CelValue::String(a), Value::Str(b)) => a.as_str() == &**b,
+        (CelValue::Bytes(a), Value::Bytes(b)) => a.as_slice() == &**b,
         (CelValue::List(a), Value::List(b)) => {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(w, g)| equal(w, g))
         }
         (CelValue::Map(a), Value::Map(b)) => {
-            if a.len() != b.map.len() {
+            if a.len() != b.len() {
                 return false;
             }
             a.iter().all(|(k, v)| {
                 to_runtime(k)
-                    .and_then(|k| k.try_into().ok())
-                    .and_then(|k: typed_cel::fork::objects::Key| b.map.get(&k).cloned())
+                    .and_then(|k| key_of(&k))
+                    .and_then(|k| b.iter().find(|(got, _)| **got == k).map(|(_, g)| g.clone()))
                     .is_some_and(|got| equal(v, &got))
             })
         }
