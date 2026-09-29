@@ -77,8 +77,8 @@ $B --combine ablation.1.txt ablation.2.txt ablation.3.txt \
 
 Each cell: median ns/eval (allocations/eval).
 
-Measured after the fast-path work (inline hot ops, the stack register path, fused
-read-compare-branch ops, the specializer's folds; see the fast-path ledger below).
+Measured after the fast-path work, the cost-model cliff fixes, the loop floor and the
+precomputed-head string-set matchers (see the fast-path ledger below).
 
 The headline puts the historical column (2) beside this run's columns. Every ratio below is read
 within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else from this one.
@@ -86,13 +86,13 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 <!-- ablation:begin -->
 | workload | Rust | (1) upstream | (2) typed tree † | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
 |---|---:|---:|---:|---:|---:|---:|
-| `fs_open_allow_all` | 8.1 ns (0) | 5121 ns (92) | 4612 ns (92) | 893 ns† (2) | n/a (composite root: `policy.fs.writable_roots`) | 31.3 ns (0) |
-| `fs_open_13` | 32.7 ns (0) | 12.2 µs† (248.8) | 11.0 µs (248.8) | 2798 ns (9) | n/a (composite root: `policy.fs.writable_roots`) | 123 ns† (0) |
-| `fs_open_1000` | 1490 ns (0) | 882.5 µs (17064.4) | 829.6 µs (17064.4) | 213.9 µs (578.8) | n/a (composite root: `policy.fs.writable_roots`) | 366 ns† (0) |
-| `prefix_13` | 35.2 ns (0) | 12.3 µs (247.8) | 11.7 µs (247.8) | 4257 ns (15) | n/a (composite root: `policy.roots`) | 59.3 ns (0) |
-| `nested_fields` | 9.0 ns (0) | 9742 ns (193) | 8460 ns (193) | 312 ns (0) | 42.5 ns (0) | — (reads no policy) |
-| `all_items` | 19.0 ns (0) | 23.0 µs (455.4) | 20.7 µs (481.8) | 3298 ns (2) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `policy_residual` | 25.5 ns (0) | 6933 ns (143.1) | 6223 ns (143.1) | 2154 ns (9.4) | n/a (composite root: `policy.methods`) | 86.2 ns (0) |
+| `fs_open_allow_all` | 8.0 ns (0) | 4812 ns (92) | 4612 ns (92) | 449 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 31.5 ns (0) |
+| `fs_open_13` | 34.6 ns (0) | 11.4 µs (248.8) | 11.0 µs (248.8) | 622 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 75.8 ns (0) |
+| `fs_open_1000` | 1390 ns (0) | 865.1 µs (17064.4) | 829.6 µs (17064.4) | 10.8 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 171 ns (0) |
+| `prefix_13` | 41.0 ns (0) | 12.4 µs† (247.8) | 11.7 µs (247.8) | 429 ns (0) | n/a (composite root: `policy.roots`) | 48.8 ns (0) |
+| `nested_fields` | 8.7 ns (0) | 9330 ns (193) | 8460 ns (193) | 243 ns (0) | 36.7 ns (0) | — (reads no policy) |
+| `all_items` | 18.0 ns (0) | 22.4 µs (455.4) | 20.7 µs (481.8) | 773 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `policy_residual` | 26.8 ns (0) | 6944 ns (143.1) | 6223 ns (143.1) | 558 ns (0) | n/a (composite root: `policy.methods`) | 60.2 ns (0) |
 
 † Column (2) is historical: measured on the typed dialect's first engine, since deleted (docs/PERFORMANCE.md, "Historical"). Every other column is this run.
 <!-- ablation:end -->
@@ -101,47 +101,47 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 
 | workload | Rust | (1) upstream | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
 |---|---:|---:|---:|---:|---:|
-| `prefix_1` | 10.8 ns (0) | 1460 ns (28.2) | 562 ns (3.5) | n/a (composite root: `policy.roots`) | 42.2 ns (0) |
-| `prefix_13` | 35.2 ns (0) | 12.3 µs (247.8) | 4257 ns (15) | n/a (composite root: `policy.roots`) | 59.3 ns (0) |
-| `prefix_1000` | 2331 ns (0) | 949.9 µs (18256.8) | 298.3 µs (822) | n/a (composite root: `policy.roots`) | 207 ns (0) |
-| `fs_open_allow_all` | 8.1 ns (0) | 5121 ns (92) | 893 ns† (2) | n/a (composite root: `policy.fs.writable_roots`) | 31.3 ns (0) |
-| `fs_open_13` | 32.7 ns (0) | 12.2 µs† (248.8) | 2798 ns (9) | n/a (composite root: `policy.fs.writable_roots`) | 123 ns† (0) |
-| `fs_open_1000` | 1490 ns (0) | 882.5 µs (17064.4) | 213.9 µs (578.8) | n/a (composite root: `policy.fs.writable_roots`) | 366 ns† (0) |
-| `method_in_literal` | 7.1 ns (0) | 555 ns (13) | 131 ns (0) | 44.5 ns (0) | — (reads no policy) |
-| `method_in_policy` | 9.3 ns (0) | 568 ns (13) | 217 ns (0) | n/a (composite root: `policy.methods`) | 43.6 ns (0) |
-| `user_eq` | 7.7 ns (0) | 373 ns (6.9) | 199 ns (0) | 49.9 ns (0) | 47.7 ns (0) |
-| `nested_fields` | 9.0 ns (0) | 9742 ns (193) | 312 ns (0) | 42.5 ns (0) | — (reads no policy) |
-| `short_circuit_first` | 7.3 ns (0) | 5123 ns (99.5) | 569 ns (0) | 79.1 ns (0) | — (reads no policy) |
-| `short_circuit_last` | 7.2 ns (0) | 8953 ns (175) | 915 ns (0) | 93.1 ns (0) | — (reads no policy) |
-| `all_items` | 19.0 ns (0) | 23.0 µs (455.4) | 3298 ns (2) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `exists_items` | 16.5 ns (0) | 20.2 µs (416.2) | 2508 ns (2) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `durations` | 7.1 ns (0) | 758 ns (10) | 189 ns (0) | 70.4 ns (0) | — (reads no policy) |
-| `streamed_body_early` | — (streamed row) | 51.9 µs (579.2) | 40.4 µs (538) | 3278 ns (22.2) | — (streamed row) |
-| `streamed_body_late` | — (streamed row) | 50.4 µs (579.2) | 41.0 µs (538) | 15.3 µs (63.2) | — (streamed row) |
-| `policy_residual` | 25.5 ns (0) | 6933 ns (143.1) | 2154 ns (9.4) | n/a (composite root: `policy.methods`) | 86.2 ns (0) |
+| `prefix_1` | 11.3 ns (0) | 1529 ns (28.2) | 247 ns (0) | n/a (composite root: `policy.roots`) | 40.2 ns (0) |
+| `prefix_13` | 41.0 ns (0) | 12.4 µs† (247.8) | 429 ns (0) | n/a (composite root: `policy.roots`) | 48.8 ns (0) |
+| `prefix_1000` | 2479 ns (0) | 914.9 µs (18256.8) | 14.4 µs (0) | n/a (composite root: `policy.roots`) | 110 ns (0) |
+| `fs_open_allow_all` | 8.0 ns (0) | 4812 ns (92) | 449 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 31.5 ns (0) |
+| `fs_open_13` | 34.6 ns (0) | 11.4 µs (248.8) | 622 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 75.8 ns (0) |
+| `fs_open_1000` | 1390 ns (0) | 865.1 µs (17064.4) | 10.8 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 171 ns (0) |
+| `method_in_literal` | 7.2 ns (0) | 540 ns (13) | 125 ns (0) | 41.9 ns (0) | — (reads no policy) |
+| `method_in_policy` | 9.1 ns (0) | 561 ns† (13) | 166 ns (0) | n/a (composite root: `policy.methods`) | 40.9 ns (0) |
+| `user_eq` | 7.8 ns (0) | 341 ns (6.9) | 152 ns (0) | 41.1 ns (0) | 38.1 ns (0) |
+| `nested_fields` | 8.7 ns (0) | 9330 ns (193) | 243 ns (0) | 36.7 ns (0) | — (reads no policy) |
+| `short_circuit_first` | 7.2 ns (0) | 5068 ns (99.5) | 422 ns (0) | 32.6 ns (0) | — (reads no policy) |
+| `short_circuit_last` | 7.3 ns (0) | 8772 ns (175) | 739 ns (0) | 40.8 ns (0) | — (reads no policy) |
+| `all_items` | 18.0 ns (0) | 22.4 µs (455.4) | 773 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `exists_items` | 15.7 ns (0) | 19.2 µs (416.2) | 531 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `durations` | 7.1 ns (0) | 722 ns (10) | 150 ns† (0) | 37.0 ns (0) | — (reads no policy) |
+| `streamed_body_early` | — (streamed row) | 49.9 µs (579.2) | 39.4 µs (538) | 3139 ns (22.2) | — (streamed row) |
+| `streamed_body_late` | — (streamed row) | 49.7 µs (579.2) | 40.4 µs† (538) | 15.8 µs (63.2) | — (streamed row) |
+| `policy_residual` | 26.8 ns (0) | 6944 ns (143.1) | 558 ns (0) | n/a (composite root: `policy.methods`) | 60.2 ns (0) |
 
 ### Compile and memory
 
 | workload | (1) compile | checked compile | (3) compile + emit | (4) compile / specialize / lower | (1) `Program` | `CelProgram` | (3) + `CelBytecode` | (4) residual + `FastProgram` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `prefix_1` | 44.3 µs | 51.8 µs | 74.5 µs | 51.8 µs / 15.1 µs / 1.3 µs | 1788 B | 2588 B | 5464 B | 2428 B |
-| `prefix_13` | 54.6 µs | 57.6 µs | 76.9 µs | 57.6 µs / 108.9 µs / 4.7 µs | 1788 B | 2588 B | 5464 B | 16.1 KiB |
-| `prefix_1000` | 52.7 µs | 59.4 µs | 66.5 µs | 59.4 µs / 598.9 µs / 349.1 µs | 1788 B | 2588 B | 5464 B | 126.4 KiB |
-| `fs_open_allow_all` | 623.1 µs | 652.7 µs | 713.8 µs | 652.7 µs / 71.3 µs / 0.6 µs | 12.8 KiB | 19.1 KiB | 33.7 KiB | 887 B |
-| `fs_open_13` | 711.2 µs | 716.3 µs | 747.0 µs | 716.3 µs / 212.7 µs / 14.9 µs | 12.8 KiB | 19.1 KiB | 33.7 KiB | 26.1 KiB |
-| `fs_open_1000` | 573.2 µs | 642.7 µs | 670.2 µs | 642.7 µs / 859.3 µs / 454.0 µs | 12.8 KiB | 19.1 KiB | 33.7 KiB | 183.8 KiB |
-| `method_in_literal` | 31.6 µs | 33.6 µs | 36.3 µs | — | 482 B | 1037 B | 2335 B | — |
-| `method_in_policy` | 13.2 µs | 15.7 µs | 18.5 µs | 15.7 µs / 11.2 µs / 1.3 µs | 284 B | 914 B | 2065 B | 2257 B |
-| `user_eq` | 13.4 µs | 18.6 µs | 19.5 µs | 18.6 µs / 9.2 µs / 1.1 µs | 285 B | 903 B | 2050 B | 1391 B |
-| `nested_fields` | 31.8 µs | 36.8 µs | 42.9 µs | — | 915 B | 1936 B | 4084 B | — |
-| `short_circuit_first` | 70.6 µs | 116.0 µs | 135.6 µs | — | 2100 B | 4476 B | 9804 B | — |
-| `short_circuit_last` | 64.8 µs | 103.7 µs | 111.0 µs | — | 2100 B | 4476 B | 9804 B | — |
-| `all_items` | 40.8 µs | 45.8 µs | 61.7 µs | — | 1451 B | 2199 B | 5454 B | — |
-| `exists_items` | 30.3 µs | 43.3 µs | 36.6 µs | — | 1181 B | 1913 B | 4040 B | — |
-| `durations` | 33.8 µs | 38.4 µs | 42.8 µs | — | 1081 B | 1845 B | 3563 B | — |
-| `streamed_body_early` | 25.2 µs | 29.2 µs | 33.2 µs | — | 625 B | 1440 B | 3557 B | — |
-| `streamed_body_late` | 30.6 µs | 29.7 µs | 35.8 µs | — | 625 B | 1440 B | 3557 B | — |
-| `policy_residual` | 97.5 µs | 147.0 µs | 160.1 µs | 147.0 µs / 82.4 µs / 6.4 µs | 3038 B | 5198 B | 10016 B | 11.6 KiB |
+| `prefix_1` | 46.6 µs | 51.2 µs | 83.0 µs | 51.2 µs / 18.4 µs / 2.8 µs | 1788 B | 2588 B | 4857 B | 2444 B |
+| `prefix_13` | 46.5 µs | 53.4 µs | 75.2 µs | 53.4 µs / 132.9 µs / 21.6 µs | 1788 B | 2588 B | 4857 B | 16.6 KiB |
+| `prefix_1000` | 45.1 µs | 50.7 µs | 62.9 µs | 50.7 µs / 561.0 µs / 350.5 µs | 1788 B | 2588 B | 4857 B | 170.1 KiB |
+| `fs_open_allow_all` | 582.7 µs | 632.5 µs | 728.1 µs | 632.5 µs / 87.4 µs / 0.9 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 887 B |
+| `fs_open_13` | 629.4 µs | 661.4 µs | 818.2 µs | 661.4 µs / 264.4 µs / 42.6 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 27.3 KiB |
+| `fs_open_1000` | 584.5 µs | 631.2 µs | 693.4 µs | 631.2 µs / 905.4 µs / 615.7 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 235.3 KiB |
+| `method_in_literal` | 30.2 µs | 33.1 µs | 36.0 µs | — | 482 B | 1037 B | 2503 B | — |
+| `method_in_policy` | 13.6 µs | 15.8 µs | 18.4 µs | 15.8 µs / 11.6 µs / 1.9 µs | 284 B | 914 B | 2137 B | 2353 B |
+| `user_eq` | 13.6 µs | 15.8 µs | 18.3 µs | 15.8 µs / 9.5 µs / 1.6 µs | 285 B | 903 B | 2122 B | 1391 B |
+| `nested_fields` | 32.2 µs | 37.2 µs | 45.9 µs | — | 915 B | 1936 B | 4160 B | — |
+| `short_circuit_first` | 66.8 µs | 106.8 µs | 129.2 µs | — | 2100 B | 4476 B | 8844 B | — |
+| `short_circuit_last` | 66.0 µs | 103.4 µs | 123.6 µs | — | 2100 B | 4476 B | 8844 B | — |
+| `all_items` | 40.0 µs | 44.6 µs | 68.7 µs | — | 1451 B | 2199 B | 4870 B | — |
+| `exists_items` | 36.6 µs | 48.8 µs | 62.5 µs | — | 1181 B | 1913 B | 3816 B | — |
+| `durations` | 34.3 µs | 39.0 µs | 48.6 µs | — | 1081 B | 1845 B | 3995 B | — |
+| `streamed_body_early` | 26.0 µs | 32.4 µs | 38.4 µs | — | 625 B | 1440 B | 3629 B | — |
+| `streamed_body_late` | 25.8 µs | 29.3 µs | 35.7 µs | — | 625 B | 1440 B | 3629 B | — |
+| `policy_residual` | 98.2 µs | 161.2 µs | 180.9 µs | 161.2 µs / 96.2 µs / 18.7 µs | 3038 B | 5198 B | 8700 B | 11.7 KiB |
 
 ### Streamed body: document and run state
 
@@ -150,7 +150,7 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 | `streamed_body_early` | 4026 B | 383 B |
 | `streamed_body_late` | 4026 B | 383 B |
 
-† the runs' medians spread more than 10%: fs_open_allow_all / bytecode_act: 16%; fs_open_13 / upstream: 12%; fs_open_13 / specialized: 16%; fs_open_1000 / specialized: 12%
+† the runs' medians spread more than 10%: prefix_13 / upstream: 11%; method_in_policy / upstream: 16%; durations / bytecode_act: 12%; streamed_body_late / bytecode_act: 13%
 
 ### Fast-path ledger
 
@@ -202,23 +202,23 @@ Each figure is a quotient of two cells of one run, to one decimal.
 - **(2)/(3a), what the compile step and the register interpreter bought on top** (historical run):
   4.0 `fs_open_allow_all`, 3.1 `fs_open_13`, 3.1 `fs_open_1000`, 2.3 `prefix_13`, 17.6
   `nested_fields`, 4.4 `all_items`, 2.3 `policy_residual`.
-- **(1)/(3a), over the same bound activation** (this run): 5.7 `fs_open_allow_all`, 4.4
-  `fs_open_13`, 4.1 `fs_open_1000`, 2.9 `prefix_13`, 31.2 `nested_fields`, 7.0 `all_items`, 3.2
+- **(1)/(3a), over the same bound activation** (this run): 10.7 `fs_open_allow_all`, 18.3
+  `fs_open_13`, 80.1 `fs_open_1000`, 28.9 `prefix_13`, 38.4 `nested_fields`, 29.0 `all_items`, 12.4
   `policy_residual`.
-- **(1)/(3b), the typed bytecode backend reading the request by field** (this run): 229.2
-  `nested_fields`, 7.5 `user_eq`; 193 and 6.9 allocations per decision against 0.
-- **(3b)/(4), what binding the policy at compile time bought** (this run): 1.0 `user_eq`, the one
-  workload with both cells. Where (3b) is `n/a`, (3a)/(4): 28.5 `fs_open_allow_all`, 22.7
-  `fs_open_13`, 584.4 `fs_open_1000`, 71.8 `prefix_13`, 25.0 `policy_residual`.
-- **(1)/(4)** (this run): 163.6 `fs_open_allow_all`, 99.2 `fs_open_13`, 2411.2 `fs_open_1000`, 207.4
-  `prefix_13`, 80.4 `policy_residual`, 4588.9 `prefix_1000`. **Rust/(4)**: 4.1 on `fs_open_1000`
-  (1490 ns / 366 ns) and 11.3 on `prefix_1000` (2331 ns / 207 ns), where the hand-written Rust scans
-  the 1000 roots linearly and (4) runs a matcher; 0.3 to 0.6 on the other headline rows.
-- **Streamed**: buffered (1) over the streamed run, 15.8 with the demanded fields early (51.9 µs /
-  3278 ns) and 3.3 with them late (50.4 µs / 15.3 µs); the streamed run holds 383 B of state for a
+- **(1)/(3b), the typed bytecode backend reading the request by field** (this run): 254.2
+  `nested_fields`, 8.3 `user_eq`; 193 and 6.9 allocations per decision against 0.
+- **(3b)/(4), what binding the policy at compile time bought** (this run): 1.1 `user_eq`, the one
+  workload with both cells. Where (3b) is `n/a`, (3a)/(4): 14.3 `fs_open_allow_all`, 8.2
+  `fs_open_13`, 63.2 `fs_open_1000`, 8.8 `prefix_13`, 9.3 `policy_residual`.
+- **(1)/(4)** (this run): 152.8 `fs_open_allow_all`, 150.4 `fs_open_13`, 5059.1 `fs_open_1000`, 254.1
+  `prefix_13`, 115.3 `policy_residual`, 8317.3 `prefix_1000`. **Rust/(4)**: 8.1 on `fs_open_1000`
+  (1390 ns / 171 ns) and 22.5 on `prefix_1000` (2479 ns / 110 ns), where the hand-written Rust scans
+  the 1000 roots linearly and (4) runs a matcher; 0.3 to 0.8 on the other headline rows.
+- **Streamed**: buffered (1) over the streamed run, 15.9 with the demanded fields early (49.9 µs /
+  3139 ns) and 3.1 with them late (49.7 µs / 15.8 µs); the streamed run holds 383 B of state for a
   4026 B document.
-- **Compile**: (3) compile + emit over (1) compile, 1.1 on `fs_open_13` (747.0 µs / 711.2 µs) and 1.6
-  on `policy_residual` (160.1 µs / 97.5 µs).
+- **Compile**: (3) compile + emit over (1) compile, 1.3 on `fs_open_13` (818.2 µs / 629.4 µs) and 1.8
+  on `policy_residual` (180.9 µs / 98.2 µs).
 
 ### Historical: the tree evaluator, column (2)
 

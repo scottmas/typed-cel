@@ -23,9 +23,9 @@ req.body.account.owner_id == req.user && req.body.account.tier == "gold"
 
 | | ns / eval | allocations |
 |---|---:|---:|
-| cel-rust 0.14.2 | 9,742 | 193 |
-| **typed-cel** | **38.0** | **0** |
-| hand-written Rust | 9.0 | 0 |
+| cel-rust 0.14.2 | 9,330 | 193 |
+| **typed-cel** | **36.7** | **0** |
+| hand-written Rust | 8.7 | 0 |
 
 A dynamically typed CEL builds a map of boxed values for every request, looks each field up by
 name, and checks operand types on every operation. typed-cel resolves every field a program reads
@@ -116,14 +116,14 @@ policy.roots.exists(r, req.path == r || req.path.startsWith(r + "/"))
 
 | | ns / eval | allocations |
 |---|---:|---:|
-| cel-rust 0.14.2 | 949,900 | 18,257 |
-| typed-cel, no specialization | 298,300 | 822 |
-| **typed-cel, specialized** | **113** | **0** |
-| hand-written Rust (loop over the roots) | 2,434 | 0 |
+| cel-rust 0.14.2 | 914,900 | 18,257 |
+| typed-cel, no specialization | 14,400 | 0 |
+| **typed-cel, specialized** | **110** | **0** |
+| hand-written Rust (loop over the roots) | 2,479 | 0 |
 
-That's **8,400× faster than cel-rust, and 21× faster than the Rust.** The Rust version was compiled
+That's **8,300× faster than cel-rust, and 22× faster than the Rust.** The Rust version was compiled
 before anyone knew the roots, so it has to loop over them. The specialized program was compiled
-after, with the roots as constants. (With 13 roots the Rust loop still wins, 37 ns against 52 ns.
+after, with the roots as constants. (With 13 roots the Rust loop still wins, 41 ns against 49 ns.
 The crossover comes where the static data gets big.)
 
 ```rust
@@ -193,7 +193,7 @@ lean on those answers:
 - **Evaluate a JSON body while it streams in.** `StreamedProgram` runs over JSON events as they
   arrive instead of a parsed document. Members the program never reads are skipped, the run's
   state is bounded by the program's shape rather than the document (383 B for a 4 KB body), and it
-  answers as soon as the fields it needs have arrived: 3.3 µs against 51.9 µs for cel-rust's
+  answers as soon as the fields it needs have arrived: 3.1 µs against 49.9 µs for cel-rust's
   parse-then-evaluate when those fields come early.
 - **Values that aren't there yet.** A field can be served lazily. When a run reaches a read the
   host can't answer yet, it pauses and resumes from that op when the value arrives, without
