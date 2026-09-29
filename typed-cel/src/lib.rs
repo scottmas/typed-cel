@@ -28,10 +28,8 @@ mod parser;
 pub(crate) use common::ast::IdedExpr;
 use parser::{Expression, ExpressionReferences, Parser};
 
-#[cfg(feature = "chrono")]
 mod duration;
 
-#[cfg(feature = "json")]
 // ------------------------------------------------------------------------------------------
 // Files authored for the dialect. Everything above this line is the absorbed fork, module layout unchanged
 // so a reader can diff against the fork point (ATTRIBUTION.md).
@@ -82,8 +80,7 @@ pub use sync_facts::{FactFn, SyncFacts};
 pub use value::{CelDuration, CelMap, CelMapKey, CelValue};
 
 /// The repository README's code blocks, compiled and run as doctests so its examples cannot rot.
-/// They use `serde_json`, hence the `json` gate.
-#[cfg(all(doctest, feature = "json"))]
+#[cfg(doctest)]
 #[doc = include_str!("../../README.md")]
 pub struct RepositoryReadme;
 pub use event::Event;

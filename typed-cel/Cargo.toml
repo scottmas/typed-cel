@@ -27,19 +27,13 @@ name = "typed_cel"
 path = "src/lib.rs"
 
 [features]
-# Upstream's default is ["regex", "chrono"], with `json` and `bytes` opt-in. We turn those on by
-# default instead, because both are load-bearing here and because a plain `cargo test -p
-# typed-cel` must run EVERY absorbed unit test — a feature-gated test that never runs is the
-# same silent green this crate exists to avoid.
-#   regex  — `matches()`.
-#   chrono — `duration()`. Timestamps ride the same feature and are deleted separately.
-#   json   — the activation is JSON-shaped: values are bound from serde_json::Value.
-#   bytes  — a declared type can be bytes, so a value can be one.
-default = ["regex", "chrono", "json", "bytes"]
+# Upstream makes `regex`, `chrono` and `json` features. Here they are plain dependencies: the
+# dialect's own code uses all three unconditionally (the activation is JSON-shaped, `duration()` and
+# `matches()` are in the checker's signature table), so switching one off never built.
+#   bytes  — a declared type can be bytes, so a value can be one. On by default, because a plain
+#            `cargo test -p typed-cel` must run EVERY absorbed unit test.
+default = ["bytes"]
 bytes = ["dep:bytes"]
-chrono = ["dep:chrono"]
-json = ["dep:serde_json"]
-regex = ["dep:regex"]
 # The cel-spec conformance harness — the corpus reader, EXCLUSIONS.toml and the report bin.
 # Feature-gated so `toml` and serde's derive machinery stay OUT of what a consumer of the dialect
 # links. The dev-dependency on ourselves below turns it on for the whole test build.
@@ -66,12 +60,12 @@ chrono = { version = "0.4", default-features = false, features = [
     "alloc",
     "serde",
     "clock",
-], optional = true }
-regex = { version = "1.10.5", optional = true }
+] }
+regex = "1.10.5"
 # The SIMD substring searcher a scanned loop builds once for a loop-invariant needle
 # (`src/fast/scan.rs`); already in the lock through `regex` and `aho-corasick`.
 memchr = "2"
-serde_json = { version = "1.0", optional = true }
+serde_json = "1.0"
 # EXCLUSIONS.toml / baseline.toml, behind `conformance`.
 toml = { version = "0.8", optional = true }
 

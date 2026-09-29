@@ -46,7 +46,7 @@ list of fields that do exist.
 
 ```toml
 [dependencies]
-typed-cel = { git = "https://github.com/scottmas/typed-cel" }   # default features: regex, chrono, json, bytes
+typed-cel = { git = "https://github.com/scottmas/typed-cel" }   # default features: bytes
 ```
 
 Depends on `antlr4rust` (the generated parser runtime). No native code, no platform restriction.
@@ -495,14 +495,13 @@ crate registers none, so `is_owner(...)` cannot be made to work by adding one he
 
 ## Configuration
 
-Features (all but `conformance` are on by default, so a plain `cargo test -p typed-cel` runs every
-absorbed unit test):
+Features (`bytes` is on by default, so a plain `cargo test -p typed-cel` runs every absorbed unit
+test). `regex` (`matches()`), `chrono` (`duration()`, `30s` literals) and `serde_json` (the
+activation binds from `serde_json::Value`) are plain dependencies: the dialect uses all three
+unconditionally.
 
 | feature | enables |
 |---|---|
-| `regex` | `matches()` |
-| `chrono` | `duration()` and `30s` literals |
-| `json` | `CelActivation::bind` from `serde_json::Value`, `CelTy::admits` |
 | `bytes` | the bytes type |
 | `conformance` | the cel-spec harness, `typed_cel::fork`, the `conformance-report` bin; turned on for this crate's own tests by a self dev-dependency |
 

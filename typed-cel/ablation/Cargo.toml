@@ -10,6 +10,9 @@ name = "typed-cel-ablation"
 version = "0.0.0"
 edition = "2021"
 publish = false
+# Only the `[[bench]]` targets below are benches: `pmu.rs`, `rig.rs`, `floor.rs` and `count.rs` are
+# modules they include by `#[path]`, and auto-discovery would build each as a bench of its own.
+autobenches = false
 
 [workspace]
 
