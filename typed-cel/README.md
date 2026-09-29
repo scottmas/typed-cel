@@ -155,9 +155,9 @@ Against cel-spec v0.25.1 that is 1875 of 2344 cases excluded (the block in
   `body.amount == session.user_id` and an unknown function are all build errors, never a runtime deny.
 - One engine. Every program — evaluated, specialized, streamed, paused and resumed — runs on the same
   register backend. There is no second implementation to disagree with.
-- Speed: `fs_open_1000` with its policy bound decides in 390 ns — 2121.8× faster than upstream
-  cel-rust 0.14.2 (827.5 µs) and 3.5× faster than the hand-written Rust reference (1367 ns), which
-  scans the 1000 roots linearly. `policy_residual` decides in 144 ns against upstream's 6329 ns, 44.0×.
+- Speed: `fs_open_1000` with its policy bound decides in 171 ns — 5059.1× faster than upstream
+  cel-rust 0.14.2 (865.1 µs) and 8.1× faster than the hand-written Rust reference (1390 ns), which
+  scans the 1000 roots linearly. `policy_residual` decides in 60.2 ns against upstream's 6944 ns, 115.3×.
 - Zero allocations per decision on the facts path: every (3b) and (4) cell reads `(0)`, and
   `tests/fast_alloc.rs` holds it at exactly 0 over 10 000 decisions.
 - Partial evaluation: bind the policy once, and the per-request program reads only the request (the
