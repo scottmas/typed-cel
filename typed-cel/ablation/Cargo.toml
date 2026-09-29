@@ -21,9 +21,15 @@ cel = "=0.14.2"                               # UPSTREAM, column (1)
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+regex = "1"                                   # the `matches` baseline in benches/loops.rs
 
 [[bench]]
 name = "ablation"
+harness = false
+
+# The cost-model cliffs `../tests/perf_cliffs.rs` pins, timed: `cargo bench --bench cliffs`.
+[[bench]]
+name = "cliffs"
 harness = false
 
 [profile.release]
@@ -34,3 +40,7 @@ debug = false
 opt-level = 3
 codegen-units = 1
 debug = false
+
+[[bench]]
+name = "loops"
+harness = false

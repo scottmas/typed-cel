@@ -345,3 +345,48 @@ fn evaluate_fails_an_undispatched_call_host_as_the_backend_does() {
         "{evaluated}"
     );
 }
+
+/// A CALL host that evaluates a second program, with a comprehension, from inside a run.
+struct Nested {
+    inner: typed_cel::CelBytecode,
+    act: typed_cel::CelActivation,
+    answers: Vec<bool>,
+}
+
+impl HostDispatch for Nested {
+    fn call(&mut self, _name: &str, args: &[CelValue]) -> Result<CelValue, CelError> {
+        let inner = Vm::new().eval_result(&self.inner, &self.act)?;
+        let CelValue::Bool(inner) = inner else {
+            panic!("inner answered {inner:?}")
+        };
+        self.answers.push(inner);
+        Ok(CelValue::Bool(
+            inner && matches!(&args[0], CelValue::Str(s) if &**s == "b"),
+        ))
+    }
+}
+
+/// `Vm::eval` keeps one scratch per thread; a host that evaluates CEL mid-run finds it borrowed by
+/// the outer run, whose registers are live, and must get a fresh one — neither a panic nor a
+/// clobbered outer loop.
+#[test]
+fn a_call_host_may_evaluate_a_comprehension_inside_a_comprehension() {
+    let env = env_with(&[("probe_nested", vec![CelTy::Str], CelTy::Bool)]);
+    let inner = env
+        .compile(r#"[req.x, "q"].exists(v, v == "abc")"#)
+        .expect("compiles");
+    let outer = env
+        .compile(r#"["a", "b", "c"].exists(s, probe_nested(s))"#)
+        .expect("compiles");
+    let mut d = Nested {
+        inner: emit(&inner).expect("emits"),
+        act: req_act(&env),
+        answers: Vec::new(),
+    };
+    let got = Vm::new()
+        .eval_result_with(&emit(&outer).expect("emits"), &req_act(&env), &mut d)
+        .expect("evaluates");
+    assert!(matches!(got, CelValue::Bool(true)), "{got:?}");
+    // "a" then "b": the loop stops at the first true, each inner run answering true.
+    assert_eq!(d.answers, [true, true]);
+}

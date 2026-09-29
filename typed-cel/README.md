@@ -431,7 +431,7 @@ is not a breaking change.
 | `CelProgram` | `evaluate(&CelActivation) -> Result<bool, CelError>`, `source`, `demand`, `conjuncts` |
 | `CelActivation` | `bind(name, &serde_json::Value)` (schema-directed), `bind_lazy(name, CelValue)`, `bind_fact(name, CelValue)` |
 | `CelError` | `source`, `span`, `available`, `all`; `Display` renders the first error only |
-| `CelTy`, `Record`, `Relax` | the type lattice: `CelTy::list`, `CelTy::map`, `Record::new`/`with_optional`/`with_index`, `admits`/`admits_relaxed` |
+| `CelTy`, `Record`, `Relax`, `Unusable` | the type lattice: `CelTy::list`, `CelTy::map`, `Record::new`/`with_optional`/`with_index`, `admits`/`admits_relaxed`; `Unusable` is the named reason a schema layer could not give a variable a type, refused only where an expression reads it |
 | `DemandSet`, `Segment` | what a program reads: `paths`, `roots`, `wide_roots`, `keyed_reads`, `union`, `reverse_index` |
 | `Conjunct`, `Literal` | the top-level `&&` shape of a program |
 | `CelValue`, `CelMap`, `CelMapKey`, `CelDuration` | the one value type: `CelValue::record`, `CelValue::list`, `From<bool/f64/&str/String>`; `CelMap::new`/`get`/`iter` |

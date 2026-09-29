@@ -558,6 +558,7 @@ dependencies = [
  "bytes",
  "chrono",
  "lazy_static",
+ "memchr",
  "nom",
  "pastey",
  "regex",

@@ -157,29 +157,32 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 `decide` cycles per decision (ns in parentheses), `--cycles`, pinned to core 1, per-cell median of
 three runs (`ablation/cycles-baseline.txt` is the baseline column). One column per
 fast-path step (S2 the common ops inline, S3 the stack register path, S4 verified unchecked
-fetches, S5 fused read-compare-branch ops, S6 the specializer's folds); the floor rows are the spikes in `ablation/benches/floor.rs`, and
+fetches, S5 fused read-compare-branch ops, S6 the specializer's folds), then `cliffs`: after the
+cost-model cliff fixes (below), then `loops`: after the loop floor, then `sets`: string-set
+matchers comparing precomputed heads instead of calling `memcmp` (the current
+`ablation/cycles-baseline.txt`); the floor rows are the spikes in `ablation/benches/floor.rs`, and
 `constant_true` is the program `true`, which costs only the fixed per-call path.
 
-| workload | column | baseline | S2 | S3 | S4 | S5 | S6 |
-|---|---|---:|---:|---:|---:|---:|---:|
-| `constant_true` | (3b) | 97 (30.4) | 109 (30.7) | 81 (25.8) | 80 (25.9) | 77 (24.1) | 73 (23.1) |
-| `durations` | (3b) | 286 (90.5) | 272 (85.4) | 242 (71.8) | 216 (64.6) | 224 (70.8) | 224 (69.2) |
-| `fs_open_1000` | (4) | 1267 (396.2) | 1338 (405.1) | 1244 (383.7) | 1235 (373.5) | 1202 (365.3) | 1227 (381.0) |
-| `fs_open_13` | (4) | 463 (139.7) | 457 (135.7) | 425 (129.3) | 396 (116.2) | 374 (115.7) | 364 (116.6) |
-| `fs_open_allow_all` | (4) | 186 (57.7) | 194 (57.8) | 163 (49.3) | 156 (47.3) | 134 (42.9) | 110 (34.0) |
-| `method_in_literal` | (3b) | 188 (57.7) | 174 (55.1) | 145 (45.6) | 141 (45.3) | 140 (45.2) | 138 (42.6) |
-| `method_in_policy` | (4) | 188 (58.3) | 169 (52.4) | 151 (44.8) | 148 (42.4) | 142 (44.0) | 144 (42.5) |
-| `nested_fields` | (3b) | 276 (83.5) | 240 (75.3) | 209 (64.3) | 201 (61.6) | 142 (42.5) | 136 (44.0) |
-| `policy_residual` | (4) | 485 (147.2) | 388 (117.9) | 347 (108.4) | 322 (97.7) | 273 (85.7) | 276 (83.4) |
-| `prefix_1` | (4) | 211 (62.0) | 180 (55.5) | 153 (47.4) | 151 (47.5) | 144 (44.9) | 141 (43.6) |
-| `prefix_1000` | (4) | 714 (214.7) | 705 (214.5) | 619 (196.8) | 636 (198.7) | 626 (192.6) | 653 (201.2) |
-| `prefix_13` | (4) | 257 (78.8) | 234 (71.6) | 210 (65.7) | 209 (63.7) | 200 (58.9) | 197 (58.4) |
-| `short_circuit_first` | (3b) | 517 (151.6) | 344 (102.1) | 319 (99.9) | 284 (83.9) | 248 (79.1) | 250 (76.5) |
-| `short_circuit_last` | (3b) | 768 (234.2) | 441 (141.8) | 404 (122.3) | 353 (106.6) | 312 (96.7) | 320 (93.3) |
-| `user_eq` | (3b) | 214 (65.8) | 206 (62.7) | 170 (54.1) | 165 (51.2) | 166 (52.0) | 162 (48.8) |
-| `user_eq` | (4) | 186 (56.2) | 184 (57.8) | 154 (47.7) | 148 (47.6) | 154 (48.2) | 158 (46.5) |
-| `nested_fields` | floor: lean / fused / closures | 100 / 56 / 78 | 105 / 57 / 82 | 101 / 53 / 81 | 102 / 55 / 83 | 106 / 54 / 76 | 104 / 53 / 75 |
-| `nested_fields` | Rust | 26 (8.1) | 29 (8.3) | 26 (8.4) | 26 (8.1) | 26 (8.1) | 26 (8.0) |
+| workload | column | baseline | S2 | S3 | S4 | S5 | S6 | cliffs | loops | sets |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `constant_true` | (3b) | 97 (30.4) | 109 (30.7) | 81 (25.8) | 80 (25.9) | 77 (24.1) | 73 (23.1) | 82 (23.5) | 75 (24.2) | 79 (24.8) |
+| `durations` | (3b) | 286 (90.5) | 272 (85.4) | 242 (71.8) | 216 (64.6) | 224 (70.8) | 224 (69.2) | 130 (39.8) | 122 (37.0) | 128 (39.6) |
+| `fs_open_1000` | (4) | 1267 (396.2) | 1338 (405.1) | 1244 (383.7) | 1235 (373.5) | 1202 (365.3) | 1227 (381.0) | 1205 (368.0) | 1182 (375.5) | 537 (168.4) |
+| `fs_open_13` | (4) | 463 (139.7) | 457 (135.7) | 425 (129.3) | 396 (116.2) | 374 (115.7) | 364 (116.6) | 392 (115.7) | 372 (116.3) | 242 (76.4) |
+| `fs_open_allow_all` | (4) | 186 (57.7) | 194 (57.8) | 163 (49.3) | 156 (47.3) | 134 (42.9) | 110 (34.0) | 109 (33.7) | 104 (33.0) | 109 (34.3) |
+| `method_in_literal` | (3b) | 188 (57.7) | 174 (55.1) | 145 (45.6) | 141 (45.3) | 140 (45.2) | 138 (42.6) | 138 (43.7) | 138 (41.4) | 128 (40.5) |
+| `method_in_policy` | (4) | 188 (58.3) | 169 (52.4) | 151 (44.8) | 148 (42.4) | 142 (44.0) | 144 (42.5) | 140 (42.5) | 134 (42.0) | 130 (41.8) |
+| `nested_fields` | (3b) | 276 (83.5) | 240 (75.3) | 209 (64.3) | 201 (61.6) | 142 (42.5) | 136 (44.0) | 125 (39.1) | 122 (36.6) | 124 (38.0) |
+| `policy_residual` | (4) | 485 (147.2) | 388 (117.9) | 347 (108.4) | 322 (97.7) | 273 (85.7) | 276 (83.4) | 238 (72.5) | 246 (77.5) | 199 (67.5) |
+| `prefix_1` | (4) | 211 (62.0) | 180 (55.5) | 153 (47.4) | 151 (47.5) | 144 (44.9) | 141 (43.6) | 142 (43.6) | 137 (44.6) | 129 (39.9) |
+| `prefix_1000` | (4) | 714 (214.7) | 705 (214.5) | 619 (196.8) | 636 (198.7) | 626 (192.6) | 653 (201.2) | 648 (202.5) | 680 (209.9) | 358 (113.0) |
+| `prefix_13` | (4) | 257 (78.8) | 234 (71.6) | 210 (65.7) | 209 (63.7) | 200 (58.9) | 197 (58.4) | 204 (60.0) | 210 (63.8) | 178 (51.6) |
+| `short_circuit_first` | (3b) | 517 (151.6) | 344 (102.1) | 319 (99.9) | 284 (83.9) | 248 (79.1) | 250 (76.5) | 149 (47.2) | 110 (33.0) | 107 (33.3) |
+| `short_circuit_last` | (3b) | 768 (234.2) | 441 (141.8) | 404 (122.3) | 353 (106.6) | 312 (96.7) | 320 (93.3) | 188 (59.4) | 133 (41.0) | 135 (42.8) |
+| `user_eq` | (3b) | 214 (65.8) | 206 (62.7) | 170 (54.1) | 165 (51.2) | 166 (52.0) | 162 (48.8) | 161 (50.6) | 132 (42.0) | 136 (41.9) |
+| `user_eq` | (4) | 186 (56.2) | 184 (57.8) | 154 (47.7) | 148 (47.6) | 154 (48.2) | 158 (46.5) | 155 (46.8) | 131 (39.9) | 126 (40.3) |
+| `nested_fields` | floor: lean / fused / closures | 100 / 56 / 78 | 105 / 57 / 82 | 101 / 53 / 81 | 102 / 55 / 83 | 106 / 54 / 76 | 104 / 53 / 75 | 103 / 56 / 84 | 101 / 53 / 86 | 105 / 55 / 83 |
+| `nested_fields` | Rust | 26 (8.1) | 29 (8.3) | 26 (8.4) | 26 (8.1) | 26 (8.1) | 26 (8.0) | 27 (8.2) | 29 (8.4) | 26 (9.0) |
 
 Reproduce, on a Linux x86_64 host with the PMU exposed (the bench binary is `target/release/deps/ablation-*`):
 
@@ -246,3 +249,171 @@ never with the tables above.
 
 † in this table: the runs' medians spread more than 10%: prefix_1 / typed_tree: 15%; fs_open_13 /
 bytecode_act: 26%; method_in_policy / upstream: 12%.
+
+## Known cliffs
+
+A sweep of program families (every comprehension macro, `in`, `size`, string ops over long strings,
+nested loops, `&&`/`||` chains and nested conditionals up to the depth limit, durations, literal
+lists and maps, `has()`, deep paths, streamed runs), each at N ∈ {1, 10, 100, 1000} and on four legs
+(`Vm::eval` over an activation, `decide` over `Facts`, specialized with the collection known, and
+specialized with it unknown), plus the generated typed corpus and the conformance lane. Every cliff
+below was flagged by COST MODEL (deterministic counts of what a decision does), then timed, and is
+pinned in [`../tests/perf_cliffs.rs`](../tests/perf_cliffs.rs) by a test whose budget is what a good
+lowering needs — each red until its fix landed, green now.
+
+**The counters.** `typed_cel::profile` (the `profile` cargo feature, `#[doc(hidden)]`, on only for
+the crate's own test build through the self dev-dependency) counts ops dispatched (per op name),
+entries into the out-of-line `slow` path, host field reads (per `FieldId`), values moved into a run's
+store, entries into `exec`, and — under the test binary's `profile::CountingAlloc` global allocator —
+allocations and bytes. `profile::measure(|| …)` returns a `RunProfile`. Every hook is `#[cfg]`'d out at
+its call site without the feature: measured with `--cycles` against a pristine build of the same tree
+(three runs, median), every gated cell's instruction count was identical (±1) and the gate passed.
+
+**The harvester.** Not a gate: `#[ignore]`d, run explicitly.
+
+```bash
+cargo test -p typed-cel --test perf_harvest -- --ignored --nocapture --test-threads=1 --exact harvest
+cargo test -p typed-cel --test perf_harvest -- --ignored --nocapture harvest_corpora
+cargo test -p typed-cel --test perf_harvest -- --ignored --nocapture harvest_streamed
+# the ns column: no `profile` feature, pinned to one core, on a Hetzner cx33
+cd typed-cel/ablation && cargo bench --bench cliffs --no-run
+taskset -c 1 $(ls -t target/release/deps/cliffs-* | grep -v '\.d$' | head -1)
+# per element of an unspecialized loop, beside Rust; `--check` is the per-op instruction gate
+cargo bench --bench loops --no-run
+taskset -c 1 $(ls -t target/release/deps/loops-* | grep -v '\.d$' | head -1) --check
+# where the instructions go: `LOOPS_PROFILE=<family>` spins one row for `perf record`
+```
+
+`harvest` prints one row per (family, leg, N) and flags `OPS/ELEM` (> 8 ops per element),
+`SLOW/ELEM`, `INVARIANT-READ`, `SUPERLINEAR` (ops, allocations, store pushes or bytes growing faster
+than N), `ALLOC` (a program that builds nothing its answer needs allocates), `FOLDABLE` (a residual
+still computes over literals) and `COMPILE` (specialize's work or the residual superlinear in its
+input). Every program's listing lands in `target/tmp/perf_harvest_listings.txt`.
+
+The first sweep's thirteen cliffs are closed: every pin in the table below is green. What each was, and what it costs now — ns per decision
+from `ablation/benches/cliffs.rs` (AMD EPYC-Rome, `taskset -c 1`, no `profile` feature):
+
+| # | pin (`tests/perf_cliffs.rs`) | shape | before → after | fixed by |
+|---|---|---|---|---|
+| 1 | `predicate_loop_ops_per_element_is_bounded` | `names.exists(x, x == req.name)` over an activation, n=1000 | 158 µs → 31 µs | a predicate loop: the predicate a branch inside `IterNext … Jump` (`try_predicate_loop`) |
+| 2 | `common_ops_stay_in_the_dispatch_loop` | a five-test scalar decision | 134 ns → 80 ns | `Not`, `Cmp`, `StrOp`, `Has`, loop ops inline in `exec` |
+| 3 | `loop_invariant_field_is_read_once` | `m.all(k, policy.m[k] > req.n)`, n=1000 | 392 µs → 210 µs | `ReadCached`: a field read once per decision, on first use |
+| 4 | `a_field_is_read_once_per_decision` | a 16-term `req.n < k` chain | 686 ns → 173 ns | the same, with `CondCmpFK` (row 9) |
+| 5 | `startswith_of_concatenation_allocates_nothing` | `req.path.startsWith(req.name + "/")`; its loop over 1000 roots | 107 ns → 55 ns; 251 µs → 53 µs | `StrOp2`: the concatenation tested piecewise, never built |
+| 6 | `map_and_filter_build_in_linear_space` | `size(nums.map(x, x * 2.0))`, n=1000 | 5.8 ms → 39 µs | `ListNew` / `Append` / `ListFreeze`: one list grown in place |
+| 7 | `vm_eval_allocates_nothing_the_program_does_not_build` | `names.exists` at n=1 through `Vm::eval` | 386 ns → 211 ns | a scratch per thread |
+| 8 | `a_literal_collection_of_fields_is_not_built_to_be_searched` | `req.name in [req.path, req.other]`; `{"a": req.n, "b": 2.0}["a"] > 0.0` | 114 ns → 66 ns; 188 ns → 43 ns | an `==` chain; an unrolled predicate; the indexed entry |
+| 9 | `comparison_chain_ops_per_term_is_bounded` | `nums.all(x, x > req.n)` specialized at 256 | 10.8 µs → 1.9 µs | `logic_chain` (one pending register a chain) and `CondCmpFK` |
+| 10 | `known_membership_is_a_lookup_at_every_size` | `m.exists(k, k == req.name)` specialized at 1000 | 89 µs → 153 ns | a known map's keys in the string matcher; `NumSet` for numbers |
+| 11 | `loop_invariant_inner_comprehension_runs_once` | `names.exists(x, x == req.name \|\| nums.exists(y, y < 0.0))`, n=100 | 1.17 ms → 8.8 µs | an invariant comprehension computed once (`BrSet`) |
+| 12 | `a_literal_only_subtree_is_folded_before_it_runs` | `req.n < 60.0 * 60.0 * 24.0` | 87 ns → 43 ns | a call over constants folded at lowering (`fold_call`) |
+| 13 | `a_discarded_loop_error_allocates_nothing` | `items.exists(i, i.tags[5] == req.name \|\| i.qty > 999.0)` specialized at n=1000 | 1999 allocations → 0 | one in-flight error box, reused; a raised pending error moved, not copied |
+
+Row 13's time did not move with its allocations (270 µs → 254 µs): each element still raises and
+catches an index error through `slow`. Row 20 below pins it.
+
+### Fixed: the unspecialized loop floor
+
+A second sweep measured what one more element costs a loop over a BOUND collection (`Vm::eval` over
+an activation — the leg a policy runs on before, or without, specialization): a flat 20-171 ns per
+element against 0.4-16 ns for the same loop in Rust. Two causes multiplied: too many ops per element
+(a field test was three ops; `Select`, map iteration, `Arith`, `Matches` left the dispatch loop for
+`slow`), and too many instructions per op (~88: `pc` in a stack slot, the 24-byte `Op` copied before
+its tag was read, every register bounds-checked and copied to the stack).
+
+The loop-floor work fixed both. The per-op half: fused ops and inline arms (a field test is one
+op, `CondFR`; records, maps, arithmetic and regexes stay in the loop); `exec` fetches through a
+pointer and matches the op in place; registers are read unchecked, on the strength of
+`Code::verify`, and by reference; a small `CelMap` is scanned, not binary-searched. The per-element
+half: a predicate loop (`exists`, `all`, `exists_one`) fetches with `IterScan`, which first passes
+over every element its body would pass over — the body's leading tests (its REGION: field and
+constant tests, `&&`/`||` chains, concatenation tests, regexes, known sets, record members, the map
+value at the key) evaluated natively, the common one-test and record shapes as dedicated loops
+(`src/fast/scan.rs`) — and hands every other element to the unchanged ops. It reads no host, raises
+nothing and writes no register, so every pause, error and deciding element happens where it did.
+`map`/`filter` do not scan: every kept element would pay a failed test first (measured +48% on a
+filter that keeps all).
+
+Measured by [`../ablation/benches/loops.rs`](../ablation/benches/loops.rs) on a Hetzner cx33 (AMD
+EPYC-Rome, `taskset -c 1`): the per-element slope between n=10 and n=1000, ns / instructions; the
+before column is `909d2d814`, the last commit before the per-op work. `--check` holds each family
+to Rust's instructions + 20 per step a good lowering runs per element (a scanned element: one per
+test and per member read).
+
+| family (act leg) | before | after | Rust | budget | over? |
+|---|---:|---:|---:|---:|---|
+| `names.exists(x, x == req.name)` | 19.9 / 176 | **1.1 / 15** | 0.4 / 5 | 25 | |
+| `roots.exists(r, req.path.startsWith(r))` | 26.5 / 198 | **5.7 / 47** | 4.3 / 32 | 52 | |
+| `nums.all(x, x > req.n)` | 20.1 / 180 | **2.3 / 26** | 0.6 / 7 | 27 | |
+| `names.exists_one(x, x == req.name)` | 20.3 / 176 | **1.1 / 15** | 0.6 / 7 | 27 | |
+| `m.exists(k, k == req.name)` | 19.8 / 173 | **1.2 / 15** | 0.4 / 5 | 25 | |
+| `m.all(k, policy.m[k] > req.n)` | 27.5 / 253 | **11.5 / 128** | 31.4 / 286 (HashMap) | 326 | |
+| `names.exists(x, x.contains(req.name))` | 30.9 / 281 ¹ | **10.8 / 137** | 29.4 / 268 | 288 | |
+| `long.exists(x, x.contains(req.name))` (200 B) | 14.1 / 215 ¹ | 15.2 / 157 | 13.3 / 205 | 225 | |
+| `req.name in policy.names` | 0.8 / 8 | 0.8 / 8 | 0.5 / 5 | 25 | |
+| `roots.exists(r, req.path == r \|\| req.path.startsWith(r + "/"))` | 36.0 / 311 | 20.4 / 188 | 5.1 / 36 | 76 | over |
+| `names.exists(x, x.matches("^zz$"))` | 21.8 / 189 | 6.4 / 66 | 2.8 / 27 | 47 | over |
+| `items.exists(i, i.id == req.name && i.qty > req.n)` | 69.0 / 455 | 7.9 / 97 | 0.6 / 5 | 45 | over |
+| `items.all(i, i.qty > req.n)` | 67.8 / 459 | 9.1 / 108 | 0.6 / 8 | 48 | over |
+| `items.exists(i, i.tags.exists(t, t == req.name))` (per item) | 171.1 / 1095 | 72.3 / 497 | 15.7 / 109 | 249 | over |
+| `items.all(i, i.tags[5] == req.name \|\| i.qty > 0.0)` | 164.3 / 1102 | 89.4 / 653 | 0.9 / 8 | 168 | over, not scanned |
+| `size(nums.map(x, x * 2.0))` | 29.9 / 218 | 15.6 / 130 | ~0 (elided) | 80 | over, not scanned |
+| `size(nums.filter(x, x > req.n))` | 35.5 / 295 | 19.5 / 174 | 1.5 / 17 | 97 | over, not scanned |
+
+¹ measured when the family was added (Story 6), before the prebuilt substring searcher.
+
+The counts behind it are pinned in [`../tests/perf_cliffs.rs`](../tests/perf_cliffs.rs):
+`a_skipped_element_dispatches_no_op` (no op, no `slow` entry, and ≥ 0.95 elements scanned per
+element, for 16 loops) and `a_scanned_loop_reads_what_its_unfused_twin_reads`; the answers, against
+the unscanned lowering (`with_unfused_loops`), in [`../tests/comprehensions.rs`](../tests/comprehensions.rs)
+`a_scanned_loop_answers_as_its_unfused_twin`.
+
+**Open — the families still over budget, and why** (`loops.rs --check` exits 1 on these eight):
+
+- **Records** (`items.exists`/`all`: 97 / 108 against 45 / 48). A member lookup chases two pointers —
+  the record's entries and the key's bytes, each its own allocation — ~35 instructions and two
+  likely cache misses per member, where Rust reads a struct field. The next lever is binding a
+  record of a declared type as a fixed layout (members by position), not a map.
+- **Regex** (66 against 47). Rust's own loop inlines `Regex::search_half`, whose length check
+  rejects `^zz$` against an 8-byte name without searching; called from the scan it stays out of
+  line (~50 instructions a call).
+- **A two-leaf chain with a concatenation** (188 against 76), and the **nested loop's outer
+  level** (497 against 249): the generic region walker costs ~90 instructions a step; the outer
+  loop's body (a `Select`, an inner `IterInit`/`IterScan`) is not a region, so it dispatches 4 ops
+  per item at full cost.
+- **Not scanned by design**: an element that errors (`items.all(i, i.tags[5] …)` — the error path is
+  the body's), and `map` / a `filter` that keeps its elements (every element runs `Append`). A native
+  build loop — a scan that also appends — is the next plan for these.
+
+**SIMD, evaluated.** A bound list is 24-byte `CelValue`s, strings behind a pointer: comparing many
+elements at once needs a gather (numbers) or has nothing to vectorize (strings: a length check
+rejects most, and `bcmp` is SIMD already), and the scalar scan meets the numeric budgets. The one
+place a vector searcher paid is a substring test against a loop-invariant needle:
+`memchr::memmem::Finder` (a dependency already in the lock through `regex`), built once per scan —
+8-byte names 30.9 → 10.8 ns, where `str::contains` builds its searcher per call. On x86_64 a
+200-byte haystack was already SIMD in `str::contains` (flat); aarch64, which has no such path in
+std, is expected to gain there too — unmeasured.
+
+A regression the cycles gate caught on the way: a known collection (a residual's `$kN` slot) in a
+CONDITION lowered as a predicate loop over the constant instead of `try_match_exists`' matcher —
+`fs_open_1000` 1205 → 32742 cycles. `a_known_string_list_is_one_matcher_at_every_size` now holds the
+branch shape too, and fails on any element scanned.
+
+**What is already fine** — each held by a GREEN GUARD in the same file:
+
+- a known list of strings under `==`/`startsWith` is one matcher at every size (242 ns at n=1000 vs
+  351 µs on the activation leg) — `a_known_string_list_is_one_matcher_at_every_size`;
+- string predicates over a 64 KiB string are the same ops and allocate nothing —
+  `long_string_predicates_are_constant_ops_and_allocate_nothing`;
+- a path five members deep is one read, read or tested for presence — `a_deep_path_is_one_read`;
+- a streamed run costs the same ops, reads and allocations at 64 B and 64 KiB of padding before the
+  demanded fields — `a_streamed_run_costs_the_same_at_every_document_size`;
+- `specialize` leaves no literal-only call in a residual, and its own allocations and the residual's
+  node count grow linearly while it unrolls (≈35 allocations and 5 nodes per element) —
+  `the_specializer_leaves_no_literal_only_call`;
+- `in` and `size` over a bound collection, durations, `has()` and the typed/conformance corpora showed
+  no outlier beyond the shapes above (the corpora's worst ops-per-node programs are all nested
+  comprehensions, cliff 1; their allocations are errors caught in loop bodies, cliff 13).
+
+`in` over a known number list is a `NumSet` lookup, not a scan, and past `max_unroll` a known
+collection falls from the unrolled chain to a predicate loop of a few ops an element.

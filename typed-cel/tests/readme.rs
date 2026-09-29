@@ -437,3 +437,31 @@ fn the_readme_names_no_second_engine() {
     }
     assert!(leaks.is_empty(), "{}", leaks.join("\n"));
 }
+
+/// The rule is a language decision, and `README.md` is where this crate states those. Implementing
+/// the predicate (`CelTy::requires_narrowing`) without the row leaves it undiscoverable, and the next reader reimplements `any`
+/// semantics in the checker because that is what spec CEL does.
+#[test]
+fn the_dialect_doc_records_the_divergence() {
+    let doc = readme();
+    assert!(
+        doc.contains("`diverges: dyn must be narrowed`"),
+        "the Divergences table has no row for the narrowing rule"
+    );
+    assert!(
+        doc.contains("#### `dyn` must be narrowed"),
+        "the operator table the checker lifts its rules from is missing"
+    );
+    // The checker's own tests are specified in the plan and lifted verbatim there; what has to be
+    // true HERE is that the rule and its cost are written down where an author will find them.
+    for phrase in [
+        "No such overload",
+        "the result must be `bool`",
+        "BUILD ERROR",
+    ] {
+        assert!(
+            doc.contains(phrase),
+            "the narrowing block does not say {phrase:?}"
+        );
+    }
+}

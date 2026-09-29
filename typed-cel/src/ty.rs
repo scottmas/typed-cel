@@ -43,8 +43,8 @@ pub enum CelTy {
     /// whole schema down with it.
     ///
     /// `Rc` because a record holding many poisoned fields (a whole recursive subtree) should not
-    /// hold many copies of one reason.
-    Unusable(Rc<str>),
+    /// hold many copies of one error.
+    Unusable(Rc<Unusable>),
 }
 
 impl CelTy {
@@ -294,6 +294,22 @@ pub struct Record {
     /// Where this record came from — `session`, `body.project.owner`, `body.documents[]`. For
     /// diagnostics only; nothing dispatches on it.
     pub origin: String,
+}
+
+/// Why a position has no type. Whoever built the type — a translation from a schema — says what
+/// kind of refusal it was and how to say it; the checker and the binder only ever say it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Unusable {
+    /// A short, stable name for the refusal, for whoever counts them (`"Uninhabited"`, …).
+    pub kind: &'static str,
+    /// The diagnostic, as a policy author reads it.
+    pub message: String,
+}
+
+impl std::fmt::Display for Unusable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
 }
 
 impl Record {

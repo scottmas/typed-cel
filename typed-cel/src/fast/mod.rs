@@ -22,8 +22,14 @@
 
 mod host;
 mod lower;
+#[doc(hidden)]
+pub use lower::with_literal_comprehensions;
+pub use scan::with_unfused_loops;
 mod matcher;
+#[cfg(feature = "profile")]
+pub mod profile;
 mod reg;
+mod scan;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -76,11 +82,106 @@ pub(crate) enum Arith {
     Div,
 }
 
+impl Arith {
+    /// Over two numbers: IEEE, so a zero divisor is an infinity or a NaN, never an error.
+    #[inline(always)]
+    pub(crate) fn num(self, x: f64, y: f64) -> f64 {
+        match self {
+            Arith::Add => x + y,
+            Arith::Sub => x - y,
+            Arith::Mul => x * y,
+            Arith::Div => x / y,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StrOp {
     StartsWith,
     EndsWith,
     Contains,
+}
+
+/// What [`Op::CondFR`] asks of its register `a` and its field's value `v`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FieldTest {
+    /// `a == v`, or `a != v` when `ne`: never fails.
+    Eq { ne: bool },
+    /// `a <op> v`: an unordered pair fails as `Cmp` does.
+    Cmp(Cmp),
+    /// `v.op(a)`: the field is the receiver (`req.path.startsWith(r)`).
+    FieldRecv(StrOp),
+    /// `a.op(v)`: the register is the receiver (`s.startsWith(req.p)`).
+    RegRecv(StrOp),
+}
+
+/// What [`Op::StrOp2`] asks of `a` and the concatenation `b + c`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Concat {
+    /// `a.startsWith(b + c)`
+    Prefix,
+    /// `a.endsWith(b + c)`
+    Suffix,
+    /// `a == b + c`
+    Eq,
+    /// `a != b + c`
+    Ne,
+    /// `(b + c).startsWith(a)`
+    StartsWith,
+    /// `(b + c).endsWith(a)`
+    EndsWith,
+}
+
+impl Concat {
+    /// The answer, from the pieces. Every slice is at a boundary a `starts_with` / `ends_with`
+    /// just matched, so it is a char boundary.
+    fn test(self, a: &str, b: &str, c: &str) -> bool {
+        match self {
+            Concat::Prefix => a.starts_with(b) && a[b.len()..].starts_with(c),
+            Concat::Suffix => a.ends_with(c) && a[..a.len() - c.len()].ends_with(b),
+            Concat::Eq => a.len() == b.len() + c.len() && a.starts_with(b) && a.ends_with(c),
+            Concat::Ne => !Concat::Eq.test(a, b, c),
+            Concat::StartsWith if a.len() <= b.len() => b.starts_with(a),
+            Concat::StartsWith => a.starts_with(b) && c.starts_with(&a[b.len()..]),
+            Concat::EndsWith if a.len() <= c.len() => c.ends_with(a),
+            Concat::EndsWith => a.ends_with(c) && b.ends_with(&a[..a.len() - c.len()]),
+        }
+    }
+}
+
+impl Cmp {
+    /// The operator with its operands swapped: `a < b` is `b > a`.
+    pub(crate) fn flip(self) -> Cmp {
+        match self {
+            Cmp::Lt => Cmp::Gt,
+            Cmp::Le => Cmp::Ge,
+            Cmp::Gt => Cmp::Lt,
+            Cmp::Ge => Cmp::Le,
+        }
+    }
+
+    /// Does the operator hold for operands in order `o`?
+    #[inline(always)]
+    fn holds(self, o: std::cmp::Ordering) -> bool {
+        use std::cmp::Ordering::*;
+        match self {
+            Cmp::Lt => o == Less,
+            Cmp::Le => o != Greater,
+            Cmp::Gt => o == Greater,
+            Cmp::Ge => o != Less,
+        }
+    }
+}
+
+impl StrOp {
+    #[inline(always)]
+    fn test(self, s: &str, t: &str) -> bool {
+        match self {
+            StrOp::StartsWith => s.starts_with(t),
+            StrOp::EndsWith => s.ends_with(t),
+            StrOp::Contains => s.contains(t),
+        }
+    }
 }
 
 /// Which accumulator settles a comprehension step and clears a pending error.
@@ -89,6 +190,17 @@ pub(crate) enum Absorb {
     Never,
     OnFalse,
     OnTrue,
+}
+
+impl Absorb {
+    /// Does a step answering `s` settle the accumulator (and so clear a pending error)?
+    #[inline(always)]
+    fn absorbs(self, s: Reg<'_>) -> bool {
+        matches!(
+            (self, s),
+            (Absorb::OnFalse, Reg::Bool(false)) | (Absorb::OnTrue, Reg::Bool(true))
+        )
+    }
 }
 
 /// One op. Every `err` is where a failure jumps; every other `Pc` is a jump target.
@@ -137,6 +249,16 @@ pub(crate) enum Op {
         b: R,
         err: Pc,
     },
+    /// `a[b]` where `b` is the key loop slot `slot` over map `a` stands on — the only computed key
+    /// the checker admits (`m.all(k, m[k] > 0.0)`) — so the entry is the iteration's current one:
+    /// no lookup. A lazy map, or anything unexpected, is `Index` in `slow`.
+    IndexIter {
+        dst: R,
+        a: R,
+        b: R,
+        slot: u16,
+        err: Pc,
+    },
     Not {
         dst: R,
         a: R,
@@ -171,6 +293,16 @@ pub(crate) enum Op {
         op: Arith,
         err: Pc,
     },
+    /// `a op k` — or `k op a` when `rev` — for a constant `k`: `Arith` without loading `k` into a
+    /// register first.
+    ArithK {
+        dst: R,
+        a: R,
+        k: u32,
+        op: Arith,
+        rev: bool,
+        err: Pc,
+    },
     In {
         dst: R,
         a: R,
@@ -189,6 +321,15 @@ pub(crate) enum Op {
         a: R,
         b: R,
         op: StrOp,
+        err: Pc,
+    },
+    /// A string test against a two-piece concatenation `b + c`, which is never built (`Concat`).
+    StrOp2 {
+        dst: R,
+        a: R,
+        b: R,
+        c: R,
+        op: Concat,
         err: Pc,
     },
     /// `a.matches(b)`; `re` is a pattern compiled at lowering, `u32::MAX` when `b` is computed.
@@ -270,6 +411,29 @@ pub(crate) enum Op {
         else_: Pc,
         err: Pc,
     },
+    /// `a.matches(p)` for a literal pattern `p` compiled into `regexes[re]`, as a branch: jump to
+    /// `else_` when the answer is `invert`. A non-string, or the pattern's compile error, fails
+    /// to `err` as `Matches` does.
+    CondMatches {
+        a: R,
+        re: u32,
+        invert: bool,
+        else_: Pc,
+        err: Pc,
+    },
+    /// `f.op(b + k)` — `StrOp2` with a string field `f` (through its cache register, unless
+    /// `cache` is [`NO_CACHE`]) as the tested operand, a register `b` and a string constant `k`
+    /// as the pieces — and a branch on it: jump to `else_` when the answer is `invert`.
+    CondStrOp2F {
+        f: u32,
+        cache: R,
+        b: R,
+        k: u32,
+        op: Concat,
+        invert: bool,
+        else_: Pc,
+        err: Pc,
+    },
     /// `field(a) == field(b)` for two string fields, in a branch: jumps to `else_` when the
     /// equality is `ne` (so `ne` folds `!=` and the branch's sense together). A read that fails
     /// jumps to `err` with its error in flight; `a` is read first, as the unfused reads were.
@@ -286,12 +450,6 @@ pub(crate) enum Op {
         k: u32,
         ne: bool,
         else_: Pc,
-        err: Pc,
-    },
-    /// A caught left operand of `&&`/`||` whose right operand passed the result on: raise its
-    /// error. A bool (the left passed it on too) does nothing.
-    RaiseIfErr {
-        r: R,
         err: Pc,
     },
     /// `a == k` / `a != k` against a scalar constant.
@@ -318,15 +476,38 @@ pub(crate) enum Op {
         dst: R,
         a: R,
     },
+    /// Start iterating `src` in slot `slot`, and reset `clear` (the loop's pending error) unless
+    /// it is [`NO_REG`].
     IterInit {
         slot: u16,
         src: R,
+        clear: R,
         err: Pc,
     },
+    /// The next element of slot `slot` into `dst` — and `clear` reset, unless it is [`NO_REG`]:
+    /// a per-element pending error (`logic_chain`'s) folded into the fetch — or, past the last,
+    /// to `exit`: unless `pend` (not [`NO_REG`]) holds the loop's pending error, which is raised
+    /// to `err` instead (`RaisePending`, folded into the fetch that ends the loop).
     IterNext {
         slot: u16,
         dst: R,
+        clear: R,
+        pend: R,
         exit: Pc,
+        err: Pc,
+    },
+    /// `IterNext`, having first passed over every element the loop's body would pass over — its
+    /// region, `scans[scan]` — so the element it fetches is the first it cannot vouch for
+    /// (`src/fast/scan.rs`). Lowering emits it for a predicate loop with `scan: SCAN_WANTED`, and
+    /// `scan::fuse` gives it its region or makes it an `IterNext`.
+    IterScan {
+        slot: u16,
+        dst: R,
+        clear: R,
+        pend: R,
+        exit: Pc,
+        err: Pc,
+        scan: u16,
     },
     BrPending {
         r: R,
@@ -334,6 +515,83 @@ pub(crate) enum Op {
     },
     Clear {
         r: R,
+    },
+    /// `regs[r] += 1`: an `exists_one` loop's count, a number from its `Const 0`.
+    Inc {
+        r: R,
+    },
+    /// A field (through its cache register, unless `cache` is [`NO_CACHE`]) compared with a
+    /// constant, as a branch: jump to `else_` when `field op k` is `invert`. A failed read, or
+    /// operands `reg::compare` does not order (a NaN among them), fail to `err`, as `Cmp` does.
+    CondCmpFK {
+        f: u32,
+        cache: R,
+        want: Want,
+        k: u32,
+        op: Cmp,
+        invert: bool,
+        else_: Pc,
+        err: Pc,
+    },
+    /// Register `a` tested against a field (through its cache register, unless `cache` is
+    /// [`NO_CACHE`]), as a branch: jump to `else_` when the test is `invert`. A failed read, or a
+    /// test the unfused ops would refuse, fails to `err` with their error.
+    CondFR {
+        a: R,
+        f: u32,
+        cache: R,
+        want: Want,
+        test: FieldTest,
+        invert: bool,
+        else_: Pc,
+        err: Pc,
+    },
+    /// `a op k` for a constant `k`, as a branch: `CondEqK`'s ordering twin. Operands
+    /// `reg::compare` does not order fail to `err`, as `Cmp` does.
+    CondCmpK {
+        a: R,
+        k: u32,
+        op: Cmp,
+        invert: bool,
+        else_: Pc,
+        err: Pc,
+    },
+    /// `Read`, of a field the program reads more than once: the first read fills `cache`, which
+    /// every later one copies. A field's value cannot change during a run; a failed read fills
+    /// nothing, so reading the field again fails again, where and as it did.
+    ReadCached {
+        dst: R,
+        f: u32,
+        cache: R,
+        want: Want,
+        err: Pc,
+    },
+    /// Start the list a `map` / `filter` loop builds in slot `slot`, sized for `hint`'s length
+    /// when it is a list or map.
+    ListNew {
+        slot: u16,
+        hint: R,
+    },
+    /// Push `regs[src]` onto slot `slot`'s list, in place.
+    Append {
+        slot: u16,
+        src: R,
+    },
+    /// The built list, moved into the store as it is: `regs[dst]`.
+    ListFreeze {
+        slot: u16,
+        dst: R,
+    },
+    /// `regs[a]` is a number in `numsets[set]` — `==` against each, so anything else is not.
+    NumIn {
+        dst: R,
+        a: R,
+        set: u32,
+    },
+    /// Jump when `regs[r]` holds a value: a loop-invariant comprehension already computed.
+    BrSet {
+        r: R,
+        to: Pc,
     },
     Step {
         accu: R,
@@ -406,10 +664,12 @@ impl Op {
             Eq { .. } => "Eq",
             Ne { .. } => "Ne",
             Cmp { .. } => "Cmp",
+            ArithK { .. } => "ArithK",
             Arith { .. } => "Arith",
             In { .. } => "In",
             Match { .. } => "Match",
             StrOp { .. } => "StrOp",
+            StrOp2 { .. } => "StrOp2",
             Matches { .. } => "Matches",
             Size { .. } => "Size",
             Duration { .. } => "Duration",
@@ -426,15 +686,28 @@ impl Op {
             CondMatch { .. } => "CondMatch",
             CondEqFF { .. } => "CondEqFF",
             CondEqFK { .. } => "CondEqFK",
-            RaiseIfErr { .. } => "RaiseIfErr",
             EqK { .. } => "EqK",
             Catch { .. } => "Catch",
             Absorb { .. } => "Absorb",
             Nsf { .. } => "Nsf",
             IterInit { .. } => "IterInit",
             IterNext { .. } => "IterNext",
+            IterScan { .. } => "IterScan",
+            IndexIter { .. } => "IndexIter",
             BrPending { .. } => "BrPending",
             Clear { .. } => "Clear",
+            Inc { .. } => "Inc",
+            BrSet { .. } => "BrSet",
+            NumIn { .. } => "NumIn",
+            ListNew { .. } => "ListNew",
+            Append { .. } => "Append",
+            ListFreeze { .. } => "ListFreeze",
+            ReadCached { .. } => "ReadCached",
+            CondCmpFK { .. } => "CondCmpFK",
+            CondFR { .. } => "CondFR",
+            CondMatches { .. } => "CondMatches",
+            CondStrOp2F { .. } => "CondStrOp2F",
+            CondCmpK { .. } => "CondCmpK",
             Step { .. } => "Step",
             CatchPending { .. } => "CatchPending",
             RaisePending { .. } => "RaisePending",
@@ -447,11 +720,157 @@ impl Op {
         }
     }
 
+    /// Every single register the op names — the bases of `MakeList`'s, `MakeMap`'s and `Host`'s
+    /// ranges excepted, which only `slow` reads, bounds-checked — and its iterator slot. A
+    /// `cache`, `clear` or `pend` that is [`NO_REG`] names none: `exec` tests for it before
+    /// reading one.
+    fn operands(&self, reg: &mut impl FnMut(R), slot: &mut impl FnMut(u16)) {
+        use Op::*;
+        let mut opt = |r: R| {
+            if r != NO_REG {
+                reg(r)
+            }
+        };
+        match *self {
+            Const { dst, .. }
+            | Read { dst, .. }
+            | Has { dst, .. }
+            | Catch { dst }
+            | MakeList { dst, .. }
+            | MakeMap { dst, .. }
+            | Host { dst, .. }
+            | TagIn { dst, .. } => opt(dst),
+            Local { dst, src: a }
+            | Select { dst, obj: a, .. }
+            | HasOf { dst, obj: a, .. }
+            | Not { dst, a, .. }
+            | Neg { dst, a, .. }
+            | ArithK { dst, a, .. }
+            | Match { dst, a, .. }
+            | Size { dst, a, .. }
+            | Duration { dst, a, .. }
+            | DurPart { dst, a, .. }
+            | EqK { dst, a, .. }
+            | Absorb { dst, a, .. }
+            | Nsf { dst, a }
+            | NumIn { dst, a, .. } => {
+                opt(dst);
+                opt(a);
+            }
+            Index { dst, a, b, .. }
+            | Eq { dst, a, b }
+            | Ne { dst, a, b }
+            | Cmp { dst, a, b, .. }
+            | Arith { dst, a, b, .. }
+            | In { dst, a, b, .. }
+            | StrOp { dst, a, b, .. }
+            | Matches { dst, a, b, .. } => {
+                opt(dst);
+                opt(a);
+                opt(b);
+            }
+            IndexIter {
+                dst, a, b, slot: s, ..
+            } => {
+                opt(dst);
+                opt(a);
+                opt(b);
+                slot(s);
+            }
+            StrOp2 { dst, a, b, c, .. } => {
+                opt(dst);
+                opt(a);
+                opt(b);
+                opt(c);
+            }
+            CheckKey { r, .. }
+            | BrTrue { r, .. }
+            | BrFalse { r, .. }
+            | Cond { r, .. }
+            | BrPending { r, .. }
+            | Clear { r }
+            | Inc { r }
+            | BrSet { r, .. }
+            | Ret { r } => opt(r),
+            CondEqK { a, .. }
+            | CondMatch { a, .. }
+            | CondMatches { a, .. }
+            | CondCmpK { a, .. } => opt(a),
+            CondStrOp2F { cache, b, .. } => {
+                opt(cache);
+                opt(b);
+            }
+            CondCmpFK { cache, .. } => opt(cache),
+            CondFR { a, cache, .. } => {
+                opt(a);
+                opt(cache);
+            }
+            ReadCached { dst, cache, .. } => {
+                opt(dst);
+                opt(cache);
+            }
+            IterInit {
+                slot: s,
+                src,
+                clear,
+                ..
+            } => {
+                opt(src);
+                opt(clear);
+                slot(s);
+            }
+            IterNext {
+                slot: s,
+                dst,
+                clear,
+                pend,
+                ..
+            }
+            | IterScan {
+                slot: s,
+                dst,
+                clear,
+                pend,
+                ..
+            } => {
+                opt(dst);
+                opt(clear);
+                opt(pend);
+                slot(s);
+            }
+            ListNew { slot: s, hint } => {
+                opt(hint);
+                slot(s);
+            }
+            Append { slot: s, src: r } | ListFreeze { slot: s, dst: r } => {
+                opt(r);
+                slot(s);
+            }
+            Step {
+                accu, step, pend, ..
+            } => {
+                opt(accu);
+                opt(step);
+                opt(pend);
+            }
+            CatchPending { pend } | RaisePending { pend, .. } => opt(pend),
+            Raise { .. }
+            | Jump { .. }
+            | CondRead { .. }
+            | CondEqFF { .. }
+            | CondEqFK { .. }
+            | CondTagIn { .. }
+            | RetK { .. }
+            | Fail => {}
+        }
+    }
+
     fn retarget(&mut self, at: &impl Fn(Pc) -> Pc) {
         use Op::*;
         match self {
             Raise { err, .. }
             | Read { err, .. }
+            | ReadCached { err, .. }
             | Has { err, .. }
             | Select { err, .. }
             | HasOf { err, .. }
@@ -460,34 +879,46 @@ impl Op {
             | Neg { err, .. }
             | Cmp { err, .. }
             | Arith { err, .. }
+            | ArithK { err, .. }
             | In { err, .. }
             | Match { err, .. }
             | StrOp { err, .. }
+            | StrOp2 { err, .. }
             | Matches { err, .. }
             | Size { err, .. }
             | Duration { err, .. }
             | DurPart { err, .. }
             | CheckKey { err, .. }
             | Absorb { err, .. }
-            | RaiseIfErr { err, .. }
             | IterInit { err, .. }
+            | IndexIter { err, .. }
             | RaisePending { err, .. }
             | Host { err, .. }
             | TagIn { err, .. } => *err = at(*err),
-            Jump { to } | BrTrue { to, .. } | BrFalse { to, .. } | BrPending { to, .. } => {
-                *to = at(*to)
-            }
+            Jump { to }
+            | BrTrue { to, .. }
+            | BrFalse { to, .. }
+            | BrPending { to, .. }
+            | BrSet { to, .. } => *to = at(*to),
             Cond { else_, err, .. }
             | CondRead { else_, err, .. }
             | CondMatch { else_, err, .. }
             | CondEqFF { else_, err, .. }
             | CondEqFK { else_, err, .. }
-            | CondTagIn { else_, err, .. } => {
+            | CondTagIn { else_, err, .. }
+            | CondCmpFK { else_, err, .. }
+            | CondFR { else_, err, .. }
+            | CondMatches { else_, err, .. }
+            | CondStrOp2F { else_, err, .. }
+            | CondCmpK { else_, err, .. } => {
                 *else_ = at(*else_);
                 *err = at(*err);
             }
             CondEqK { else_, .. } => *else_ = at(*else_),
-            IterNext { exit, .. } => *exit = at(*exit),
+            IterNext { exit, err, .. } | IterScan { exit, err, .. } => {
+                *exit = at(*exit);
+                *err = at(*err);
+            }
             Const { .. }
             | Local { .. }
             | Eq { .. }
@@ -498,6 +929,11 @@ impl Op {
             | Catch { .. }
             | Nsf { .. }
             | Clear { .. }
+            | Inc { .. }
+            | NumIn { .. }
+            | ListNew { .. }
+            | Append { .. }
+            | ListFreeze { .. }
             | Step { .. }
             | CatchPending { .. }
             | Ret { .. }
@@ -564,6 +1000,10 @@ pub(crate) struct Code {
     pub(crate) names: Vec<CelKey>,
     pub(crate) fields: Vec<FieldPath>,
     pub(crate) matchers: Vec<StrMatcher>,
+    pub(crate) numsets: Vec<matcher::NumSet>,
+    /// The ops that ran while lowering folded a call over constants (`Lower::fold_call`): the
+    /// backend computed those constants, so its coverage counts them.
+    pub(crate) folded: Vec<&'static str>,
     pub(crate) regexes: Vec<Result<regex::Regex, ExecutionError>>,
     pub(crate) nregs: usize,
     pub(crate) nloops: usize,
@@ -571,6 +1011,8 @@ pub(crate) struct Code {
     pub(crate) hosts: Arc<crate::hostfn::HostTable>,
     /// The closed-set value lists a tag op looks a string up in, by index.
     pub(crate) enum_sets: Vec<Arc<[Box<str>]>>,
+    /// The regions a scanned `IterNext` passes elements over by (`IterNext::scan`), by index.
+    pub(crate) scans: Vec<scan::ScanBody>,
     /// Every constant as a register, built once by [`Code::seal`].
     kregs: Vec<Reg<'static>>,
 }
@@ -590,15 +1032,22 @@ impl Code {
 
     #[inline(always)]
     fn konst<'a>(&'a self, k: u32) -> Reg<'a> {
+        *self.kref(k)
+    }
+
+    /// Constant `k`, in place: what a comparison reads, rather than a copy of it.
+    #[inline(always)]
+    fn kref<'a>(&'a self, k: u32) -> &'a Reg<'a> {
         debug_assert!((k as usize) < self.kregs.len());
         // SAFETY: `Code::verify` (run by `lower::finish` on every `Code` there is) checked every
         // constant index an op carries against `kregs`.
-        unsafe { *self.kregs.get_unchecked(k as usize) }
+        unsafe { self.kregs.get_unchecked(k as usize) }
     }
 
-    /// The invariants `exec` fetches ops and constants under without a bounds check: every jump
-    /// target is an op, every constant index is a constant, and the last op never falls through
-    /// past the end.
+    /// The invariants `exec` fetches ops, constants, registers and iterators under without a
+    /// bounds check: every jump target is an op, every constant index is a constant, every
+    /// register an op names is a register and every loop slot a slot, and the last op never falls
+    /// through past the end.
     pub(crate) fn verify(&self) -> Result<(), String> {
         let n = self.ops.len() as u64;
         let bad = std::cell::Cell::new(None);
@@ -618,10 +1067,34 @@ impl Code {
                 | Op::Raise { k, .. }
                 | Op::CondEqK { k, .. }
                 | Op::CondEqFK { k, .. }
+                | Op::CondCmpFK { k, .. }
+                | Op::CondCmpK { k, .. }
+                | Op::ArithK { k, .. }
+                | Op::CondStrOp2F { k, .. }
                 | Op::EqK { k, .. }
                 | Op::RetK { k } => Some(k),
                 _ => None,
             };
+            op.operands(
+                &mut |r| {
+                    if r as usize >= self.nregs {
+                        bad.set(Some(format!(
+                            "op {pc} ({}) names register {r}, past {} registers",
+                            op.name(),
+                            self.nregs
+                        )));
+                    }
+                },
+                &mut |s| {
+                    if s as usize >= self.nloops {
+                        bad.set(Some(format!(
+                            "op {pc} ({}) names loop slot {s}, past {} slots",
+                            op.name(),
+                            self.nloops
+                        )));
+                    }
+                },
+            );
             if let Some(k) = k {
                 if k as usize >= self.kregs.len() {
                     bad.set(Some(format!(
@@ -629,6 +1102,72 @@ impl Code {
                         op.name(),
                         self.kregs.len()
                     )));
+                }
+            }
+        }
+        for (pc, op) in self.ops.iter().enumerate() {
+            if let Op::IterScan { scan, .. } = op {
+                if *scan as usize >= self.scans.len() {
+                    bad.set(Some(format!(
+                        "op {pc} (IterScan) names scan body {scan}, past {} bodies",
+                        self.scans.len()
+                    )));
+                }
+            }
+        }
+        for (b, body) in self.scans.iter().enumerate() {
+            // The element is value 0; each `Member`/`Entry` step defines the next.
+            let mut defined = 1;
+            for (s, step) in body.steps.iter().enumerate() {
+                let (vals, cache) = step.operands();
+                if let Some(r) = cache {
+                    if r as usize >= self.nregs {
+                        bad.set(Some(format!(
+                            "scan body {b} step {s} names register {r}, past {} registers",
+                            self.nregs
+                        )));
+                    }
+                }
+                for v in vals {
+                    if *v as usize >= defined {
+                        bad.set(Some(format!(
+                            "scan body {b} step {s} names value {v}, not yet defined"
+                        )));
+                    }
+                }
+                if step.defines() {
+                    defined += 1;
+                }
+                let (re, m) = step.tables();
+                if re.is_some_and(|re| re as usize >= self.regexes.len())
+                    || m.is_some_and(|m| m as usize >= self.matchers.len())
+                {
+                    bad.set(Some(format!(
+                        "scan body {b} step {s} names a regex or matcher past the tables"
+                    )));
+                }
+                if let Some(key) = step.name() {
+                    if key as usize >= self.names.len() {
+                        bad.set(Some(format!(
+                            "scan body {b} step {s} names member {key}, past {} names",
+                            self.names.len()
+                        )));
+                    }
+                }
+                if let Some(k) = step.konst() {
+                    if k as usize >= self.kregs.len() {
+                        bad.set(Some(format!(
+                            "scan body {b} step {s} names constant {k}, past {} constants",
+                            self.kregs.len()
+                        )));
+                    }
+                }
+                if let scan::Go::Step(t) = step.go() {
+                    if t as usize <= s || t as usize >= body.steps.len() {
+                        bad.set(Some(format!(
+                            "scan body {b} step {s} jumps back, or past its steps, to step {t}"
+                        )));
+                    }
                 }
             }
         }
@@ -729,14 +1268,43 @@ impl FastProgram {
             .ops
             .iter()
             .enumerate()
-            .map(|(i, op)| format!("{i:4}  {op:?}\n"))
+            .map(|(i, op)| {
+                let mut line = format!("{i:4}  {op:?}\n");
+                if let Op::IterScan { scan, .. } = op {
+                    let steps = match self.code.scans.get(*scan as usize) {
+                        Some(b) => &b.steps[..],
+                        None => &[],
+                    };
+                    for (s, step) in steps.iter().enumerate() {
+                        line.push_str(&format!("        step {s}: {step:?}\n"));
+                    }
+                }
+                line
+            })
             .collect()
+    }
+
+    /// How many of the program's loops scan: pass over the elements their body would pass over
+    /// inside their `IterNext`.
+    #[doc(hidden)]
+    pub fn scanned_loops(&self) -> usize {
+        self.code
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::IterScan { .. }))
+            .count()
     }
 
     /// The name of every op the program lowered to, in order.
     #[doc(hidden)]
     pub fn op_names(&self) -> Vec<&'static str> {
         self.code.ops.iter().map(Op::name).collect()
+    }
+
+    /// The ops that ran at lowering to fold calls over constants into this program's constants.
+    #[doc(hidden)]
+    pub fn folded_op_names(&self) -> &[&'static str] {
+        &self.code.folded
     }
 
     /// How many ops the program lowered to.
@@ -753,8 +1321,10 @@ impl FastProgram {
             fields: &self.code.fields,
             wait: false,
         };
-        let mut scratch = FastScratch::default();
-        verdict(&self.source, run(&self.code, &host, &mut scratch, as_bool))
+        verdict(
+            &self.source,
+            with_eval_scratch(|scratch| run(&self.code, &host, scratch, as_bool)),
+        )
     }
 
     /// The value over `activation`'s values, whatever its type — [`Vm::eval_result`]'s contract.
@@ -782,8 +1352,8 @@ impl FastProgram {
             },
             dispatch: &cell,
         };
-        let mut scratch = FastScratch::default();
-        let v = run(&self.code, &host, &mut scratch, reg::to_cel).and_then(|v| v);
+        let v = with_eval_scratch(|scratch| run(&self.code, &host, scratch, reg::to_cel))
+            .and_then(|v| v);
         self.result_value(v)
     }
 
@@ -821,8 +1391,7 @@ impl FastProgram {
             fields: &self.code.fields,
             wait: false,
         };
-        let mut scratch = FastScratch::default();
-        run(&self.code, &host, &mut scratch, reg::to_cel).and_then(|v| v)
+        with_eval_scratch(|scratch| run(&self.code, &host, scratch, reg::to_cel)).and_then(|v| v)
     }
 
     /// The verdict over the caller's own data. `scratch` is reused from call to call, so a
@@ -1036,6 +1605,8 @@ enum Iter<'a> {
     MapKeys(&'a [(CelMapKey, CelValue)], usize),
     /// A lazy view's keys.
     LazyKeys(Box<dyn Iterator<Item = &'a CelKey> + 'a>),
+    /// Not an iteration: the list a `map` / `filter` loop is appending to (`ListNew`).
+    Build(Vec<Reg<'a>>),
 }
 
 /// A run's working memory, kept between runs so a warmed decision allocates nothing.
@@ -1053,6 +1624,23 @@ impl std::fmt::Debug for FastScratch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FastScratch").finish_non_exhaustive()
     }
+}
+
+thread_local! {
+    /// The scratch the activation entry points (`eval`, `eval_result_with`, `eval_value`) run in,
+    /// warmed by the first call on this thread. A run empties it before returning
+    /// (`run_on_scratch`), so a call on a warm thread allocates only what its program builds.
+    static EVAL_SCRATCH: std::cell::RefCell<FastScratch> =
+        std::cell::RefCell::new(FastScratch::default());
+}
+
+/// `f` over this thread's [`EVAL_SCRATCH`] — or over a fresh scratch when it is already borrowed,
+/// which is a CALL host evaluating CEL from inside a run: the outer run's registers are live.
+fn with_eval_scratch<T>(f: impl FnOnce(&mut FastScratch) -> T) -> T {
+    EVAL_SCRATCH.with(|s| match s.try_borrow_mut() {
+        Ok(mut s) => f(&mut s),
+        Err(_) => f(&mut FastScratch::default()),
+    })
 }
 
 /// `v`, re-lifetimed for one run. Anything a previous run left in it — only a run that panicked
@@ -1222,6 +1810,29 @@ fn run_on_scratch<'a, H: Host<'a>, T>(
     result
 }
 
+/// A register or iterator file `exec` indexes without a bounds check, on the strength of
+/// [`Code::verify`]: every index an op names is below the count the file was sized to.
+struct Unchecked<'r, T>(&'r mut [T]);
+
+impl<T> std::ops::Index<usize> for Unchecked<'_, T> {
+    type Output = T;
+    #[inline(always)]
+    fn index(&self, i: usize) -> &T {
+        debug_assert!(i < self.0.len());
+        // SAFETY: `Code::verify`; see the type.
+        unsafe { self.0.get_unchecked(i) }
+    }
+}
+
+impl<T> std::ops::IndexMut<usize> for Unchecked<'_, T> {
+    #[inline(always)]
+    fn index_mut(&mut self, i: usize) -> &mut T {
+        debug_assert!(i < self.0.len());
+        // SAFETY: `Code::verify`; see the type.
+        unsafe { self.0.get_unchecked_mut(i) }
+    }
+}
+
 /// How a run left `exec`.
 enum Exit<'a> {
     Ret(Reg<'a>),
@@ -1248,39 +1859,165 @@ fn exec<'a, H: Host<'a>>(
     inflight: Option<Box<ExecutionError>>,
 ) -> Exit<'a> {
     let ops = &code.ops[..];
-    let mut pc = start;
+    debug_assert!(start < ops.len());
+    // The next op, as a pointer: held in a machine register, never in memory, so no call can
+    // make the loop reload it.
+    let base = ops.as_ptr();
+    // SAFETY: `start` is an op (0, or where a paused run stopped).
+    let mut ip = unsafe { base.add(start) };
     let mut inflight = inflight;
-    // The op that asked for a value not answerable yet is `pc - 1`: `pc` has already moved past
+    // Indexed without a bounds check: `Code::verify` checked every register and loop slot an op
+    // names against `nregs` and `nloops`, and the run sized both files to them.
+    debug_assert!(regs.len() >= code.nregs && iters.len() >= code.nloops);
+    let regs = &mut Unchecked(regs);
+    let iters = &mut Unchecked(iters);
+    // SAFETY (every use): `Code::verify` checked every jump target against `ops.len()`.
+    macro_rules! jump {
+        ($to:expr) => {
+            ip = unsafe { base.add($to as usize) }
+        };
+    }
+    // The index of the op after the current one.
+    macro_rules! pc {
+        () => {
+            // SAFETY: `ip` points into `ops`, from `base`.
+            unsafe { ip.offset_from(base) as usize }
+        };
+    }
+    // The op that asked for a value not answerable yet is `pc - 1`: `ip` has already moved past
     // it, and a pause puts it back, so the resumed run executes the same read again.
     macro_rules! need {
         ($h:expr) => {
             return Exit::Need {
                 handle: $h,
-                pc: pc - 1,
+                pc: pc!() - 1,
                 inflight,
             }
         };
     }
+    // An op, or an uncommon case of one, that `slow` answers.
+    macro_rules! go_slow {
+        ($op:expr) => {{
+            let mut pc = pc!();
+            match slow(
+                $op,
+                code,
+                host,
+                regs.0,
+                st,
+                iters.0,
+                errs,
+                &mut inflight,
+                &mut pc,
+            ) {
+                Flow::Next => jump!(pc),
+                Flow::Ret(r) => return Exit::Ret(r),
+                Flow::Fail(e) => return Exit::Fail(e),
+                Flow::Need(h) => {
+                    jump!(pc);
+                    need!(h)
+                }
+            }
+        }};
+    }
+    // The next element of a loop's slot into `dst` (`Op::IterNext`), shared by `IterNext` and the
+    // `IterScan` that scans first.
+    macro_rules! iter_next {
+        ($op:expr, $slot:expr, $dst:expr, $clear:expr, $pend:expr, $exit:expr, $err:expr) => {{
+            // Each element is written straight to `dst`, never through a temporary.
+            let d = &mut regs[$dst as usize];
+            let more = match &mut iters[$slot as usize] {
+                Iter::Idle => false,
+                Iter::Regs(l, i) => match l.get(*i) {
+                    Some(r) => {
+                        *i += 1;
+                        *d = *r;
+                        true
+                    }
+                    None => false,
+                },
+                Iter::Pairs(m, i) => match m.get(*i) {
+                    Some((k, _)) => {
+                        *i += 1;
+                        *d = *k;
+                        true
+                    }
+                    None => false,
+                },
+                Iter::Vals(l, i) => match l.get(*i) {
+                    Some(v) => {
+                        *i += 1;
+                        // A store per kind, not one merged 24-byte value: a merged one is
+                        // assembled through the stack.
+                        match v {
+                            CelValue::Str(s) => *d = Reg::Str(s),
+                            CelValue::Num(n) => *d = Reg::Num(*n),
+                            _ => *d = reg::of_cel(v),
+                        }
+                        true
+                    }
+                    None => false,
+                },
+                Iter::MapKeys(m, i) => match m.get(*i) {
+                    Some((k, _)) => {
+                        *i += 1;
+                        match k {
+                            CelMapKey::Str(s) => *d = Reg::Str(s.as_str()),
+                            _ => *d = reg::key_reg(k),
+                        }
+                        true
+                    }
+                    None => false,
+                },
+                Iter::LazyKeys(_) | Iter::Build(_) => {
+                    go_slow!($op);
+                    continue;
+                }
+            };
+            match more {
+                true => {
+                    if $clear != NO_REG {
+                        regs[$clear as usize] = Reg::Unset;
+                    }
+                }
+                false => {
+                    iters[$slot as usize] = Iter::Idle;
+                    match pending(regs.0, $pend) {
+                        None => jump!($exit),
+                        Some(i) => {
+                            fault(&mut inflight, take_pending(errs, i));
+                            jump!($err);
+                        }
+                    }
+                }
+            }
+        }};
+    }
     // The ops a decision runs most, inline; everything else through `slow`, which keeps this loop
     // small enough to hold its state in registers.
+    #[cfg(feature = "profile")]
+    profile::exec();
     loop {
-        debug_assert!(pc < ops.len());
+        debug_assert!(pc!() < ops.len());
         // SAFETY: `Code::verify` checked every jump target against `ops.len()` and that the last
-        // op never falls through, so `pc` — the start (0 or a resumed op), a target, or the op
-        // after one that falls through — is always an op.
-        let op = unsafe { *ops.get_unchecked(pc) };
-        pc += 1;
-        match op {
+        // op never falls through, so `ip` — the start (0 or a resumed op), a target, or the op
+        // after one that falls through — is always an op. Read in place, by reference: the arms
+        // bind the fields they use, and only `slow` takes the whole op.
+        let op = unsafe { &*ip };
+        ip = unsafe { ip.add(1) };
+        #[cfg(feature = "profile")]
+        profile::op(op.name());
+        match *op {
             Op::Const { dst, k } => regs[dst as usize] = code.konst(k),
-            Op::Jump { to } => pc = to as usize,
+            Op::Jump { to } => jump!(to),
             Op::BrTrue { r, to } => {
                 if matches!(regs[r as usize], Reg::Bool(true)) {
-                    pc = to as usize;
+                    jump!(to);
                 }
             }
             Op::BrFalse { r, to } => {
                 if matches!(regs[r as usize], Reg::Bool(false)) {
-                    pc = to as usize;
+                    jump!(to);
                 }
             }
             Op::Local { dst, src } => regs[dst as usize] = regs[src as usize],
@@ -1288,10 +2025,148 @@ fn exec<'a, H: Host<'a>>(
                 Ok(v) => regs[dst as usize] = v,
                 Err(Miss::Err(e)) => {
                     inflight = Some(e);
-                    pc = err as usize;
+                    jump!(err);
                 }
                 Err(Miss::Need(h)) => need!(h),
             },
+            Op::CondCmpFK {
+                f,
+                cache,
+                want,
+                k,
+                op: c,
+                invert,
+                else_,
+                err,
+            } => {
+                let v = if cache != NO_CACHE && !matches!(regs[cache as usize], Reg::Unset) {
+                    regs[cache as usize]
+                } else {
+                    match fill(host, f, want, st) {
+                        Ok(v) => {
+                            if cache != NO_CACHE {
+                                regs[cache as usize] = v;
+                            }
+                            v
+                        }
+                        Err(Miss::Err(e)) => {
+                            inflight = Some(e);
+                            jump!(err);
+                            continue;
+                        }
+                        Err(Miss::Need(h)) => need!(h),
+                    }
+                };
+                match ordering(&v, code.kref(k)) {
+                    Some(o) => {
+                        if c.holds(o) == invert {
+                            jump!(else_);
+                        }
+                    }
+                    None => {
+                        fault(&mut inflight, ExecutionError::NoSuchOverload);
+                        jump!(err);
+                    }
+                }
+            }
+            Op::CondFR {
+                a,
+                f,
+                cache,
+                want,
+                test,
+                invert,
+                else_,
+                err,
+            } => {
+                // What a loop tests per element — a string for equality, a number for order —
+                // against a field already cached: read in place, one compare, no copy of either
+                // register and no second dispatch on the test. Anything else (the first read, a
+                // mixed pair, a NaN) takes the general path below.
+                if cache != NO_CACHE {
+                    let hit = match (test, &regs[a as usize], &regs[cache as usize]) {
+                        (FieldTest::Eq { ne }, Reg::Str(x), Reg::Str(y)) => Some((x == y) != ne),
+                        (FieldTest::Cmp(c), Reg::Num(x), Reg::Num(y)) => {
+                            x.partial_cmp(y).map(|o| c.holds(o))
+                        }
+                        _ => None,
+                    };
+                    if let Some(b) = hit {
+                        if b == invert {
+                            jump!(else_);
+                        }
+                        continue;
+                    }
+                }
+                let v = if cache != NO_CACHE && !matches!(regs[cache as usize], Reg::Unset) {
+                    regs[cache as usize]
+                } else {
+                    match fill(host, f, want, st) {
+                        Ok(v) => {
+                            if cache != NO_CACHE {
+                                regs[cache as usize] = v;
+                            }
+                            v
+                        }
+                        Err(Miss::Err(e)) => {
+                            inflight = Some(e);
+                            jump!(err);
+                            continue;
+                        }
+                        Err(Miss::Need(h)) => need!(h),
+                    }
+                };
+                let x = &regs[a as usize];
+                match field_test(test, x, &v) {
+                    Some(b) => {
+                        if b == invert {
+                            jump!(else_);
+                        }
+                    }
+                    None => {
+                        fault(&mut inflight, field_test_error(test, *x, v));
+                        jump!(err);
+                    }
+                }
+            }
+            Op::CondCmpK {
+                a,
+                k,
+                op: c,
+                invert,
+                else_,
+                ..
+            } => match ordering(&regs[a as usize], code.kref(k)) {
+                Some(o) => {
+                    if c.holds(o) == invert {
+                        jump!(else_);
+                    }
+                }
+                None => go_slow!(*op),
+            },
+            Op::ReadCached {
+                dst,
+                f,
+                cache,
+                want,
+                err,
+            } => {
+                if !matches!(regs[cache as usize], Reg::Unset) {
+                    regs[dst as usize] = regs[cache as usize];
+                } else {
+                    match fill(host, f, want, st) {
+                        Ok(v) => {
+                            regs[cache as usize] = v;
+                            regs[dst as usize] = v;
+                        }
+                        Err(Miss::Err(e)) => {
+                            inflight = Some(e);
+                            jump!(err);
+                        }
+                        Err(Miss::Need(h)) => need!(h),
+                    }
+                }
+            }
             Op::CondRead {
                 f,
                 invert,
@@ -1300,25 +2175,25 @@ fn exec<'a, H: Host<'a>>(
             } => match host.read(f, Want::Bool, st) {
                 Ok(Reg::Bool(b)) => {
                     if b == invert {
-                        pc = else_ as usize;
+                        jump!(else_);
                     }
                 }
                 Ok(_) => {
-                    inflight = Some(no_such_overload());
-                    pc = err as usize;
+                    fault(&mut inflight, ExecutionError::NoSuchOverload);
+                    jump!(err);
                 }
                 Err(Miss::Err(e)) => {
                     inflight = Some(e);
-                    pc = err as usize;
+                    jump!(err);
                 }
                 Err(Miss::Need(h)) => need!(h),
             },
             Op::EqK { dst, a, k, ne } => {
-                regs[dst as usize] = Reg::Bool(eq_k(regs[a as usize], code.konst(k)) != ne)
+                regs[dst as usize] = Reg::Bool(eq_k(&regs[a as usize], code.kref(k)) != ne)
             }
             Op::CondEqK { a, k, ne, else_ } => {
-                if eq_k(regs[a as usize], code.konst(k)) == ne {
-                    pc = else_ as usize;
+                if eq_k(&regs[a as usize], code.kref(k)) == ne {
+                    jump!(else_);
                 }
             }
             Op::CondEqFF {
@@ -1332,7 +2207,7 @@ fn exec<'a, H: Host<'a>>(
                     Ok(v) => v,
                     Err(Miss::Err(e)) => {
                         inflight = Some(e);
-                        pc = err as usize;
+                        jump!(err);
                         continue;
                     }
                     Err(Miss::Need(h)) => need!(h),
@@ -1341,13 +2216,13 @@ fn exec<'a, H: Host<'a>>(
                     Ok(v) => v,
                     Err(Miss::Err(e)) => {
                         inflight = Some(e);
-                        pc = err as usize;
+                        jump!(err);
                         continue;
                     }
                     Err(Miss::Need(h)) => need!(h),
                 };
-                if eq_k(x, y) == ne {
-                    pc = else_ as usize;
+                if eq_k(&x, &y) == ne {
+                    jump!(else_);
                 }
             }
             Op::CondEqFK {
@@ -1358,13 +2233,13 @@ fn exec<'a, H: Host<'a>>(
                 err,
             } => match host.read(a, Want::Str, st) {
                 Ok(x) => {
-                    if eq_k(x, code.konst(k)) == ne {
-                        pc = else_ as usize;
+                    if eq_k(&x, code.kref(k)) == ne {
+                        jump!(else_);
                     }
                 }
                 Err(Miss::Err(e)) => {
                     inflight = Some(e);
-                    pc = err as usize;
+                    jump!(err);
                 }
                 Err(Miss::Need(h)) => need!(h),
             },
@@ -1377,12 +2252,12 @@ fn exec<'a, H: Host<'a>>(
             } => match regs[a as usize] {
                 Reg::Str(s) => {
                     if code.matchers[m as usize].matches(s) == invert {
-                        pc = else_ as usize;
+                        jump!(else_);
                     }
                 }
                 _ => {
-                    inflight = Some(no_such_overload());
-                    pc = err as usize;
+                    fault(&mut inflight, ExecutionError::NoSuchOverload);
+                    jump!(err);
                 }
             },
             Op::Cond {
@@ -1393,12 +2268,12 @@ fn exec<'a, H: Host<'a>>(
             } => match regs[r as usize] {
                 Reg::Bool(b) => {
                     if b == invert {
-                        pc = else_ as usize;
+                        jump!(else_);
                     }
                 }
                 _ => {
-                    inflight = Some(no_such_overload());
-                    pc = err as usize;
+                    fault(&mut inflight, ExecutionError::NoSuchOverload);
+                    jump!(err);
                 }
             },
             Op::CondTagIn {
@@ -1411,21 +2286,20 @@ fn exec<'a, H: Host<'a>>(
             } => match host.tag(f, &code.enum_sets[set as usize], st) {
                 Ok(t) => {
                     if in_mask(t, mask) == invert {
-                        pc = else_ as usize;
+                        jump!(else_);
                     }
                 }
                 Err(Miss::Err(e)) => {
                     inflight = Some(e);
-                    pc = err as usize;
+                    jump!(err);
                 }
                 Err(Miss::Need(h)) => need!(h),
             },
-            Op::RaiseIfErr { r, .. } if matches!(regs[r as usize], Reg::Bool(_)) => {}
             Op::Eq { dst, a, b } => {
-                regs[dst as usize] = Reg::Bool(eq_k(regs[a as usize], regs[b as usize]))
+                regs[dst as usize] = Reg::Bool(eq_k(&regs[a as usize], &regs[b as usize]))
             }
             Op::Ne { dst, a, b } => {
-                regs[dst as usize] = Reg::Bool(!eq_k(regs[a as usize], regs[b as usize]))
+                regs[dst as usize] = Reg::Bool(!eq_k(&regs[a as usize], &regs[b as usize]))
             }
             // Only the case that does nothing is inline: the left passed it on and the right is a
             // bool. Every other case — an error to raise or absorb — goes to `slow`.
@@ -1440,34 +2314,371 @@ fn exec<'a, H: Host<'a>>(
                 };
                 regs[dst as usize] = Reg::Bool(code.matchers[m as usize].matches(s));
             }
+            Op::Not { dst, a, .. } if matches!(regs[a as usize], Reg::Bool(_)) => {
+                regs[dst as usize] = Reg::Bool(matches!(regs[a as usize], Reg::Bool(false)));
+            }
+            Op::Nsf { dst, a } => {
+                regs[dst as usize] = Reg::Bool(!matches!(regs[a as usize], Reg::Bool(false)))
+            }
+            Op::Cmp {
+                dst, a, b, op: c, ..
+            } => match ordering(&regs[a as usize], &regs[b as usize]) {
+                Some(o) => regs[dst as usize] = Reg::Bool(c.holds(o)),
+                // Operands it does not order, NaN among them: `slow` raises.
+                None => go_slow!(*op),
+            },
+            // A bound record's (or map's) member that is there. A missing one raises, a lazy view
+            // is polled, a built map is searched: `slow`.
+            Op::CondStrOp2F {
+                f,
+                cache,
+                b,
+                k,
+                op: o,
+                invert,
+                else_,
+                err,
+            } => {
+                let v = if cache != NO_CACHE && !matches!(regs[cache as usize], Reg::Unset) {
+                    regs[cache as usize]
+                } else {
+                    match fill(host, f, Want::Str, st) {
+                        Ok(v) => {
+                            if cache != NO_CACHE {
+                                regs[cache as usize] = v;
+                            }
+                            v
+                        }
+                        Err(Miss::Err(e)) => {
+                            inflight = Some(e);
+                            jump!(err);
+                            continue;
+                        }
+                        Err(Miss::Need(h)) => need!(h),
+                    }
+                };
+                match (v, regs[b as usize], code.konst(k)) {
+                    (Reg::Str(x), Reg::Str(y), Reg::Str(z)) => {
+                        if o.test(x, y, z) == invert {
+                            jump!(else_);
+                        }
+                    }
+                    // Only a string concatenates: what `+` would have refused.
+                    _ => {
+                        fault(&mut inflight, ExecutionError::NoSuchOverload);
+                        jump!(err);
+                    }
+                }
+            }
+            Op::StrOp2 {
+                dst,
+                a,
+                b,
+                c,
+                op: o,
+                ..
+            } => match (regs[a as usize], regs[b as usize], regs[c as usize]) {
+                (Reg::Str(x), Reg::Str(y), Reg::Str(z)) => {
+                    regs[dst as usize] = Reg::Bool(o.test(x, y, z))
+                }
+                _ => go_slow!(*op),
+            },
+            Op::Matches { dst, a, re, .. } if re != u32::MAX => {
+                match (regs[a as usize], &code.regexes[re as usize]) {
+                    (Reg::Str(s), Ok(r)) => regs[dst as usize] = Reg::Bool(r.is_match(s)),
+                    _ => go_slow!(*op),
+                }
+            }
+            Op::CondMatches {
+                a,
+                re,
+                invert,
+                else_,
+                ..
+            } => match (regs[a as usize], &code.regexes[re as usize]) {
+                (Reg::Str(s), Ok(r)) => {
+                    if r.is_match(s) == invert {
+                        jump!(else_);
+                    }
+                }
+                _ => go_slow!(*op),
+            },
+            Op::Arith {
+                dst, a, b, op: o, ..
+            } => match (regs[a as usize], regs[b as usize]) {
+                (Reg::Num(x), Reg::Num(y)) => regs[dst as usize] = Reg::Num(o.num(x, y)),
+                // A string or a duration, or a refusal: `slow` (`fn arith`) builds it.
+                _ => go_slow!(*op),
+            },
+            Op::ArithK {
+                dst,
+                a,
+                k,
+                op: o,
+                rev,
+                ..
+            } => match (regs[a as usize], code.konst(k)) {
+                (Reg::Num(x), Reg::Num(y)) => {
+                    regs[dst as usize] = Reg::Num(if rev { o.num(y, x) } else { o.num(x, y) })
+                }
+                _ => go_slow!(*op),
+            },
+            // A caught error, out of the in-flight box (kept for the next failure): no allocation.
+            Op::Catch { dst } => {
+                errs.push(caught(&mut inflight));
+                regs[dst as usize] = Reg::Err((errs.len() - 1) as u32);
+            }
+            Op::IterInit {
+                slot, src, clear, ..
+            } => {
+                let it = match regs[src as usize] {
+                    Reg::List(l) => Some(Iter::Regs(l, 0)),
+                    Reg::Map(m) => Some(Iter::Pairs(m, 0)),
+                    Reg::Val(CelValue::List(l)) => Some(Iter::Vals(l, 0)),
+                    Reg::Val(CelValue::Map(m)) => Some(Iter::MapKeys(m.entries(), 0)),
+                    _ => None,
+                };
+                match it {
+                    Some(it) => {
+                        iters[slot as usize] = it;
+                        if clear != NO_REG {
+                            regs[clear as usize] = Reg::Unset;
+                        }
+                    }
+                    // A lazy view's keys, or a refusal: `slow`.
+                    None => go_slow!(*op),
+                }
+            }
+            Op::IndexIter { dst, slot, .. } => {
+                let v = match &iters[slot as usize] {
+                    Iter::MapKeys(m, i) if *i > 0 => Some(reg::of_cel(&m[*i - 1].1)),
+                    Iter::Pairs(m, i) if *i > 0 => Some(m[*i - 1].1),
+                    _ => None,
+                };
+                match v {
+                    Some(v) => regs[dst as usize] = v,
+                    None => go_slow!(*op),
+                }
+            }
+            Op::Select { dst, obj, key, .. } => match regs[obj as usize] {
+                Reg::Val(CelValue::Map(m)) => match m.get(code.names[key as usize].as_str()) {
+                    // A store per kind, as `IterNext` does.
+                    Some(CelValue::Str(s)) => regs[dst as usize] = Reg::Str(s),
+                    Some(CelValue::Num(n)) => regs[dst as usize] = Reg::Num(*n),
+                    Some(v) => regs[dst as usize] = reg::of_cel(v),
+                    None => go_slow!(*op),
+                },
+                _ => go_slow!(*op),
+            },
+            Op::StrOp {
+                dst, a, b, op: o, ..
+            } => match (regs[a as usize], regs[b as usize]) {
+                (Reg::Str(s), Reg::Str(t)) => regs[dst as usize] = Reg::Bool(o.test(s, t)),
+                _ => go_slow!(*op),
+            },
+            Op::Has { dst, f, err } => match host.has(f, st) {
+                Ok(b) => regs[dst as usize] = Reg::Bool(b),
+                Err(Miss::Err(e)) => {
+                    inflight = Some(e);
+                    jump!(err);
+                }
+                Err(Miss::Need(h)) => need!(h),
+            },
+            Op::BrPending { r, to } => {
+                if matches!(regs[r as usize], Reg::Err(_)) {
+                    jump!(to);
+                }
+            }
+            Op::Clear { r } => regs[r as usize] = Reg::Unset,
+            // No pending error: nothing to raise. Raising one goes to `slow`.
+            Op::RaisePending { pend, .. } if !matches!(regs[pend as usize], Reg::Err(_)) => {}
+            Op::Inc { r } => {
+                if let Reg::Num(n) = regs[r as usize] {
+                    regs[r as usize] = Reg::Num(n + 1.0);
+                }
+            }
+            Op::Append { slot, src } => {
+                if let Iter::Build(v) = &mut iters[slot as usize] {
+                    v.push(regs[src as usize]);
+                }
+            }
+            Op::BrSet { r, to } => {
+                if !matches!(regs[r as usize], Reg::Unset) {
+                    jump!(to);
+                }
+            }
+            Op::Step {
+                accu,
+                step,
+                pend,
+                absorb,
+            } => {
+                let s = regs[step as usize];
+                if absorb.absorbs(s) {
+                    regs[pend as usize] = Reg::Unset;
+                }
+                regs[accu as usize] = s;
+            }
+            // A range over a slice, inline; a map's keys and a lazy view's go to `slow`.
+            Op::IterNext {
+                slot,
+                dst,
+                clear,
+                pend,
+                exit,
+                err,
+            } => iter_next!(*op, slot, dst, clear, pend, exit, err),
+            // The same, past the elements the loop's body would pass over first.
+            Op::IterScan {
+                slot,
+                dst,
+                clear,
+                pend,
+                exit,
+                err,
+                scan,
+            } => {
+                let _skipped = scan::skip(
+                    &code.scans[scan as usize],
+                    &mut iters[slot as usize],
+                    &*regs.0,
+                    code,
+                );
+                #[cfg(feature = "profile")]
+                profile::scanned(_skipped);
+                iter_next!(*op, slot, dst, clear, pend, exit, err)
+            }
             Op::Ret { r } => return Exit::Ret(regs[r as usize]),
             Op::RetK { k } => return Exit::Ret(code.konst(k)),
-            _ => match slow(
-                op,
-                code,
-                host,
-                regs,
-                st,
-                iters,
-                errs,
-                &mut inflight,
-                &mut pc,
-            ) {
-                Flow::Next => {}
-                Flow::Ret(r) => return Exit::Ret(r),
-                Flow::Fail(e) => return Exit::Fail(e),
-                Flow::Need(h) => need!(h),
-            },
+            _ => go_slow!(*op),
         }
     }
 }
 
-/// The error an op raises when its operand is not a type it takes. Boxed, and built only on the
-/// cold path that raises it.
+/// A cache register's first read: once per run, so out of line and cold — an arm that finds its
+/// cache full runs no host code, and none of the host's inlined body competes for the loop's
+/// machine registers.
 #[cold]
 #[inline(never)]
-fn no_such_overload() -> Box<ExecutionError> {
-    Box::new(ExecutionError::NoSuchOverload)
+fn fill<'a, H: Host<'a>>(
+    host: &H,
+    f: u32,
+    want: Want,
+    st: &mut Store<'a>,
+) -> Result<Reg<'a>, Miss> {
+    host.read(f, want, st)
+}
+
+/// [`FieldTest`] of register `x` against field value `v`; `None` where the unfused ops refuse.
+#[inline(always)]
+fn field_test(test: FieldTest, x: &Reg<'_>, v: &Reg<'_>) -> Option<bool> {
+    match test {
+        // The string case matched here, not through `eq_k`: measured 16 instructions fewer per
+        // element on a nested loop, where the extra level of matching is not folded away.
+        FieldTest::Eq { ne } => Some(
+            match (x, v) {
+                (Reg::Str(a), Reg::Str(b)) => a == b,
+                _ => eq_k(x, v),
+            } != ne,
+        ),
+        FieldTest::Cmp(c) => ordering(x, v).map(|o| c.holds(o)),
+        FieldTest::FieldRecv(o) => match (v, x) {
+            (Reg::Str(s), Reg::Str(t)) => Some(o.test(s, t)),
+            _ => None,
+        },
+        FieldTest::RegRecv(o) => match (x, v) {
+            (Reg::Str(s), Reg::Str(t)) => Some(o.test(s, t)),
+            _ => None,
+        },
+    }
+}
+
+/// The error the unfused spelling of a refused [`FieldTest`] raises: `Cmp`'s, or `StrOp`'s for
+/// its receiver and argument.
+#[cold]
+#[inline(never)]
+fn field_test_error(test: FieldTest, x: Reg<'_>, v: Reg<'_>) -> ExecutionError {
+    let (recv, arg) = match test {
+        FieldTest::Eq { .. } => unreachable!("an equality never fails"),
+        FieldTest::Cmp(_) => {
+            return reg::compare(x, v)
+                .err()
+                .unwrap_or(ExecutionError::NoSuchOverload)
+        }
+        FieldTest::FieldRecv(_) => (v, x),
+        FieldTest::RegRecv(_) => (x, v),
+    };
+    let bad = if matches!(recv, Reg::Str(_)) {
+        arg
+    } else {
+        recv
+    };
+    ExecutionError::UnexpectedType {
+        got: type_name(bad).to_string(),
+        want: "string".to_string(),
+    }
+}
+
+/// `CondCmpFK`'s "no cache register: read the field where it occurs".
+pub(crate) const NO_CACHE: R = R::MAX;
+
+/// `IterScan`'s "scan my body's region, if it has one", as lowering leaves it: `scan::fuse` gives
+/// every one its region's index, or makes it an `IterNext`.
+pub(crate) const SCAN_WANTED: u16 = u16::MAX;
+
+/// `IterNext`'s "no register to reset".
+pub(crate) const NO_REG: R = R::MAX;
+
+/// The index of the error pending in `pend`, if `pend` is a register and holds one.
+#[inline(always)]
+fn pending(regs: &[Reg<'_>], pend: R) -> Option<u32> {
+    match regs.get(pend as usize) {
+        Some(Reg::Err(i)) if pend != NO_REG => Some(*i),
+        _ => None,
+    }
+}
+
+/// A pending error, raised: its last use (its register is reset before it is caught into
+/// again), so the newest one is moved out rather than copied.
+#[cold]
+#[inline(never)]
+fn take_pending(errs: &mut Vec<ExecutionError>, i: u32) -> ExecutionError {
+    if i as usize + 1 == errs.len() {
+        errs.pop().expect("the pending error")
+    } else {
+        errs[i as usize].clone()
+    }
+}
+
+/// `reg::compare`'s order where it has one, without building its error: `None` for operands it
+/// refuses (a NaN, mismatched kinds), which `slow` then raises.
+#[inline(always)]
+fn ordering(a: &Reg<'_>, b: &Reg<'_>) -> Option<std::cmp::Ordering> {
+    match (a, b) {
+        (Reg::Num(x), Reg::Num(y)) => x.partial_cmp(y),
+        (Reg::Str(x), Reg::Str(y)) => Some(x.cmp(y)),
+        (Reg::Dur(x), Reg::Dur(y)) => Some(x.cmp(y)),
+        _ => None,
+    }
+}
+
+/// Put `e` in flight. A handler takes the error out of its box and leaves the box behind
+/// (`Catch`, `CatchPending`), so a run whose failures are caught and discarded — a loop over
+/// failing elements — reuses one box rather than allocating one per failure. Only a host's
+/// failure arrives in a box of its own.
+#[cold]
+#[inline(never)]
+fn fault(inflight: &mut Option<Box<ExecutionError>>, e: ExecutionError) {
+    match inflight {
+        Some(b) => **b = e,
+        None => *inflight = Some(Box::new(e)),
+    }
+}
+
+/// The error in flight, taken out of its box for a handler to keep; the box stays for reuse.
+fn caught(inflight: &mut Option<Box<ExecutionError>>) -> ExecutionError {
+    let b = inflight.as_mut().expect("an error in flight");
+    std::mem::replace(&mut **b, ExecutionError::NoSuchOverload)
 }
 
 /// What one op did.
@@ -1487,19 +2698,46 @@ pub(crate) const INLINE: &[&str] = &[
     "BrFalse",
     "Local",
     "Read",
+    "ReadCached",
     "CondRead",
     "EqK",
     "CondEqK",
     "CondMatch",
     "Cond",
     "CondTagIn",
-    "RaiseIfErr",
     "Eq",
     "Ne",
     "Absorb",
     "Match",
     "CondEqFF",
     "CondEqFK",
+    "CondCmpFK",
+    "CondFR",
+    "CondCmpK",
+    "Select",
+    "IndexIter",
+    "Arith",
+    "ArithK",
+    "CondStrOp2F",
+    "StrOp2",
+    "Matches",
+    "CondMatches",
+    "IterInit",
+    "Catch",
+    "Not",
+    "Nsf",
+    "Cmp",
+    "StrOp",
+    "Has",
+    "BrPending",
+    "Clear",
+    "RaisePending",
+    "Inc",
+    "Append",
+    "BrSet",
+    "Step",
+    "IterNext",
+    "IterScan",
     "Ret",
     "RetK",
 ];
@@ -1511,14 +2749,50 @@ pub fn inline_ops() -> &'static [&'static str] {
 }
 
 /// Would `exec` have handled `op` itself, given these registers? `slow` asserts it never sees one.
-fn handled_inline(op: Op, regs: &[Reg<'_>]) -> bool {
+fn handled_inline(op: Op, regs: &[Reg<'_>], iters: &[Iter<'_>]) -> bool {
     match op {
+        Op::Not { a, .. } => matches!(regs[a as usize], Reg::Bool(_)),
+        Op::RaisePending { pend, .. } => !matches!(regs[pend as usize], Reg::Err(_)),
+        Op::Cmp { a, b, .. } => ordering(&regs[a as usize], &regs[b as usize]).is_some(),
+        // `handled_inline` sees no constant pool: `slow` answers only the unordered case.
+        Op::CondCmpK { .. } => false,
+        // Nor the names: `slow` answers the member that is missing, and every non-map.
+        Op::Select { .. } => false,
+        Op::Arith { a, b, .. } => {
+            matches!(
+                (regs[a as usize], regs[b as usize]),
+                (Reg::Num(_), Reg::Num(_))
+            )
+        }
+        Op::ArithK { .. } => false,
+        Op::StrOp2 { a, b, c, .. } => matches!(
+            (regs[a as usize], regs[b as usize], regs[c as usize]),
+            (Reg::Str(_), Reg::Str(_), Reg::Str(_))
+        ),
+        // `handled_inline` sees no regex table: `slow` answers the refusals.
+        Op::Matches { .. } | Op::CondMatches { .. } => false,
+        Op::StrOp { a, b, .. } => {
+            matches!(
+                (regs[a as usize], regs[b as usize]),
+                (Reg::Str(_), Reg::Str(_))
+            )
+        }
+        Op::IterNext { slot, .. } | Op::IterScan { slot, .. } => {
+            !matches!(iters[slot as usize], Iter::LazyKeys(_) | Iter::Build(_))
+        }
+        Op::IterInit { src, .. } => matches!(
+            regs[src as usize],
+            Reg::List(_) | Reg::Map(_) | Reg::Val(CelValue::List(_) | CelValue::Map(_))
+        ),
+        Op::IndexIter { slot, .. } => matches!(
+            iters[slot as usize],
+            Iter::MapKeys(_, i) | Iter::Pairs(_, i) if i > 0
+        ),
         Op::Absorb { dst, a, or, .. } => matches!(
             (regs[a as usize], regs[dst as usize]),
             (Reg::Bool(l), Reg::Bool(_)) if l != or
         ),
         Op::Match { a, .. } => matches!(regs[a as usize], Reg::Str(_)),
-        Op::RaiseIfErr { r, .. } => matches!(regs[r as usize], Reg::Bool(_)),
         other => INLINE.contains(&other.name()),
     }
 }
@@ -1537,14 +2811,16 @@ fn slow<'a, H: Host<'a>>(
     inflight: &mut Option<Box<ExecutionError>>,
     pc: &mut usize,
 ) -> Flow<'a> {
+    #[cfg(feature = "profile")]
+    profile::slow(op.name());
     debug_assert!(
-        !handled_inline(op, regs),
+        !handled_inline(op, regs, iters),
         "{} reached slow, but exec handles it inline",
         op.name()
     );
     macro_rules! fail {
         ($e:expr, $to:expr) => {{
-            *inflight = Some(Box::new($e));
+            fault(inflight, $e);
             *pc = $to as usize;
             return Flow::Next;
         }};
@@ -1576,8 +2852,50 @@ fn slow<'a, H: Host<'a>>(
     let waits = host.waits();
     match op {
         // Only ever inline: `exec` answers both in every case.
-        Op::CondEqFF { .. } | Op::CondEqFK { .. } => unreachable!("{} reached slow", op.name()),
+        Op::CondEqFF { .. }
+        | Op::CondEqFK { .. }
+        | Op::CondCmpFK { .. }
+        | Op::CondFR { .. }
+        | Op::CondStrOp2F { .. }
+        | Op::Inc { .. }
+        | Op::Append { .. }
+        | Op::BrSet { .. }
+        | Op::ReadCached { .. } => {
+            unreachable!("{} reached slow", op.name())
+        }
         Op::Const { dst, k } => regs[dst as usize] = code.konst(k),
+        Op::CondCmpK {
+            a,
+            k,
+            op,
+            invert,
+            else_,
+            err,
+        } => {
+            let o = tryr!(reg::compare(regs[a as usize], code.konst(k)), err);
+            if op.holds(o) == invert {
+                *pc = else_ as usize;
+            }
+        }
+        Op::CondMatches {
+            a,
+            re,
+            invert,
+            else_,
+            err,
+        } => {
+            let Reg::Str(s) = regs[a as usize] else {
+                fail!(ExecutionError::NoSuchOverload, err)
+            };
+            match &code.regexes[re as usize] {
+                Ok(r) => {
+                    if r.is_match(s) == invert {
+                        *pc = else_ as usize;
+                    }
+                }
+                Err(e) => fail!(e.clone(), err),
+            }
+        }
         Op::Raise { k, err } => match &code.consts[k as usize] {
             CVal::Err(e) => fail!(e.clone(), err),
             _ => fail!(ExecutionError::InternalError("not an error".into()), err),
@@ -1612,7 +2930,7 @@ fn slow<'a, H: Host<'a>>(
             let v = reg::has(regs[obj as usize], name);
             regs[dst as usize] = Reg::Bool(tryr!(v, err));
         }
-        Op::Index { dst, a, b, err } => {
+        Op::Index { dst, a, b, err } | Op::IndexIter { dst, a, b, err, .. } => {
             if let (Some(lazy), Reg::Str(name)) =
                 (lazy_of(waits, regs[a as usize]), regs[b as usize])
             {
@@ -1640,18 +2958,27 @@ fn slow<'a, H: Host<'a>>(
             regs[dst as usize] = Reg::Bool(!reg::equals(regs[a as usize], regs[b as usize]))
         }
         Op::Cmp { dst, a, b, op, err } => {
-            use std::cmp::Ordering::*;
             let o = tryr!(reg::compare(regs[a as usize], regs[b as usize]), err);
-            regs[dst as usize] = Reg::Bool(match op {
-                Cmp::Lt => o == Less,
-                Cmp::Le => o != Greater,
-                Cmp::Gt => o == Greater,
-                Cmp::Ge => o != Less,
-            });
+            regs[dst as usize] = Reg::Bool(op.holds(o));
         }
         Op::Arith { dst, a, b, op, err } => {
             let v = arith(op, regs[a as usize], regs[b as usize], st, errs);
             regs[dst as usize] = tryr!(v, err);
+        }
+        Op::ArithK {
+            dst,
+            a,
+            k,
+            op,
+            rev,
+            err,
+        } => {
+            let (x, y) = if rev {
+                (code.konst(k), regs[a as usize])
+            } else {
+                (regs[a as usize], code.konst(k))
+            };
+            regs[dst as usize] = tryr!(arith(op, x, y, st, errs), err);
         }
         Op::In { dst, a, b, err } => {
             if let (Reg::Str(name), Some(lazy)) =
@@ -1671,13 +2998,7 @@ fn slow<'a, H: Host<'a>>(
             _ => fail!(ExecutionError::NoSuchOverload, err),
         },
         Op::StrOp { dst, a, b, op, err } => match (regs[a as usize], regs[b as usize]) {
-            (Reg::Str(s), Reg::Str(t)) => {
-                regs[dst as usize] = Reg::Bool(match op {
-                    StrOp::StartsWith => s.starts_with(t),
-                    StrOp::EndsWith => s.ends_with(t),
-                    StrOp::Contains => s.contains(t),
-                })
-            }
+            (Reg::Str(s), Reg::Str(t)) => regs[dst as usize] = Reg::Bool(op.test(s, t)),
             (x, y) => {
                 let bad = if matches!(x, Reg::Str(_)) { y } else { x };
                 fail!(
@@ -1688,6 +3009,20 @@ fn slow<'a, H: Host<'a>>(
                     err
                 )
             }
+        },
+        Op::StrOp2 {
+            dst,
+            a,
+            b,
+            c,
+            op,
+            err,
+        } => match (regs[a as usize], regs[b as usize], regs[c as usize]) {
+            (Reg::Str(a), Reg::Str(b), Reg::Str(c)) => {
+                regs[dst as usize] = Reg::Bool(op.test(a, b, c))
+            }
+            // Only a string concatenates: what `+` would have refused.
+            _ => fail!(ExecutionError::NoSuchOverload, err),
         },
         Op::Matches { dst, a, b, re, err } => {
             let (Reg::Str(s), Reg::Str(p)) = (regs[a as usize], regs[b as usize]) else {
@@ -1787,7 +3122,7 @@ fn slow<'a, H: Host<'a>>(
             _ => fail!(ExecutionError::NoSuchOverload, err),
         },
         Op::EqK { dst, a, k, ne } => {
-            regs[dst as usize] = Reg::Bool(eq_k(regs[a as usize], code.konst(k)) != ne)
+            regs[dst as usize] = Reg::Bool(eq_k(&regs[a as usize], code.kref(k)) != ne)
         }
         Op::CondRead {
             f,
@@ -1802,13 +3137,8 @@ fn slow<'a, H: Host<'a>>(
             }
             _ => fail!(ExecutionError::NoSuchOverload, err),
         },
-        Op::RaiseIfErr { r, err } => match regs[r as usize] {
-            Reg::Bool(_) => {}
-            Reg::Err(i) => fail!(errs[i as usize].clone(), err),
-            _ => fail!(ExecutionError::NoSuchOverload, err),
-        },
         Op::CondEqK { a, k, ne, else_ } => {
-            if eq_k(regs[a as usize], code.konst(k)) == ne {
+            if eq_k(&regs[a as usize], code.kref(k)) == ne {
                 *pc = else_ as usize;
             }
         }
@@ -1827,7 +3157,7 @@ fn slow<'a, H: Host<'a>>(
             _ => fail!(ExecutionError::NoSuchOverload, err),
         },
         Op::Catch { dst } => {
-            errs.push(*inflight.take().expect("an error in flight"));
+            errs.push(caught(inflight));
             regs[dst as usize] = Reg::Err((errs.len() - 1) as u32);
         }
         Op::Absorb { dst, a, or, err } => {
@@ -1849,7 +3179,12 @@ fn slow<'a, H: Host<'a>>(
                 _ => true,
             })
         }
-        Op::IterInit { slot, src, err } => {
+        Op::IterInit {
+            slot,
+            src,
+            clear,
+            err,
+        } => {
             let it = match regs[src as usize] {
                 Reg::List(l) => Iter::Regs(l, 0),
                 Reg::Map(m) => Iter::Pairs(m, 0),
@@ -1863,8 +3198,27 @@ fn slow<'a, H: Host<'a>>(
                 _ => fail!(ExecutionError::NoSuchOverload, err),
             };
             iters[slot as usize] = it;
+            if clear != NO_REG {
+                regs[clear as usize] = Reg::Unset;
+            }
         }
-        Op::IterNext { slot, dst, exit } => {
+        Op::IterNext {
+            slot,
+            dst,
+            clear,
+            pend,
+            exit,
+            err,
+        }
+        | Op::IterScan {
+            slot,
+            dst,
+            clear,
+            pend,
+            exit,
+            err,
+            ..
+        } => {
             let next = match &mut iters[slot as usize] {
                 Iter::Idle => None,
                 Iter::Regs(l, i) => l.get(*i).map(|r| {
@@ -1884,12 +3238,21 @@ fn slow<'a, H: Host<'a>>(
                     reg::key_reg(k)
                 }),
                 Iter::LazyKeys(ks) => ks.next().map(|k| Reg::Str(k.as_str())),
+                Iter::Build(_) => unreachable!("a list being built is not iterated"),
             };
             match next {
-                Some(r) => regs[dst as usize] = r,
+                Some(r) => {
+                    regs[dst as usize] = r;
+                    if clear != NO_REG {
+                        regs[clear as usize] = Reg::Unset;
+                    }
+                }
                 None => {
                     iters[slot as usize] = Iter::Idle;
-                    *pc = exit as usize;
+                    match pending(regs, pend) {
+                        None => *pc = exit as usize,
+                        Some(i) => fail!(take_pending(errs, i), err),
+                    }
                 }
             }
         }
@@ -1899,6 +3262,28 @@ fn slow<'a, H: Host<'a>>(
             }
         }
         Op::Clear { r } => regs[r as usize] = Reg::Unset,
+        Op::NumIn { dst, a, set } => {
+            regs[dst as usize] = Reg::Bool(match regs[a as usize] {
+                Reg::Num(n) => code.numsets[set as usize].contains(n),
+                _ => false,
+            })
+        }
+        Op::ListNew { slot, hint } => {
+            let n = match regs[hint as usize] {
+                Reg::List(l) => l.len(),
+                Reg::Map(m) => m.len(),
+                Reg::Val(CelValue::List(l)) => l.len(),
+                Reg::Val(CelValue::Map(m)) => m.len(),
+                _ => 0,
+            };
+            iters[slot as usize] = Iter::Build(Vec::with_capacity(n));
+        }
+        Op::ListFreeze { slot, dst } => {
+            let Iter::Build(v) = std::mem::replace(&mut iters[slot as usize], Iter::Idle) else {
+                unreachable!("ListFreeze without its ListNew")
+            };
+            regs[dst as usize] = Reg::List(st.built(v));
+        }
         Op::Step {
             accu,
             step,
@@ -1906,26 +3291,24 @@ fn slow<'a, H: Host<'a>>(
             absorb,
         } => {
             let s = regs[step as usize];
-            let absorbs = match (absorb, s) {
-                (Absorb::OnFalse, Reg::Bool(false)) | (Absorb::OnTrue, Reg::Bool(true)) => true,
-                _ => false,
-            };
-            if absorbs {
+            if absorb.absorbs(s) {
                 regs[pend as usize] = Reg::Unset;
             }
             regs[accu as usize] = s;
         }
         Op::CatchPending { pend } => {
-            let e = *inflight.take().expect("an error in flight");
-            // The FIRST error is the one reported.
+            // The FIRST error is the one reported; a later one stays in the in-flight box, to be
+            // overwritten by the next failure.
             if !matches!(regs[pend as usize], Reg::Err(_)) {
-                errs.push(e);
+                errs.push(caught(inflight));
                 regs[pend as usize] = Reg::Err((errs.len() - 1) as u32);
             }
         }
         Op::RaisePending { pend, err } => {
             if let Reg::Err(i) = regs[pend as usize] {
-                fail!(errs[i as usize].clone(), err);
+                // Raising is the pending error's last use (its register is cleared before it is
+                // caught into again): the newest one is moved out rather than copied.
+                fail!(take_pending(errs, i), err);
             }
         }
         Op::TagIn {
@@ -2027,12 +3410,12 @@ fn host_arg(r: Reg<'_>, errs: &[ExecutionError]) -> Option<crate::CelValue> {
 
 /// `a == k` for a scalar constant `k`, with the string case — a tag, an enum value — inline.
 #[inline(always)]
-fn eq_k(a: Reg<'_>, k: Reg<'_>) -> bool {
+fn eq_k(a: &Reg<'_>, k: &Reg<'_>) -> bool {
     match (a, k) {
         (Reg::Str(x), Reg::Str(y)) => x == y,
         (Reg::Bool(x), Reg::Bool(y)) => x == y,
         (Reg::Num(x), Reg::Num(y)) => x == y,
-        _ => reg::equals(a, k),
+        _ => reg::equals(*a, *k),
     }
 }
 
@@ -2052,10 +3435,7 @@ fn arith<'a>(
         )
     };
     Ok(match (op, a, b) {
-        (Arith::Add, Reg::Num(x), Reg::Num(y)) => Reg::Num(x + y),
-        (Arith::Sub, Reg::Num(x), Reg::Num(y)) => Reg::Num(x - y),
-        (Arith::Mul, Reg::Num(x), Reg::Num(y)) => Reg::Num(x * y),
-        (Arith::Div, Reg::Num(x), Reg::Num(y)) => Reg::Num(x / y),
+        (o, Reg::Num(x), Reg::Num(y)) => Reg::Num(o.num(x, y)),
         (Arith::Add, Reg::Str(x), Reg::Str(y)) => {
             let mut s = String::with_capacity(x.len() + y.len());
             s.push_str(x);
@@ -2141,6 +3521,8 @@ enum Held<'a> {
     Idle,
     Regs(&'a [Reg<'a>], usize),
     Vals(&'a [CelValue], usize),
+    /// A list a `map` / `filter` loop was building, its elements re-homed.
+    Build(Vec<Reg<'a>>),
 }
 
 impl Paused {
@@ -2224,6 +3606,9 @@ fn rehome<'a>(r: Reg<'a>, code: &'a Code, out: &mut Store<'a>) -> Reg<'a> {
 fn hold<'a>(it: Iter<'a>, code: &'a Code, out: &mut Store<'a>) -> Held<'a> {
     let rest: Vec<Reg<'a>> = match it {
         Iter::Idle => return Held::Idle,
+        Iter::Build(v) => {
+            return Held::Build(v.into_iter().map(|r| rehome(r, code, out)).collect());
+        }
         Iter::Vals(l, i) if code.holds_list(l) => return Held::Vals(l, i),
         Iter::Regs(l, i) => l[i..].to_vec(),
         Iter::Pairs(m, i) => m[i..].iter().map(|(k, _)| *k).collect(),
@@ -2241,6 +3626,7 @@ impl<'a> Held<'a> {
             Held::Idle => Iter::Idle,
             Held::Regs(l, i) => Iter::Regs(l, i),
             Held::Vals(l, i) => Iter::Vals(l, i),
+            Held::Build(v) => Iter::Build(v),
         }
     }
 }
@@ -2424,12 +3810,105 @@ mod verify_tests {
                 1,
                 "jumps to 9",
             ),
+            (
+                vec![Op::Local { dst: 0, src: 1 }, Op::Ret { r: 0 }],
+                1,
+                "names register 1",
+            ),
+            (vec![Op::Ret { r: 4 }], 1, "names register 4"),
+            (
+                vec![
+                    Op::IterNext {
+                        slot: 0,
+                        dst: 0,
+                        clear: NO_REG,
+                        pend: NO_REG,
+                        exit: 1,
+                        err: 1,
+                    },
+                    Op::RetK { k: 0 },
+                ],
+                1,
+                "names loop slot 0",
+            ),
         ];
         for (ops, nconsts, want) in cases {
             let err = code(ops.clone(), nconsts)
                 .verify()
                 .expect_err(&format!("{ops:?} verified"));
             assert!(err.contains(want), "{ops:?}: {err}");
+        }
+        // A scanned `IterNext` and the region it names.
+        let scan = |steps: Vec<scan::Step>| {
+            let mut c = code(
+                vec![
+                    Op::IterScan {
+                        slot: 0,
+                        dst: 0,
+                        clear: NO_REG,
+                        pend: NO_REG,
+                        exit: 1,
+                        err: 1,
+                        scan: 0,
+                    },
+                    Op::RetK { k: 0 },
+                ],
+                1,
+            );
+            c.nloops = 1;
+            c.scans.push(scan::ScanBody {
+                steps: steps.into(),
+            });
+            c
+        };
+        let field = |a: u8, cache: R, go: scan::Go| scan::Step::Field {
+            a,
+            cache,
+            test: FieldTest::Eq { ne: false },
+            invert: false,
+            go,
+        };
+        assert!(scan(vec![field(0, 0, scan::Go::On)]).verify().is_ok());
+        let mut member = scan(vec![
+            scan::Step::Member { obj: 0, key: 0 },
+            field(1, 0, scan::Go::On),
+        ]);
+        member.names.push(CelKey::new("k"));
+        assert!(member.verify().is_ok(), "{:?}", member.verify());
+        let scans = [
+            (scan(vec![field(0, 9, scan::Go::On)]), "names register 9"),
+            (scan(vec![field(1, 0, scan::Go::On)]), "names value 1"),
+            (scan(vec![field(0, 0, scan::Go::Step(0))]), "jumps back"),
+            (
+                scan(vec![
+                    scan::Step::Member { obj: 0, key: 0 },
+                    field(1, 0, scan::Go::On),
+                ]),
+                "names member 0",
+            ),
+            (
+                {
+                    let mut c = scan(vec![
+                        scan::Step::Member { obj: 0, key: 0 },
+                        field(2, 0, scan::Go::On),
+                    ]);
+                    c.names.push(CelKey::new("k"));
+                    c
+                },
+                "names value 2",
+            ),
+            (
+                {
+                    let mut c = scan(vec![field(0, 0, scan::Go::On)]);
+                    c.scans.clear();
+                    c
+                },
+                "names scan body 0",
+            ),
+        ];
+        for (c, want) in scans {
+            let err = c.verify().expect_err(&format!("{want}: verified"));
+            assert!(err.contains(want), "{want}: {err}");
         }
     }
 }

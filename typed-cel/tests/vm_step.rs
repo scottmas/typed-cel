@@ -54,6 +54,7 @@ fn env() -> CelEnvironment {
                 ("kind", CelTy::Str),
                 ("big", CelTy::Str),
                 ("name", CelTy::Str),
+                ("names", CelTy::list(CelTy::Str)),
                 ("missing", CelTy::Num),
                 ("field", CelTy::Num),
             ],
@@ -312,6 +313,28 @@ fn need_inside_a_comprehension_resumes_in_place() {
         vm.resume(&mut run, &bindings),
         RunStep::Done(Ok(true))
     ));
+}
+
+/// The same over a BOUND list, which a `Scan` runs: the first element's field read pauses (in the
+/// body's `CondFR`, the `Scan` having handed the element over), and the resumed run skips the rest.
+#[test]
+fn need_inside_a_scanned_loop_resumes_in_place() {
+    let names = CelValue::list(["a", "b", "c"].map(|s| CelValue::Str(s.into())));
+    for (name, want) in [("c", true), ("z", false)] {
+        let v = scripted(&[
+            ("names", Slot::Ready(names.clone())),
+            ("name", Slot::Pending(5)),
+        ]);
+        let (mut run, bindings) = start("v.names.exists(k, k == v.name)", &[("v", &v)]);
+        let vm = Vm::new();
+        need(vm.resume(&mut run, &bindings));
+        v.set("name", Slot::Ready(CelValue::Str(name.into())));
+        assert_eq!(
+            done(vm.resume(&mut run, &bindings)).map_err(|e| e.to_string()),
+            Ok(want),
+            "name = {name}"
+        );
+    }
 }
 
 // ---- 7 ----

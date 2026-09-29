@@ -19,6 +19,10 @@ use crate::ExecutionError;
 /// `'static` is not optional and is not a style choice: a [`CelValue`] holds a view as an
 /// `Arc<dyn LazyValue>`, and a program's result may outlive the call that produced it. An
 /// implementor therefore OWNS its state — typically an `Arc` of it — rather than borrowing one.
+///
+/// A member read through a path from a root (`r.a`) is taken to hold for the whole decision, so
+/// a program naming it twice may ask once: how many times `member` is called is not how many
+/// times the program names the member.
 pub trait LazyValue: Send + Sync + std::fmt::Debug + 'static {
     /// `x.field` and `x["key"]` — the same call, because CEL does not distinguish them.
     ///

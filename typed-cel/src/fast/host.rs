@@ -75,6 +75,10 @@ impl FieldPath {
 /// `None` is "absent": `no such key` at the leaf. Every method answers for the
 /// field's DECLARED type; a program is only ever handed to a `Facts` whose fields have the types
 /// its environment declared.
+///
+/// A field's answer is taken to hold for the whole decision: a program that uses a field more
+/// than once may ask for it once and reuse the answer. How many times a method is called is
+/// therefore not how many times the program names the field — never count on it.
 pub trait Facts {
     fn bool(&self, f: FieldId) -> Option<bool>;
     fn num(&self, f: FieldId) -> Option<f64>;
@@ -279,6 +283,8 @@ impl<'a, F: Facts + ?Sized> Host<'a> for FactsHost<'a, F> {
     #[inline(always)]
     fn read(&self, f: u32, want: Want, _: &mut Store<'a>) -> Result<Reg<'a>, Miss> {
         let id = FieldId(f);
+        #[cfg(feature = "profile")]
+        super::profile::read(f);
         match self.facts.poll(id) {
             FactPoll::Ready => {}
             p => return Err(self.miss(f, p)),
@@ -298,6 +304,8 @@ impl<'a, F: Facts + ?Sized> Host<'a> for FactsHost<'a, F> {
     #[inline(always)]
     fn tag(&self, f: u32, values: &[Box<str>], _: &mut Store<'a>) -> Result<u8, Miss> {
         let id = FieldId(f);
+        #[cfg(feature = "profile")]
+        super::profile::read(f);
         match self.facts.poll(id) {
             FactPoll::Ready => {}
             p => return Err(self.miss(f, p)),
@@ -313,6 +321,8 @@ impl<'a, F: Facts + ?Sized> Host<'a> for FactsHost<'a, F> {
     #[inline(always)]
     fn has(&self, f: u32, _: &mut Store<'a>) -> Result<bool, Miss> {
         let id = FieldId(f);
+        #[cfg(feature = "profile")]
+        super::profile::read(f);
         match self.facts.poll_has(id) {
             FactPoll::Ready => Ok(self.facts.has(id)),
             p => Err(self.miss(f, p)),
@@ -375,11 +385,15 @@ impl<'a> RootsHost<'a> {
 impl<'a> Host<'a> for RootsHost<'a> {
     fn read(&self, f: u32, _: Want, st: &mut Store<'a>) -> Result<Reg<'a>, Miss> {
         let path = &self.fields[f as usize];
+        #[cfg(feature = "profile")]
+        super::profile::read(f);
         Ok(of_cel(self.walk(path, &path.steps, st)?))
     }
 
     fn has(&self, f: u32, st: &mut Store<'a>) -> Result<bool, Miss> {
         let path = &self.fields[f as usize];
+        #[cfg(feature = "profile")]
+        super::profile::read(f);
         let (last, prefix) = path
             .steps
             .split_last()

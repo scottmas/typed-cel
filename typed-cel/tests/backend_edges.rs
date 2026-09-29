@@ -422,14 +422,34 @@ fn lazy_reads_are_counted() {
     let e = observe_one("r.t == 'x' || r.a == 1.0");
     assert_eq!(e.record_reads, 2);
     assert_eq!(e.answer.1, Some(true));
+    // A field is read once per decision, however often the program names it.
     let e = observe_one("r.a + r.a > 0.0");
-    assert_eq!(e.record_reads, 2);
+    assert_eq!(e.record_reads, 1);
     let e = observe_one("m.exists(k, k == 'b')");
     assert!(e.map_iterations > 0, "{e:?}");
     let e = observe_one("m.exists(k, m[k] > 0.0)");
     assert_eq!(e.answer, (true, Some(true), String::new()));
     let e = observe_one("m.all(k, m[k] >= 0.0) && r.a == 1.0");
     assert_eq!(e.answer, (true, Some(true), String::new()));
+}
+
+/// A field is read once per decision — but only a read that SUCCEEDED is kept. A failed read is
+/// asked again where the program names the field again, and fails there again; a read the program
+/// never reaches (a loop over nothing) is never made, so its failure cannot fail the decision.
+#[test]
+fn only_a_successful_read_is_reused() {
+    // `r.t` is missing: each `||` absorbs its failure (`r.a == 1.0`, read once), and each asks.
+    let e = observe_one("(r.t == 'x' || r.a == 1.0) && (r.t == 'y' || r.a == 1.0)");
+    assert_eq!(e.answer, (true, Some(true), String::new()));
+    assert_eq!(e.record_reads, 3);
+    // A loop over nothing reads nothing in its body.
+    let e = observe_one("m.filter(k, false).all(k, r.t == 'x')");
+    assert_eq!(e.answer, (true, Some(true), String::new()));
+    assert_eq!(e.record_reads, 0);
+    // A present field in a loop body: read on the first element, reused after.
+    let e = observe_one("m.all(k, r.a == 1.0)");
+    assert_eq!(e.answer, (true, Some(true), String::new()));
+    assert_eq!(e.record_reads, 1);
 }
 
 #[test]
@@ -597,4 +617,439 @@ fn fused_equality_keeps_and_absorption() {
         ["CondEqFF", "CondEqFK"],
         "the programs lower through the fused ops, so this table tests them"
     );
+}
+
+/// A string test against `b + c` never builds the concatenation (`StrOp2`). Held against the same
+/// test over `[b + c][0]`, which builds it, for every triple of strings drawn from a set with
+/// empty, overlapping and multi-byte members — and with roots left unbound, so a failing read
+/// must fail at the same operand, in the same order.
+#[test]
+fn a_concatenation_tested_unbuilt_answers_as_built() {
+    use typed_cel::FastProgram;
+    const FORMS: &[(&str, &str)] = &[
+        ("a.startsWith(b + c)", "a.startsWith([b + c][0])"),
+        ("a.endsWith(b + c)", "a.endsWith([b + c][0])"),
+        ("a == b + c", "a == [b + c][0]"),
+        ("b + c == a", "[b + c][0] == a"),
+        ("a != b + c", "a != [b + c][0]"),
+        ("(b + c).startsWith(a)", "[b + c][0].startsWith(a)"),
+        ("(b + c).endsWith(a)", "[b + c][0].endsWith(a)"),
+    ];
+    const STRS: &[&str] = &["", "a", "b", "ab", "ba", "é", "aé", "éa", "abé"];
+    let mut env = CelEnvironment::new();
+    for root in ["a", "b", "c"] {
+        env.declare(root, CelTy::Str);
+    }
+    let lower = |src: &str| {
+        let p = fork::compile_any(&env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        FastProgram::new(&p).unwrap_or_else(|e| panic!("{src}: {e}"))
+    };
+    let answer = |p: &FastProgram, binds: &[(&str, &str)]| {
+        let mut act = env.runtime().activation();
+        for (name, v) in binds {
+            act.bind_fact(name, Value::Str((*v).into()));
+        }
+        format!("{:?}", fork::fast_value(p, &act))
+    };
+    let (mut compared, mut mismatches) = (0, Vec::new());
+    for (src, reference) in FORMS {
+        let (got, want) = (lower(src), lower(reference));
+        assert!(
+            got.op_names().contains(&"StrOp2") && !got.op_names().contains(&"Arith"),
+            "`{src}` still builds its concatenation: {:?}",
+            got.op_names()
+        );
+        let mut cases: Vec<Vec<(&str, &str)>> = Vec::new();
+        for a in STRS {
+            for b in STRS {
+                for c in STRS {
+                    cases.push(vec![("a", a), ("b", b), ("c", c)]);
+                }
+            }
+        }
+        // Every subset of the roots unbound.
+        for mask in 0..7u8 {
+            let binds = [("a", "ab"), ("b", "a"), ("c", "b")];
+            cases.push(
+                binds
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| mask & (1 << i) != 0)
+                    .map(|(_, b)| *b)
+                    .collect(),
+            );
+        }
+        for binds in &cases {
+            compared += 1;
+            let (g, w) = (answer(&got, binds), answer(&want, binds));
+            if g != w {
+                mismatches.push(format!("`{src}` over {binds:?}: {g} vs built {w}"));
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} of {compared} differ:\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+}
+
+/// A list or map literal of fields that is only searched or indexed by a constant is never built:
+/// `x in [a, b]` is an `==` chain, `[a, b].exists(v, P)` runs `P` per element register, and
+/// `{"k": v}["k"]` is `v`. Held against the same question over a collection that IS built
+/// (`[…] + []`, a map inside a list), for every assignment of three strings to the roots and every
+/// subset of them left unbound — so each element still runs, and fails, where it did.
+#[test]
+fn a_literal_collection_searched_unbuilt_answers_as_built() {
+    use typed_cel::FastProgram;
+    const FORMS: &[(&str, &str)] = &[
+        ("x in [a, b, c]", "x in ([a, b, c] + [])"),
+        (r#"x in [a, "q", c]"#, r#"x in ([a, "q", c] + [])"#),
+        (
+            "[a, b, c].exists(v, v == x)",
+            "([a, b, c] + []).exists(v, v == x)",
+        ),
+        (
+            "[a, b, c].all(v, v != x)",
+            "([a, b, c] + []).all(v, v != x)",
+        ),
+        (
+            "[a, b, c].exists_one(v, v == x)",
+            "([a, b, c] + []).exists_one(v, v == x)",
+        ),
+        (
+            r#"[a, b].exists(v, {"p": true, "q": false}[v])"#,
+            r#"([a, b] + []).exists(v, {"p": true, "q": false}[v])"#,
+        ),
+        (
+            r#"[a, b].all(v, {"p": true, "q": false}[v])"#,
+            r#"([a, b] + []).all(v, {"p": true, "q": false}[v])"#,
+        ),
+        (
+            r#"{"k": a, "j": b, "k": c}["k"] == x"#,
+            r#"[{"k": a, "j": b, "k": c}][0]["k"] == x"#,
+        ),
+        (
+            r#"{"k": a, "j": b}["j"] == x"#,
+            r#"[{"k": a, "j": b}][0]["j"] == x"#,
+        ),
+    ];
+    const STRS: &[&str] = &["", "p", "q"];
+    let mut env = CelEnvironment::new();
+    for root in ["a", "b", "c", "x"] {
+        env.declare(root, CelTy::Str);
+    }
+    let lower = |src: &str| {
+        let p = fork::compile_any(&env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        FastProgram::new(&p).unwrap_or_else(|e| panic!("{src}: {e}"))
+    };
+    let answer = |p: &FastProgram, binds: &[(&str, &str)]| {
+        let mut act = env.runtime().activation();
+        for (name, v) in binds {
+            act.bind_fact(name, Value::Str((*v).into()));
+        }
+        format!("{:?}", fork::fast_value(p, &act))
+    };
+    let mut cases: Vec<Vec<(&str, &str)>> = Vec::new();
+    for a in STRS {
+        for b in STRS {
+            for c in STRS {
+                for x in STRS {
+                    cases.push(vec![("a", a), ("b", b), ("c", c), ("x", x)]);
+                }
+            }
+        }
+    }
+    for mask in 0..15u8 {
+        let binds = [("a", "p"), ("b", "q"), ("c", "p"), ("x", "p")];
+        cases.push(
+            binds
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, b)| *b)
+                .collect(),
+        );
+    }
+    let (mut compared, mut mismatches) = (0, Vec::new());
+    for (src, reference) in FORMS {
+        let (got, want) = (lower(src), lower(reference));
+        assert!(
+            !got.op_names()
+                .iter()
+                .any(|o| matches!(*o, "MakeList" | "MakeMap" | "In" | "IterInit")),
+            "`{src}` still builds its collection: {:?}",
+            got.op_names()
+        );
+        for binds in &cases {
+            compared += 1;
+            let (g, w) = (answer(&got, binds), answer(&want, binds));
+            if g != w {
+                mismatches.push(format!("`{src}` over {binds:?}: {g} vs built {w}"));
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} of {compared} differ:\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+}
+
+/// Membership in numbers known at compile time — `x in [..]`, `[..].exists(v, v == x)`, a chain of
+/// `x == k` — is one `NumSet` lookup, and a known map's keys are a string matcher: each answers as
+/// the same question over a collection the program builds and searches, for a needle that is
+/// `-0.0` against a `0.0`, NaN (equal to nothing), a value no element has, or unbound.
+#[test]
+fn a_known_set_answers_as_searching_it() {
+    use typed_cel::FastProgram;
+    const FORMS: &[(&str, &str)] = &[
+        (
+            "x in [0.0, 1.0, 2.5, 1e300]",
+            "x in ([0.0, 1.0, 2.5, 1e300] + [])",
+        ),
+        ("x in [-0.0, 7.0]", "x in ([-0.0, 7.0] + [])"),
+        (
+            "[0.0, 1.0, 2.5].exists(v, v == x)",
+            "([0.0, 1.0, 2.5] + []).exists(v, v == x)",
+        ),
+        (
+            "[0.0, 1.0, 2.5].exists(v, x == v)",
+            "([0.0, 1.0, 2.5] + []).exists(v, x == v)",
+        ),
+        (
+            "x == 0.0 || x == 1.0 || x == 2.5",
+            "x == 0.0 || (x == 1.0 || (x == 2.5 || false))",
+        ),
+        (
+            r#"{"a": 1.0, "b": 2.0}.exists(k, k == s)"#,
+            r#"[{"a": 1.0, "b": 2.0}][0].exists(k, k == s)"#,
+        ),
+    ];
+    let mut env = CelEnvironment::new();
+    env.declare("x", CelTy::Num);
+    env.declare("s", CelTy::Str);
+    let lower = |src: &str| {
+        let p = fork::compile_any(&env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        FastProgram::new(&p).unwrap_or_else(|e| panic!("{src}: {e}"))
+    };
+    let answer = |p: &FastProgram, x: Option<f64>, s: Option<&str>| {
+        let mut act = env.runtime().activation();
+        if let Some(x) = x {
+            act.bind_fact("x", Value::Num(x));
+        }
+        if let Some(s) = s {
+            act.bind_fact("s", Value::Str(s.into()));
+        }
+        format!("{:?}", fork::fast_value(p, &act))
+    };
+    let xs = [
+        Some(0.0),
+        Some(-0.0),
+        Some(1.0),
+        Some(2.5),
+        Some(7.0),
+        Some(1e300),
+        Some(f64::NAN),
+        Some(3.0),
+        None,
+    ];
+    let ss = [Some("a"), Some("b"), Some("c"), Some(""), None];
+    let (mut compared, mut mismatches) = (0, Vec::new());
+    for (src, reference) in FORMS {
+        let (got, want) = (lower(src), lower(reference));
+        assert!(
+            got.op_names()
+                .iter()
+                .any(|o| matches!(*o, "NumIn" | "Match")),
+            "`{src}` is not a set lookup: {:?}",
+            got.op_names()
+        );
+        for x in xs {
+            for s in ss {
+                compared += 1;
+                let (g, w) = (answer(&got, x, s), answer(&want, x, s));
+                if g != w {
+                    mismatches.push(format!("`{src}` x={x:?} s={s:?}: {g} vs searched {w}"));
+                }
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} of {compared} differ:\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+}
+
+/// A member selected from a BOUND value — a record, a map, one with an optional member absent —
+/// answers as pinned, in a loop and out of one. (A lazy view's member: `tests/lazy.rs`.)
+#[test]
+fn a_selected_member_answers_as_before() {
+    let item = support::record_opt(
+        "item",
+        &[
+            ("id", CelTy::Str),
+            ("qty", CelTy::Num),
+            ("note", CelTy::Str),
+        ],
+        &["note"],
+    );
+    let vars = [
+        ("items", CelTy::list(item)),
+        ("ms", CelTy::list(CelTy::map(CelTy::Str, CelTy::Num))),
+    ];
+    let rec = |id: &str, qty: f64, note: Option<&str>| {
+        let mut f = vec![
+            (CelKey::new("id"), Value::Str(id.into())),
+            (CelKey::new("qty"), Value::Num(qty)),
+        ];
+        if let Some(n) = note {
+            f.push((CelKey::new("note"), Value::Str(n.into())));
+        }
+        Value::record(f)
+    };
+    let items = Value::list([rec("a", 1.0, Some("x")), rec("b", 2.0, None)]);
+    let ms = Value::list([
+        Value::record([(CelKey::new("a"), Value::Num(2.0))]),
+        Value::record([]),
+    ]);
+    let binds = [("items", items), ("ms", ms)];
+    const PINNED: &[(&str, &str)] = &[
+        ("items[0].qty > 0.0", "Ok(Bool(true))"),
+        ("items[1].id == \"b\"", "Ok(Bool(true))"),
+        ("items[1].note == \"x\"", "Err(NoSuchKey(\"note\"))"),
+        ("items.exists(i, i.qty > 1.5)", "Ok(Bool(true))"),
+        (
+            "items.all(i, i.id != \"z\" && i.qty > 0.0)",
+            "Ok(Bool(true))",
+        ),
+        ("items.exists(i, i.note == \"x\")", "Ok(Bool(true))"),
+        ("items.all(i, i.note == \"x\")", "Err(NoSuchKey(\"note\"))"),
+        ("ms[0].a > 1.0", "Ok(Bool(true))"),
+        ("ms[1].a > 1.0", "Err(NoSuchKey(\"a\"))"),
+        ("ms.exists(m, m.a > 1.0)", "Ok(Bool(true))"),
+        ("ms.all(m, m.a > 1.0)", "Err(NoSuchKey(\"a\"))"),
+        ("size(items.map(i, i.id)) == 2.0", "Ok(Bool(true))"),
+    ];
+    let mut wrong = Vec::new();
+    for (src, want) in PINNED {
+        let got = format!("{:?}", run_in(src, &binds, &vars));
+        if got != *want {
+            wrong.push(format!("        ({src:?}, {got:?}),"));
+        }
+    }
+    assert!(wrong.is_empty(), "answers moved:\n{}", wrong.join("\n"));
+}
+
+/// Arithmetic answers as pinned: numbers (IEEE: a zero divisor is an infinity or NaN, never an
+/// error), a constant on either side of the non-commutative operators, strings and durations,
+/// in a loop and out of one.
+#[test]
+fn arithmetic_answers_as_before() {
+    let vars = [
+        ("n", CelTy::Num),
+        ("z", CelTy::Num),
+        ("s", CelTy::Str),
+        ("d", CelTy::Duration),
+        ("xs", CelTy::list(CelTy::Num)),
+    ];
+    let binds = [
+        ("n", Value::Num(4.0)),
+        ("z", Value::Num(0.0)),
+        ("s", Value::Str("ab".into())),
+        (
+            "d",
+            Value::Duration(typed_cel::CelDuration::from_millis(1500)),
+        ),
+        (
+            "xs",
+            Value::list([Value::Num(1.0), Value::Num(f64::NAN), Value::Num(-2.0)]),
+        ),
+    ];
+    const PINNED: &[(&str, &str)] = &[
+        ("n + 1.0 == 5.0", "Ok(Bool(true))"),
+        ("n - 1.0 == 3.0", "Ok(Bool(true))"),
+        ("1.0 - n == -3.0", "Ok(Bool(true))"),
+        ("n * 2.5 == 10.0", "Ok(Bool(true))"),
+        ("n / 8.0 == 0.5", "Ok(Bool(true))"),
+        ("8.0 / n == 2.0", "Ok(Bool(true))"),
+        ("1.0 / z > 1000000.0", "Ok(Bool(true))"),
+        ("-1.0 / z < 0.0", "Ok(Bool(true))"),
+        ("z / z == z / z", "Ok(Bool(false))"),
+        ("n * n - n / 2.0 == 14.0", "Ok(Bool(true))"),
+        ("s + \"c\" == \"abc\"", "Ok(Bool(true))"),
+        ("\"x\" + s == \"xab\"", "Ok(Bool(true))"),
+        ("d + duration(\"1s\") > duration(\"2s\")", "Ok(Bool(true))"),
+        ("d - duration(\"1s\") < duration(\"1s\")", "Ok(Bool(true))"),
+        ("xs.exists(x, x * 2.0 > 1.0)", "Ok(Bool(true))"),
+        ("xs.all(x, 10.0 - x > 0.0)", "Err(NoSuchOverload)"),
+        ("size(xs.map(x, x / 2.0)) == 3.0", "Ok(Bool(true))"),
+        ("xs.map(x, x * 2.0)[0] == 2.0", "Ok(Bool(true))"),
+        (
+            "xs.filter(x, x + 1.0 > 0.0) == [1.0]",
+            "Err(NoSuchOverload)",
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (src, want) in PINNED {
+        let got = format!("{:?}", run_in(src, &binds, &vars));
+        if got != *want {
+            wrong.push(format!("        ({src:?}, {got:?}),"));
+        }
+    }
+    assert!(wrong.is_empty(), "answers moved:\n{}", wrong.join("\n"));
+}
+
+/// A literal regex is compiled once and its error kept for where `matches` runs — never raised
+/// by a loop that tests no element — and `in` over a bound list answers as pinned.
+#[test]
+fn a_literal_pattern_and_a_bound_list_search_answer_as_before() {
+    let vars = [
+        ("s", CelTy::Str),
+        ("n", CelTy::Num),
+        ("nan", CelTy::Num),
+        ("ss", CelTy::list(CelTy::Str)),
+        ("none", CelTy::list(CelTy::Str)),
+        ("xs", CelTy::list(CelTy::Num)),
+    ];
+    let binds = [
+        ("s", Value::Str("ab".into())),
+        ("n", Value::Num(2.0)),
+        ("nan", Value::Num(f64::NAN)),
+        (
+            "ss",
+            Value::list([Value::Str("x".into()), Value::Str("ab".into())]),
+        ),
+        ("none", Value::list([])),
+        (
+            "xs",
+            Value::list([Value::Num(1.0), Value::Num(f64::NAN), Value::Num(2.0)]),
+        ),
+    ];
+    const PINNED: &[(&str, &str)] = &[
+        ("s.matches(\"^a\")", "Ok(Bool(true))"),
+        ("s.matches(\"(\")", "Err(FunctionError { function: \"matches\", message: \"'(' not a valid regex:\\nregex parse error:\\n    (\\n    ^\\nerror: unclosed group\" })"),
+        ("ss.exists(x, x.matches(\"^a\"))", "Ok(Bool(true))"),
+        ("ss.all(x, x.matches(\"^a\"))", "Ok(Bool(false))"),
+        ("ss.exists(x, x.matches(\"(\"))", "Err(FunctionError { function: \"matches\", message: \"'(' not a valid regex:\\nregex parse error:\\n    (\\n    ^\\nerror: unclosed group\" })"),
+        ("none.exists(x, x.matches(\"(\"))", "Ok(Bool(false))"),
+        ("s in ss", "Ok(Bool(true))"),
+        ("\"y\" in ss", "Ok(Bool(false))"),
+        ("s in none", "Ok(Bool(false))"),
+        ("n in xs", "Ok(Bool(true))"),
+        ("3.0 in xs", "Ok(Bool(false))"),
+        ("nan in xs", "Ok(Bool(false))"),
+    ];
+    let mut wrong = Vec::new();
+    for (src, want) in PINNED {
+        let got = format!("{:?}", run_in(src, &binds, &vars));
+        if got != *want {
+            wrong.push(format!("        ({src:?}, {got:?}),"));
+        }
+    }
+    assert!(wrong.is_empty(), "answers moved:\n{}", wrong.join("\n"));
 }

@@ -502,6 +502,7 @@ dependencies = [
  "bytes",
  "chrono",
  "lazy_static",
+ "memchr",
  "nom",
  "pastey",
  "regex",
@@ -516,6 +517,7 @@ version = "0.0.0"
 dependencies = [
  "cel",
  "chrono",
+ "regex",
  "serde",
  "serde_json",
  "typed-cel",

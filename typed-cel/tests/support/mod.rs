@@ -20,6 +20,9 @@ pub mod events;
 /// The mix equation's typed roster, case generator and three-column row.
 pub mod mix;
 
+/// The cost-model rig: a chokepoint-shaped roster, `Facts` over JSON, one counted decision per leg.
+pub mod perf;
+
 /// A record with no optional fields and no index signature.
 pub fn record(origin: &str, fields: &[(&str, CelTy)]) -> CelTy {
     Record::new(origin, fields.iter().map(|(n, t)| (*n, t.clone()))).into()

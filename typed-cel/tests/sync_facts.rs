@@ -198,13 +198,22 @@ fn a_failing_fact_is_absorbed_like_any_error() {
 fn a_failed_fact_is_not_retried() {
     for (which, eval) in BOTH {
         let log = Log::default();
-        let facts = SyncFacts::new().with("broken", fact(&log, "broken", Err("flaky")));
+        let facts = SyncFacts::new()
+            .with("broken", fact(&log, "broken", Err("flaky")))
+            .with("first", fact(&log, "first", Ok(CelValue::Num(1.0))));
+        // Both failures are absorbed by a leaf that must be read (a constant `true` would settle
+        // the chain before any read).
         assert_eq!(
-            eval(&nums(), "f.broken == 1.0 || f.broken == 2.0 || true", facts).unwrap(),
+            eval(
+                &nums(),
+                "f.broken == 1.0 || f.broken == 2.0 || f.first == 1.0",
+                facts
+            )
+            .unwrap(),
             true,
             "under {which}"
         );
-        assert_eq!(logged(&log), ["broken"], "under {which}");
+        assert_eq!(logged(&log), ["broken", "first"], "under {which}");
     }
 }
 

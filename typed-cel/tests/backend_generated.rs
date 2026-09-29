@@ -47,6 +47,7 @@ fn the_generators_reach_every_op() {
         "Const",
         "Raise",
         "Read",
+        "ReadCached",
         "Has",
         "Local",
         "Select",
@@ -61,6 +62,7 @@ fn the_generators_reach_every_op() {
         "In",
         "Match",
         "StrOp",
+        "StrOp2",
         "Matches",
         "Size",
         "Duration",
@@ -77,15 +79,28 @@ fn the_generators_reach_every_op() {
         "CondMatch",
         "CondEqFF",
         "CondEqFK",
-        "RaiseIfErr",
         "EqK",
         "Catch",
         "Absorb",
         "Nsf",
         "IterInit",
         "IterNext",
+        "IterScan",
         "BrPending",
         "Clear",
+        "Inc",
+        "NumIn",
+        "CondCmpFK",
+        "CondFR",
+        "CondCmpK",
+        "IndexIter",
+        "ArithK",
+        "CondStrOp2F",
+        "CondMatches",
+        "ListNew",
+        "Append",
+        "ListFreeze",
+        "BrSet",
         "Step",
         "CatchPending",
         "RaisePending",
@@ -101,10 +116,13 @@ fn the_generators_reach_every_op() {
         let program = compile_typed(src, &format!("typed index={index}"));
         let fast = FastProgram::new(&program).expect("lowers");
         reached.extend(fast.op_names());
+        // A call over constants runs at lowering, on the backend: its ops ran too.
+        reached.extend(fast.folded_op_names());
     }
     for (id, program) in lane_programs() {
         let fast = fast(&program, &id);
         reached.extend(fast.op_names());
+        reached.extend(fast.folded_op_names());
     }
     // Host calls: the host generator `tests/host_functions.rs` runs its differential over.
     let hosts = support::gen::host_roster();
@@ -133,15 +151,30 @@ fn the_generators_reach_every_op() {
     // exactly so it can only shrink: a map literal with a computed value (`MakeMap`, `CheckKey`),
     // `-x` on a non-constant, `duration(x)` / `getSeconds()` on a computed duration, a select on a
     // computed record, and a matcher in branch position (reached by `under_any_matches_the_exists_
-    // shape`, not by a generator).
+    // shape`, not by a generator). `Nsf`, `BrPending` and `Step` are the literal comprehension
+    // loop's condition and step bookkeeping, and `MakeList` its `[e]` step: every macro's
+    // expansion now lowers past them (`try_predicate_loop`, `try_build_loop`), and only a
+    // comprehension of no macro's shape — or the literal lowering `tests/comprehensions.rs` holds
+    // the others against — still reaches them. `IndexIter` is `m[k]` inside a loop over `m`: the
+    // typed generator never indexes by a loop's key, and teaching it to would move every frozen
+    // row of `tests/generated_golden.rs`; `a_map_loop_answers_as_the_expansion_does` holds it
+    // against the literal lowering's `Index`. `CondMatches` is `matches()` over a literal pattern
+    // in branch position: the typed generator writes no `matches`, and
+    // `a_field_test_in_a_loop_answers_as_the_expansion_does` holds it.
     const NOT_YET_GENERATED: &[&str] = &[
+        "BrPending",
         "CheckKey",
         "CondMatch",
+        "CondMatches",
         "DurPart",
         "Duration",
+        "IndexIter",
+        "MakeList",
         "MakeMap",
         "Neg",
+        "Nsf",
         "Select",
+        "Step",
     ];
     let missing: Vec<&str> = want.difference(&reached).copied().collect();
     assert_eq!(

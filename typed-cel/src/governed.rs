@@ -1,7 +1,7 @@
 //! Governed values: the demanded paths of a document that is still arriving.
 //!
-//! A program reads a handful of fields of a document streamed as [`Event`]s. The
-//! document is never held. Instead:
+//! A program reads a handful of fields of a document streamed as [`Event`]s. The document is never
+//! held. Instead:
 //!
 //! - [`GovernedShape`] is built ONCE per program: the demanded paths under one root, laid over the
 //!   root's declared [`CelTy`], as a small trie of `Send + Sync` nodes. Every refusal happens here.
@@ -11,6 +11,10 @@
 //! - [`StreamedProgram`] is a body check built once: the shape, the emitted code and the bound
 //!   roots. [`StreamedProgram::begin`] makes a [`StreamedRun`] per body, which feeds each event to
 //!   the document and resumes the paused run (on the fast backend) only when a cell settled.
+//!
+//! Validating the WHOLE document — every field the program never reads — is not this module's: a
+//! caller that holds a schema runs its validator beside the run, on the same events, and combines
+//! the two answers. Producing the events (tokenizing the bytes) is the caller's job too.
 //!
 //! A [`StreamedRun`] OWNS its document: it feeds it through `&mut` and the paused run reads it by
 //! field through [`Facts`] — no `Arc`, no lock, on a path taken once per token. The `Mutex` in

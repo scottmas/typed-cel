@@ -1,4 +1,5 @@
-//! A streamed run: a governed value and a suspended VM, fed one event at a time.
+//! A streamed run: a governed value and a suspended VM, fed one event at a time. (A schema
+//! validating the whole body beside the run is the caller's.)
 //!
 //! `StreamedProgram` is built once and shared by every body; `StreamedProgram::begin` makes one
 //! `StreamedRun` per body. The run answers `Live` while the program waits, `Dead` at the event that
@@ -45,11 +46,11 @@ fn json_body(fields: &[(&str, CelTy)], optional: &[&str]) -> Option<CelTy> {
     Some(record_opt("body", fields, optional))
 }
 
-/// A program over `body`, declared as `declared`. `n` is declared `Num` and bound to 3.
-fn program(declared: Option<CelTy>, src: &str) -> StreamedProgram {
+/// A program over `body`, declared `ty`. `n` is declared `Num` and bound to 3.
+fn program(ty: Option<CelTy>, src: &str) -> StreamedProgram {
     let mut env = CelEnvironment::new();
     env.declare("n", CelTy::Num);
-    env.declare("body", declared.expect("declare `body`"));
+    env.declare("body", ty.expect("declare `body`"));
     let compiled = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
     let code = Arc::new(emit(&compiled).expect("the program emits"));
     let mut act = env.activation();
@@ -136,7 +137,7 @@ fn the_run_is_live_while_the_vm_waits() {
 #[test]
 fn an_early_false_is_dead_at_the_settling_event() {
     let p = program(
-        json_body(&[("op", CelTy::Str), ("pad", CelTy::Str)], &[]),
+        json_body(&[("pad", CelTy::Str), ("op", CelTy::Str)], &[]),
         r#"body.op == "read""#,
     );
     let doc = format!(r#"{{"op":"delete","pad":"{}"}}"#, pad(256 * 1024));

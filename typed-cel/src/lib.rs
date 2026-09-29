@@ -62,10 +62,15 @@ pub use check::{CheckError, TypeEnv};
 pub use demand::{DemandSet, Segment};
 pub use desugar::{desugar, DesugarError, SpanMap};
 pub use emit::{emit, CelBytecode};
-pub use event::Event;
-pub use fast::{FactPoll, Facts, FastProgram, FastScratch, FieldId, FieldPath};
+/// Deterministic run counters (ops, `slow` entries, field reads, store pushes, allocations), for
+/// the crate's own cost-model tests. Only under the `profile` feature, which only the crate's own
+/// test build turns on.
+#[cfg(feature = "profile")]
 #[doc(hidden)]
-pub use fast::{inline_ops, layout_sizes};
+pub use fast::profile;
+#[doc(hidden)]
+pub use fast::{inline_ops, layout_sizes, with_literal_comprehensions, with_unfused_loops};
+pub use fast::{FactPoll, Facts, FastProgram, FastScratch, FieldId, FieldPath};
 pub use governed::{
     GovernedDoc, GovernedShape, RunLiveness, StreamedProgram, StreamedRun, GOVERNED_CELL_BYTES,
 };
@@ -74,13 +79,15 @@ pub use lazy::{Access, CelKey, DemandHandle, LazyValue, Presence};
 pub use prepared::CelRuntime;
 pub use shape::{Conjunct, Literal};
 pub use sync_facts::{FactFn, SyncFacts};
-pub use ty::{CelTy, Record, Relax};
 pub use value::{CelDuration, CelMap, CelMapKey, CelValue};
 
-/// The repository README's code blocks, compiled and run as doctests so its quickstart cannot rot.
-#[cfg(doctest)]
+/// The repository README's code blocks, compiled and run as doctests so its examples cannot rot.
+/// They use `serde_json`, hence the `json` gate.
+#[cfg(all(doctest, feature = "json"))]
 #[doc = include_str!("../../README.md")]
 pub struct RepositoryReadme;
+pub use event::Event;
+pub use ty::{CelTy, Record, Relax, Unusable};
 
 #[derive(Error, Clone, Debug, PartialEq)]
 #[non_exhaustive]

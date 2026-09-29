@@ -1,8 +1,8 @@
 //! `CelTy::admits` — the witness function the soundness law is written against.
 //!
 //! A derived type is a CLAIM about which values can appear at a position. `admits` is what makes
-//! that claim falsifiable: for every value a
-//! schema definition ACCEPTS, the type derived from that definition must admit it.
+//! that claim falsifiable: for every value a schema definition ACCEPTS, the type derived from that
+//! definition must admit it.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -171,7 +171,10 @@ fn relaxing_the_null_narrowing_names_it_and_nothing_else() {
 #[test]
 fn a_poison_admits_nothing_until_that_narrowing_is_relaxed() {
     use std::rc::Rc;
-    let poison = CelTy::Unusable(Rc::from("body.a: no value can satisfy this type"));
+    let poison = CelTy::Unusable(Rc::new(typed_cel::Unusable {
+        kind: "Uninhabited",
+        message: "body.a: no value can have this type".into(),
+    }));
     let t = record(vec![("a", poison.clone())], &[]);
     for v in [json!(null), json!(0), json!("x"), json!([]), json!({})] {
         assert!(

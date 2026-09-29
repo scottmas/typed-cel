@@ -48,6 +48,9 @@ pub(crate) enum Keep<'a> {
     Bytes(Box<[u8]>),
     Regs(Box<[Reg<'a>]>),
     Pairs(Box<[(Reg<'a>, Reg<'a>)]>),
+    /// A list a loop built in place (`Append`), kept as the vector it grew in: never pushed to
+    /// again once here, so its buffer does not move.
+    Built(Vec<Reg<'a>>),
 }
 
 /// The run's arena.
@@ -64,13 +67,15 @@ impl<'a> Store<'a> {
         unsafe { &mut *(items as *mut Vec<Keep<'a>> as *mut Store<'a>) }
     }
 
-    // SAFETY (all five): each value is moved into its own heap allocation (a `Box`), and the
+    // SAFETY (all six): each value is moved into its own heap allocation (a `Box`), and the
     // reference handed out points into that allocation, which does not move when `items`
     // reallocates. `items` is only ever cleared by the run that owns this store, after its last
     // use of any reference it handed out (`fast::run`); no reference escapes a run, because
     // a run returns only owned values. A PAUSED run keeps its store, and the references into it,
     // together (`fast::Paused`).
     pub(crate) fn value(&mut self, v: CelValue) -> &'a CelValue {
+        #[cfg(feature = "profile")]
+        super::profile::store();
         let b = Box::new(v);
         let p: *const CelValue = &*b;
         self.items.push(Keep::Owned(b));
@@ -78,6 +83,8 @@ impl<'a> Store<'a> {
     }
 
     pub(crate) fn str(&mut self, s: String) -> &'a str {
+        #[cfg(feature = "profile")]
+        super::profile::store();
         let b = s.into_boxed_str();
         let p: *const str = &*b;
         self.items.push(Keep::Str(b));
@@ -85,6 +92,8 @@ impl<'a> Store<'a> {
     }
 
     pub(crate) fn bytes(&mut self, b: Vec<u8>) -> &'a [u8] {
+        #[cfg(feature = "profile")]
+        super::profile::store();
         let b = b.into_boxed_slice();
         let p: *const [u8] = &*b;
         self.items.push(Keep::Bytes(b));
@@ -92,13 +101,26 @@ impl<'a> Store<'a> {
     }
 
     pub(crate) fn regs(&mut self, r: Vec<Reg<'a>>) -> &'a [Reg<'a>] {
+        #[cfg(feature = "profile")]
+        super::profile::store();
         let b = r.into_boxed_slice();
         let p: *const [Reg<'a>] = &*b;
         self.items.push(Keep::Regs(b));
         unsafe { &*p }
     }
 
+    /// A loop's built list, kept without a copy or a shrink.
+    pub(crate) fn built(&mut self, r: Vec<Reg<'a>>) -> &'a [Reg<'a>] {
+        #[cfg(feature = "profile")]
+        super::profile::store();
+        let p: *const [Reg<'a>] = r.as_slice();
+        self.items.push(Keep::Built(r));
+        unsafe { &*p }
+    }
+
     pub(crate) fn pairs(&mut self, r: Vec<(Reg<'a>, Reg<'a>)>) -> &'a [(Reg<'a>, Reg<'a>)] {
+        #[cfg(feature = "profile")]
+        super::profile::store();
         let b = r.into_boxed_slice();
         let p: *const [(Reg<'a>, Reg<'a>)] = &*b;
         self.items.push(Keep::Pairs(b));
@@ -318,6 +340,22 @@ pub(crate) fn contains(needle: Reg<'_>, hay: Reg<'_>) -> Result<bool, ExecutionE
             return Err(ExecutionError::NoSuchOverload);
         };
         return lazy::presence(lazy, name);
+    }
+    // A bound list searched for a string or a number: compared where they lie, no register made.
+    match (hay, needle) {
+        (Reg::Val(CelValue::List(l)), Reg::Str(n)) => {
+            return Ok(l.iter().any(|v| match v {
+                CelValue::Str(s) => s.as_ref() == n,
+                other => equals(of_cel(other), needle),
+            }))
+        }
+        (Reg::Val(CelValue::List(l)), Reg::Num(n)) => {
+            return Ok(l.iter().any(|v| match v {
+                CelValue::Num(x) => *x == n,
+                other => equals(of_cel(other), needle),
+            }))
+        }
+        _ => {}
     }
     if let Some(l) = ListView::of(hay) {
         return Ok((0..l.len()).any(|i| equals(l.get(i), needle)));
