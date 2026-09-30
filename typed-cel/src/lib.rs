@@ -219,7 +219,34 @@ pub mod fork {
         env: &crate::CelEnvironment,
         expression: &str,
     ) -> Result<crate::CelProgram, crate::CelError> {
-        env.compile_checked(expression).map(|(p, _)| p)
+        env.compile_inner(expression.into(), None, None, false)
+            .map(|(p, _, _)| p)
+    }
+
+    /// `CelEnvironment::compile` WITHOUT refusing an unproven read — for the tests that pin what
+    /// the RUNTIME does when a promise of presence is broken anyway. The checker refuses every
+    /// program these tests compile through here; nothing else may use it.
+    pub fn compile_unchecked_presence(
+        env: &crate::CelEnvironment,
+        expression: &str,
+        opts: &crate::CompileOpts<'_>,
+    ) -> Result<crate::CelProgram, crate::CelError> {
+        let kind = match opts.returning {
+            None => crate::ResultKind::Bool,
+            Some(t) => crate::ResultKind::of(t).expect("a supported result type"),
+        };
+        env.compile_presence(expression.into(), Some(kind), opts.known, false, false)
+            .map(|(p, _, _)| p)
+    }
+
+    /// [`compile_any`] WITHOUT refusing an unproven read: any result kind, for the suites that pin
+    /// what the backend answers when a key is missing (absorption tables, error pins).
+    pub fn compile_any_unchecked_presence(
+        env: &crate::CelEnvironment,
+        expression: &str,
+    ) -> Result<crate::CelProgram, crate::CelError> {
+        env.compile_presence(expression.into(), None, None, false, false)
+            .map(|(p, _, _)| p)
     }
 
     /// The backend's value over `activation`'s bound values.
@@ -230,23 +257,63 @@ pub mod fork {
         crate::fast::run_value(p, activation.roots())
     }
 
-    /// `CelEnvironment::specialize`, also handing back each constant slot's name and type.
-    pub fn specialize_slots(
+    /// `CelEnvironment::compile`, also handing back each constant slot's name and type.
+    pub fn compile_slots<'s>(
         env: &crate::CelEnvironment,
-        program: &crate::CelProgram,
-        known: &crate::CelActivation,
+        source: impl Into<crate::Source<'s>>,
+        opts: &crate::CompileOpts<'_>,
     ) -> Result<(crate::CelProgram, Vec<(String, crate::CelTy)>), crate::CelError> {
-        env.specialize_slots(program, known)
+        compile_door(env, source.into(), opts, false)
     }
 
-    /// `CelEnvironment::specialize` with every fold lowering refused — for the test that pins a
+    /// `CelEnvironment::compile` with every fold lowering refused — for the test that pins a
     /// refusal as LOUD.
-    pub fn specialize_with_lowering_refused(
+    pub fn compile_with_lowering_refused<'s>(
         env: &crate::CelEnvironment,
-        program: &crate::CelProgram,
-        known: &crate::CelActivation,
+        source: impl Into<crate::Source<'s>>,
+        opts: &crate::CompileOpts<'_>,
     ) -> Result<crate::CelProgram, crate::CelError> {
-        env.specialize_inner(program, known, true).map(|(p, _)| p)
+        compile_door(env, source.into(), opts, true).map(|(p, _)| p)
+    }
+
+    fn compile_door(
+        env: &crate::CelEnvironment,
+        source: crate::Source<'_>,
+        opts: &crate::CompileOpts<'_>,
+        refuse_all: bool,
+    ) -> Result<(crate::CelProgram, Vec<(String, crate::CelTy)>), crate::CelError> {
+        let kind = match opts.returning {
+            None => crate::ResultKind::Bool,
+            Some(t) => crate::ResultKind::of(t).expect("a supported result type"),
+        };
+        env.compile_inner(source, Some(kind), opts.known, refuse_all)
+            .map(|(p, _, slots)| (p, slots))
+    }
+
+    /// Every read the presence rules would refuse, in the order the checker met them: the read as
+    /// written, and why it may be absent (`optional_field`, `index_key`, `map_key`,
+    /// `known_absent`). A program that does not check at all is its check error.
+    pub fn presence_report(
+        env: &crate::CelEnvironment,
+        source: &str,
+        opts: &crate::CompileOpts<'_>,
+    ) -> Result<Vec<(String, &'static str)>, crate::CelError> {
+        let parsed = env.parse(source)?;
+        let (checked, unproven) = env.check_parsed(&parsed, opts.known, false);
+        if let Err(errors) = checked {
+            let first = errors.first().expect("at least one error").clone();
+            return Err(crate::CelError::Check {
+                source: std::sync::Arc::from(source),
+                at: None,
+                message: first.message,
+                available: first.available,
+                all: errors,
+            });
+        }
+        Ok(unproven
+            .into_iter()
+            .map(|u| (u.rendered, u.kind.name()))
+            .collect())
     }
 
     pub mod ast {
@@ -496,63 +563,11 @@ impl CelEnvironment {
         CelRuntime::new(self.limits)
     }
 
-    /// Desugar, bound, parse, check. Every mistake a policy can make in an expression is found
-    /// here, when a human is present to read the error.
-    pub fn compile(&self, expression: &str) -> Result<CelProgram, CelError> {
-        self.compile_as(expression, ResultKind::Bool)
-            .map_err(|e| match e {
-                // `compile`'s own error shape, unchanged for every caller.
-                CelError::WrongResultType { source, actual, .. } => {
-                    CelError::NotBoolean { source, actual }
-                }
-                other => other,
-            })
-    }
-
-    /// Compile a program that must produce `expected`. [`compile`](CelEnvironment::compile) is
-    /// this with `bool`. The type must be EXACTLY `expected` — `dyn` never qualifies — and only
-    /// the [`ResultKind`]s are supported.
-    pub fn compile_returning(
-        &self,
-        expression: &str,
-        expected: &CelTy,
-    ) -> Result<CelProgram, CelError> {
-        let kind = ResultKind::of(expected).ok_or_else(|| CelError::WrongResultType {
-            source: Arc::from(expression),
-            expected: expected.name(),
-            actual: "(unsupported result type)".into(),
-        })?;
-        self.compile_as(expression, kind)
-    }
-
-    /// Everything `compile` does, requiring `kind` of the result.
-    pub(crate) fn compile_as(
-        &self,
-        expression: &str,
-        kind: ResultKind,
-    ) -> Result<CelProgram, CelError> {
-        let (mut program, ty) = self.compile_checked(expression)?;
-        // The result must BE the kind, not be compatible with one. `Dyn` lands here: uncertainty
-        // must not become authorization, and must not become revocation either.
-        if ty != kind.ty() {
-            return Err(CelError::WrongResultType {
-                source: program.authored.clone(),
-                expected: kind.ty().name(),
-                actual: ty.name(),
-            });
-        }
-        program.result = kind;
-        Ok(program)
-    }
-
-    /// [`compile`](CelEnvironment::compile) without the `bool` requirement: the checked program
-    /// and its type.
-    pub(crate) fn compile_checked(
-        &self,
-        expression: &str,
-    ) -> Result<(CelProgram, CelTy), CelError> {
-        let authored: Arc<str> = Arc::from(expression);
-        let (desugared, spans) = desugar(expression).map_err(|e| CelError::Desugar {
+    /// Desugar, bound, parse. Every syntax error a policy can make is found here; nothing is
+    /// checked, so holding a [`Parsed`] proves nothing about the program's validity.
+    pub fn parse(&self, text: &str) -> Result<Parsed, CelError> {
+        let authored: Arc<str> = Arc::from(text);
+        let (desugared, spans) = desugar(text).map_err(|e| CelError::Desugar {
             source: authored.clone(),
             at: e.at(),
             message: e.to_string(),
@@ -561,146 +576,195 @@ impl CelEnvironment {
             source: authored.clone(),
             message: e.to_string(),
         })?;
-
         let (expr, info) = Parser::default()
             .parse_with_source_info(&desugared)
             .map_err(|e| CelError::Parse {
                 source: authored.clone(),
                 rendered: e.to_string(),
             })?;
-
         bounds::check_cost(&expr, &self.limits).map_err(|e| CelError::Bounds {
             source: authored.clone(),
             message: e.to_string(),
         })?;
-
-        let (ty, demand, types) = check::Checker::new(&self.env, self.limits.max_depth)
-            .run_typed(&expr)
-            .map_err(|errors| {
-                // Report the FIRST error through `Display`. A checker that cascades is a checker
-                // whose output nobody reads, and the first one is the one the author actually
-                // made — but CARRY the rest, so `CelError::all` can list them.
-                let first = errors.first().expect("at least one error").clone();
-                CelError::Check {
-                    source: authored.clone(),
-                    at: span_of(first.id, &info, &spans),
-                    message: first.message,
-                    available: first.available,
-                    all: errors,
-                }
-            })?;
-
-        // The tree that was checked is the tree that runs: `Parser::parse` is
-        // `parse_with_source_info` without the source map, so a second parse would only rebuild
-        // it — and the node kinds below are keyed by ITS ids.
-        let program = Program::from_expression(expr);
-        Ok((
-            CelProgram {
-                authored,
-                demand,
-                program,
-                pool: specialize::ConstPool::default(),
-                kinds: kinds_of(&types),
-                // The harness's `compile_any` keeps whatever its type names; `compile_as`
-                // overwrites it with the kind it required.
-                result: ResultKind::of(&ty).unwrap_or(ResultKind::Bool),
-                hosts: self.hosts.clone(),
-                enums: self.enums.clone(),
-                lowered: std::sync::OnceLock::new(),
-            },
-            ty,
-        ))
-    }
-}
-
-/// The node kinds the fast backend lowers by, from the checker's type of every node.
-pub(crate) fn kinds_of(types: &std::collections::HashMap<u64, CelTy>) -> fast::Kinds {
-    types
-        .iter()
-        .map(|(id, ty)| {
-            let k = match ty {
-                CelTy::Bool => fast::Kind::Bool,
-                CelTy::Num => fast::Kind::Num,
-                CelTy::Str => fast::Kind::Str,
-                CelTy::Bytes => fast::Kind::Bytes,
-                CelTy::Null => fast::Kind::Null,
-                CelTy::Duration => fast::Kind::Duration,
-                CelTy::List(_) => fast::Kind::List,
-                CelTy::Map(..) => fast::Kind::Map,
-                CelTy::Record(_) => fast::Kind::Record,
-                CelTy::Dyn | CelTy::Unusable(_) => fast::Kind::Dyn,
-            };
-            (*id, k)
+        Ok(Parsed {
+            authored,
+            expr,
+            info,
+            spans,
         })
-        .collect()
-}
-
-impl CelEnvironment {
-    /// Fold every root `known` bound with `bind` out of `program`.
-    ///
-    /// The residual reads only roots that were not bound, or were bound with `bind_lazy`, and
-    /// agrees with `program` on every completion of them. It is built from the folded tree, not
-    /// re-parsed: its `source()` is that tree rendered, and its `demand()` is what checking that
-    /// tree harvests — exactly what the residual reads.
-    pub fn specialize(
-        &self,
-        program: &CelProgram,
-        known: &CelActivation,
-    ) -> Result<CelProgram, CelError> {
-        self.specialize_slots(program, known).map(|(p, _)| p)
     }
 
-    /// [`specialize`](CelEnvironment::specialize), also handing back each constant slot's name and
-    /// the type the residual was re-checked with.
+    /// THE compile. Parse (unless handed a [`Parsed`]), check with the known values in view,
+    /// specialize against them when the program reads any, re-check the residual. Every mistake a
+    /// policy can make is found here, when a human is present to read the error.
+    ///
+    /// `opts.returning` is the type the program must produce, EXACTLY (`None` is `bool`; `dyn`
+    /// never qualifies, and only the [`ResultKind`]s are supported). `opts.known` holds the roots
+    /// whose values are known now: every read of one folds, and the result reads only the rest —
+    /// its `source()` is the residual rendered, and its `demand()` is exactly what the residual
+    /// reads. Given `known` at all, the program is specialized: closed subtrees fold too, even
+    /// when it reads no known root.
+    pub fn compile<'s>(
+        &self,
+        source: impl Into<Source<'s>>,
+        opts: &CompileOpts<'_>,
+    ) -> Result<CelProgram, CelError> {
+        let source = source.into();
+        let kind = match opts.returning {
+            None => ResultKind::Bool,
+            Some(expected) => {
+                ResultKind::of(expected).ok_or_else(|| CelError::WrongResultType {
+                    source: source.authored(),
+                    expected: expected.name(),
+                    actual: "(unsupported result type)".into(),
+                })?
+            }
+        };
+        let result = self.compile_inner(source, Some(kind), opts.known, false);
+        match (opts.returning, result) {
+            // A condition's own error shape, unchanged for every caller.
+            (None, Err(CelError::WrongResultType { source, actual, .. })) => {
+                Err(CelError::NotBoolean { source, actual })
+            }
+            (_, r) => r.map(|(program, _, _)| program),
+        }
+    }
+
+    /// Everything `compile` does. `kind` is the result the program must produce, or `None` for
+    /// any (the harness's `fork::compile_any`); `refuse_all` fails every lowering of a closed
+    /// subtree (the test door `fork::compile_with_lowering_refused`). Also hands back the
+    /// ORIGINAL's type and each constant slot's name and type.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn compile_inner(
+        &self,
+        source: Source<'_>,
+        kind: Option<ResultKind>,
+        known: Option<&CelActivation>,
+        refuse_all: bool,
+    ) -> Result<(CelProgram, CelTy, Vec<(String, CelTy)>), CelError> {
+        self.compile_presence(source, kind, known, refuse_all, true)
+    }
+
+    /// [`compile_inner`](CelEnvironment::compile_inner); `enforce_presence: false` only for the
+    /// unchecked test door, which compiles a program the presence rules refuse.
+    pub(crate) fn compile_presence(
+        &self,
+        source: Source<'_>,
+        kind: Option<ResultKind>,
+        known: Option<&CelActivation>,
+        refuse_all: bool,
+        enforce_presence: bool,
+    ) -> Result<(CelProgram, CelTy, Vec<(String, CelTy)>), CelError> {
+        let owned;
+        let parsed = match source {
+            Source::Text(text) => {
+                owned = self.parse(text)?;
+                &owned
+            }
+            Source::Parsed(p) => p,
+        };
+        let authored = parsed.authored.clone();
+        let (checked, _unproven) = self.check_parsed(parsed, known, enforce_presence);
+        let (ty, demand, types) = checked.map_err(|errors| {
+            // Report the FIRST error through `Display`. A checker that cascades is a checker
+            // whose output nobody reads, and the first one is the one the author actually
+            // made — but CARRY the rest, so `CelError::all` can list them.
+            let first = errors.first().expect("at least one error").clone();
+            CelError::Check {
+                source: authored.clone(),
+                at: span_of(first.id, &parsed.info, &parsed.spans),
+                message: first.message,
+                available: first.available,
+                all: errors,
+            }
+        })?;
+        // The result must BE the kind, not be compatible with one. `Dyn` lands here: uncertainty
+        // must not become authorization, and must not become revocation either.
+        let result = match kind {
+            Some(kind) if ty != kind.ty() => {
+                return Err(CelError::WrongResultType {
+                    source: authored,
+                    expected: kind.ty().name(),
+                    actual: ty.name(),
+                })
+            }
+            Some(kind) => kind,
+            // The harness's `compile_any` keeps whatever its type names.
+            None => ResultKind::of(&ty).unwrap_or(ResultKind::Bool),
+        };
+        let Some(known) = known else {
+            // The tree that was checked is the tree that runs, and the node kinds are keyed by
+            // ITS ids.
+            return Ok((
+                CelProgram {
+                    authored,
+                    demand,
+                    program: Program::from_expression(parsed.expr.clone()),
+                    pool: specialize::ConstPool::default(),
+                    kinds: kinds_of(&types),
+                    result,
+                    hosts: self.hosts.clone(),
+                    enums: self.enums.clone(),
+                    lowered: std::sync::OnceLock::new(),
+                },
+                ty,
+                Vec::new(),
+            ));
+        };
+        let (program, slots) =
+            self.specialize_checked(&parsed.expr, &authored, &types, result, known, refuse_all)?;
+        Ok((program, ty, slots))
+    }
+
+    /// THE check, run once on the parsed tree, with the known values in view. Also hands back every
+    /// read the presence rules refuse.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn check_parsed(
+        &self,
+        parsed: &Parsed,
+        known: Option<&CelActivation>,
+        enforce_presence: bool,
+    ) -> (
+        Result<(CelTy, DemandSet, std::collections::HashMap<u64, CelTy>), Vec<check::CheckError>>,
+        Vec<check::Unproven>,
+    ) {
+        let mut checker = check::Checker::new(&self.env, self.limits.max_depth);
+        if !enforce_presence {
+            checker = checker.observing_presence();
+        }
+        if let Some(k) = known {
+            checker = checker.with_known(k.roots(), k.known_roots());
+        }
+        checker.run_presence(&parsed.expr)
+    }
+
+    /// Fold every root `known` bound with `bind` out of `original`, whose every node's type the
+    /// check just produced (`types`).
     ///
     /// A known composite the residual still reads is not written out as a literal: it is held in
     /// the residual's constant pool and read as `$kN`, typed from the type the ORIGINAL was checked
     /// at for the node it replaces. A known scalar is still written out.
-    pub(crate) fn specialize_slots(
+    fn specialize_checked(
         &self,
-        program: &CelProgram,
-        known: &CelActivation,
-    ) -> Result<(CelProgram, Vec<(String, CelTy)>), CelError> {
-        self.specialize_inner(program, known, false)
-    }
-
-    /// [`specialize_slots`](CelEnvironment::specialize_slots); `refuse_all` fails every lowering of
-    /// a closed subtree (the test door `fork::specialize_with_lowering_refused`).
-    pub(crate) fn specialize_inner(
-        &self,
-        program: &CelProgram,
+        original: &IdedExpr,
+        authored: &Arc<str>,
+        types: &std::collections::HashMap<u64, CelTy>,
+        result: ResultKind,
         known: &CelActivation,
         refuse_all: bool,
     ) -> Result<(CelProgram, Vec<(String, CelTy)>), CelError> {
         let refuse = |message: String| CelError::Specialize {
-            source: program.source_arc(),
+            source: authored.clone(),
             message,
         };
-        // A slot's type exists only inside the `specialize` that made it (a `CelTy` is not
-        // `Send`, and a program is), so a residual holding slots cannot be re-checked again.
-        if !program.pool.is_empty() {
-            return Err(refuse(
-                "a residual that holds constant slots cannot be specialized again; specialize the \
-                 original with every known root bound"
-                    .to_string(),
-            ));
-        }
         let roots = known.known_roots();
-        let original = program.program().expression();
-        // The type of every node, from the checker and roster the original compiled against.
-        let (_, _, types) = check::Checker::new(&self.env, self.limits.max_depth)
-            .run_typed(original)
-            .map_err(|errors| {
-                let first = errors.first().map(|e| e.message.as_str()).unwrap_or("");
-                refuse(format!("the original does not type-check: {first}"))
-            })?;
-        let kinds = kinds_of(&types);
+        let kinds = kinds_of(types);
         let (mut residual, slots, refused) = specialize::fold_typed(
             original,
             known.roots(),
             roots,
             self.limits,
-            &types,
+            types,
             specialize::Lowering {
                 kinds: &kinds,
                 hosts: &self.hosts,
@@ -725,7 +789,7 @@ impl CelEnvironment {
         // Not skipped because the original passed: unrolling trades the estimate's assumed
         // iteration count for the real element count, so a residual can cost MORE.
         bounds::check_cost(&residual, &self.limits).map_err(|e| CelError::Bounds {
-            source: program.source_arc(),
+            source: authored.clone(),
             message: format!("the specialized form {e}"),
         })?;
         // The residual's demand comes from checking IT, with the same checker and roster the
@@ -736,22 +800,24 @@ impl CelEnvironment {
             .iter()
             .map(|s| (s.name.clone(), s.ty.clone()))
             .collect();
-        // Re-checked against the ORIGINAL's result kind: a `string` program's residual is a
-        // `string` program, never re-held to `compile`'s `bool`.
-        let (demand, types) = specialize::recheck(
-            &self.env,
-            self.limits.max_depth,
-            &residual,
-            &decls,
-            program.result.ty(),
-        )
-        .map_err(refuse)?;
         let pool = specialize::ConstPool::new(
             slots
                 .into_iter()
                 .map(|s| (Arc::from(s.name.as_str()), s.value))
                 .collect(),
         );
+        // Re-checked against the ORIGINAL's result kind: a `string` program's residual is a
+        // `string` program, never re-held to a condition's `bool`. A slot's VALUE is in view too, so
+        // a read of `$k0["k"]` is proven exactly as the known read it replaces was.
+        let (demand, residual_types) = specialize::recheck(
+            &self.env,
+            self.limits.max_depth,
+            &residual,
+            &decls,
+            pool.slots(),
+            result.ty(),
+        )
+        .map_err(refuse)?;
         let rendered = unparse::unparse(&residual).map_err(|e| refuse(e.to_string()))?;
         let rendered = format!("{rendered}{}", pool.legend());
         Ok((
@@ -760,8 +826,8 @@ impl CelEnvironment {
                 demand,
                 program: Program::from_expression(residual),
                 pool,
-                kinds: kinds_of(&types),
-                result: program.result,
+                kinds: kinds_of(&residual_types),
+                result,
                 hosts: self.hosts.clone(),
                 enums: self.enums.clone(),
                 lowered: std::sync::OnceLock::new(),
@@ -769,6 +835,160 @@ impl CelEnvironment {
             decls,
         ))
     }
+}
+
+/// What a compile needs besides the source.
+#[derive(Clone, Copy, Default)]
+pub struct CompileOpts<'a> {
+    /// The type the program must produce, EXACTLY. `None` is `bool` — a condition.
+    pub returning: Option<&'a CelTy>,
+    /// Roots whose values are known now. The check reads them, and the program is specialized
+    /// against them: every read of a known root folds, and the result reads only the rest. `None`
+    /// compiles for every value of every root.
+    pub known: Option<&'a CelActivation>,
+}
+
+/// A program's text, desugared, bounded and parsed — no check, no verdict. Cheap to keep and to
+/// compile many times (a host that runs one program under many configurations parses it once
+/// and compiles it against each). Holding one proves nothing about the program's validity: only
+/// [`CelEnvironment::compile`] says that.
+pub struct Parsed {
+    authored: Arc<str>,
+    expr: IdedExpr,
+    info: Arc<common::ast::SourceInfo>,
+    spans: SpanMap,
+}
+
+impl std::fmt::Debug for Parsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Parsed")
+            .field("source", &self.authored)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Parsed {
+    /// The AUTHORED text.
+    pub fn source(&self) -> &str {
+        &self.authored
+    }
+
+    /// The roots the tree names — a syntactic scan, not a check: a comprehension variable is not a
+    /// root inside the comprehension that binds it. What a caller asks to decide whether a program
+    /// reads a root at all.
+    pub fn roots(&self) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        syntactic_roots(&self.expr, &mut Vec::new(), &mut out);
+        out
+    }
+}
+
+fn syntactic_roots<'e>(
+    e: &'e IdedExpr,
+    scope: &mut Vec<&'e str>,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    use common::ast::{EntryExpr, Expr};
+    match &e.expr {
+        Expr::Ident(name) => {
+            // `@`-prefixed names are the macro expander's accumulators, never the author's.
+            if !name.starts_with('@') && !scope.contains(&name.as_str()) {
+                out.insert(name.clone());
+            }
+        }
+        Expr::Select(s) => syntactic_roots(&s.operand, scope, out),
+        Expr::Call(c) => {
+            if let Some(t) = &c.target {
+                syntactic_roots(t, scope, out);
+            }
+            for a in &c.args {
+                syntactic_roots(a, scope, out);
+            }
+        }
+        Expr::List(l) => {
+            for x in &l.elements {
+                syntactic_roots(x, scope, out);
+            }
+        }
+        Expr::Map(m) => {
+            for entry in &m.entries {
+                let EntryExpr::MapEntry(me) = &entry.expr;
+                syntactic_roots(&me.key, scope, out);
+                syntactic_roots(&me.value, scope, out);
+            }
+        }
+        Expr::Comprehension(c) => {
+            syntactic_roots(&c.iter_range, scope, out);
+            syntactic_roots(&c.accu_init, scope, out);
+            let mark = scope.len();
+            scope.push(&c.iter_var);
+            if let Some(v2) = &c.iter_var2 {
+                scope.push(v2);
+            }
+            scope.push(&c.accu_var);
+            syntactic_roots(&c.loop_cond, scope, out);
+            syntactic_roots(&c.loop_step, scope, out);
+            syntactic_roots(&c.result, scope, out);
+            scope.truncate(mark);
+        }
+        Expr::Literal(_) | Expr::Unspecified => {}
+    }
+}
+
+/// What [`CelEnvironment::compile`] compiles: text, or a [`Parsed`] kept from an earlier parse.
+#[derive(Clone, Copy, Debug)]
+pub enum Source<'s> {
+    Text(&'s str),
+    Parsed(&'s Parsed),
+}
+
+impl Source<'_> {
+    fn authored(&self) -> Arc<str> {
+        match self {
+            Source::Text(t) => Arc::from(*t),
+            Source::Parsed(p) => p.authored.clone(),
+        }
+    }
+}
+
+impl<'s> From<&'s str> for Source<'s> {
+    fn from(text: &'s str) -> Source<'s> {
+        Source::Text(text)
+    }
+}
+
+impl<'s> From<&'s String> for Source<'s> {
+    fn from(text: &'s String) -> Source<'s> {
+        Source::Text(text)
+    }
+}
+
+impl<'s> From<&'s Parsed> for Source<'s> {
+    fn from(parsed: &'s Parsed) -> Source<'s> {
+        Source::Parsed(parsed)
+    }
+}
+
+/// The node kinds the fast backend lowers by, from the checker's type of every node.
+pub(crate) fn kinds_of(types: &std::collections::HashMap<u64, CelTy>) -> fast::Kinds {
+    types
+        .iter()
+        .map(|(id, ty)| {
+            let k = match ty {
+                CelTy::Bool => fast::Kind::Bool,
+                CelTy::Num => fast::Kind::Num,
+                CelTy::Str => fast::Kind::Str,
+                CelTy::Bytes => fast::Kind::Bytes,
+                CelTy::Null => fast::Kind::Null,
+                CelTy::Duration => fast::Kind::Duration,
+                CelTy::List(_) => fast::Kind::List,
+                CelTy::Map(..) | CelTy::UnsafeMap(..) => fast::Kind::Map,
+                CelTy::Record(_) => fast::Kind::Record,
+                CelTy::Dyn | CelTy::Unusable(_) => fast::Kind::Dyn,
+            };
+            (*id, k)
+        })
+        .collect()
 }
 
 /// The authored span of the node with expression id `id`.
@@ -825,7 +1045,7 @@ impl CelProgram {
     }
 }
 
-/// The type a program is required to produce ([`CelEnvironment::compile_returning`]). `Copy` and
+/// The type a program is required to produce ([`CompileOpts::returning`]). `Copy` and
 /// `Send`, unlike [`CelTy`], so a compiled program carries it across threads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResultKind {
@@ -945,7 +1165,7 @@ pub enum CelError {
         source: Arc<str>,
         actual: String,
     },
-    /// [`CelEnvironment::compile_returning`]: the program's type is not the one required.
+    /// [`CompileOpts::returning`]: the program's type is not the one required.
     WrongResultType {
         source: Arc<str>,
         expected: String,

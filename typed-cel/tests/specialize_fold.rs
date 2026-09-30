@@ -11,6 +11,7 @@ use serde_json::json;
 use support::known::fold_text;
 use typed_cel::fork::ast::{EntryExpr, Expr, IdedExpr};
 use typed_cel::fork::parser::Parser;
+use typed_cel::CompileOpts;
 use typed_cel::{CelEnvironment, CelTy, Record};
 
 fn env() -> CelEnvironment {
@@ -217,11 +218,28 @@ fn has_on_a_known_operand_folds() {
 /// An absent optional field is a missing key at run time, so the select stays — over the known
 /// record, which the residual reads by constant slot.
 #[test]
-fn absent_optional_field_errors_in_place() {
-    folds(&[(
-        "p.fs.nope == u.path",
-        "$k0.nope == u.path\n// $k0 = {\"names\": [\"a\", \"b\"], \"root\": \"/ws\"}",
-    )]);
+fn an_absent_optional_field_of_a_known_value_is_refused_or_folds_its_guard() {
+    let env = env();
+    let mut k = env.activation();
+    for (name, v) in known() {
+        k.bind(name, &v).unwrap();
+    }
+    let opts = CompileOpts {
+        known: Some(&k),
+        ..Default::default()
+    };
+    let e = env
+        .compile("p.fs.nope == u.path", &opts)
+        .expect_err("the known `p` has no `fs.nope`")
+        .to_string();
+    assert!(
+        e.contains("`p.fs.nope` is absent: the KNOWN value of `p`"),
+        "{e}"
+    );
+    folds(&[
+        ("has(p.fs.nope) && p.fs.nope == u.path", "false"),
+        ("!has(p.fs.nope) || p.fs.nope == u.path", "true"),
+    ]);
 }
 
 #[test]
@@ -265,12 +283,20 @@ fn closed_comprehension_folds_whole() {
 fn kept_comprehension_keeps_its_plumbing() {
     let env = env();
     let src = "u.items.exists(x, x == k || t)";
-    let original = env.compile(src).expect("compiles");
+    let original = env.compile(src, &CompileOpts::default()).expect("compiles");
     let mut act = env.activation();
     for (name, v) in known() {
         act.bind(name, &v).expect("binds");
     }
-    let residual = env.specialize(&original, &act).expect("specializes");
+    let residual = env
+        .compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&act),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     let (o, r) = (
         typed_cel::fork::expression_of(&original),
         typed_cel::fork::expression_of(&residual),

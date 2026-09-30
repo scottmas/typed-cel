@@ -5,6 +5,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -55,7 +56,9 @@ fn is_true(env: &CelEnvironment, p: &CelProgram, bind: &dyn Fn(&mut CelActivatio
 fn a_registered_host_function_type_checks_and_runs() {
     let mut env = with_twice();
     env.declare("x", CelTy::Num);
-    let p = env.compile("twice(x) == 4.0").expect("compiles");
+    let p = env
+        .compile("twice(x) == 4.0", &CompileOpts::default())
+        .expect("compiles");
     is_true(&env, &p, &|act| {
         act.bind_fact("x", CelValue::Num(2.0));
     });
@@ -77,7 +80,7 @@ fn a_member_host_function_runs_as_a_method() {
     .expect("registers");
     env.declare("s", CelTy::Str);
     for src in [r#""a".shout() == "A!""#, r#"s.shout() == "AB!""#] {
-        let p = env.compile(src).expect("compiles");
+        let p = env.compile(src, &CompileOpts::default()).expect("compiles");
         is_true(&env, &p, &|act| {
             act.bind_fact("s", CelValue::Str("ab".into()));
         });
@@ -87,7 +90,7 @@ fn a_member_host_function_runs_as_a_method() {
 #[test]
 fn a_host_call_with_the_wrong_argument_type_is_a_check_error() {
     let err = with_twice()
-        .compile("twice(\"a\") == 1.0")
+        .compile("twice(\"a\") == 1.0", &CompileOpts::default())
         .expect_err("a string is not a double");
     let msg = err.to_string();
     assert!(matches!(err, CelError::Check { .. }), "{err:?}");
@@ -100,7 +103,7 @@ fn a_host_call_with_the_wrong_argument_type_is_a_check_error() {
 #[test]
 fn an_unknown_name_keeps_the_dialect_diagnostic() {
     let bare = CelEnvironment::new()
-        .compile("nope(1.0) == 1.0")
+        .compile("nope(1.0) == 1.0", &CompileOpts::default())
         .expect_err("unknown")
         .to_string();
     assert!(
@@ -110,7 +113,7 @@ fn an_unknown_name_keeps_the_dialect_diagnostic() {
     assert!(!bare.contains("registered host functions"), "{bare}");
 
     let hosted = with_twice()
-        .compile("nope(1.0) == 1.0")
+        .compile("nope(1.0) == 1.0", &CompileOpts::default())
         .expect_err("unknown")
         .to_string();
     assert!(
@@ -168,9 +171,12 @@ fn host_calls_fold_only_when_every_argument_is_known() {
     env.declare("k", typed_cel::Record::new("k", [("r", CelTy::Str)]));
     env.declare("u", CelTy::Str);
     let p = env
-        .compile_returning(
+        .compile(
             r#"u.startsWith(count_me(k.r)) ? "hit" : count_me(u)"#,
-            &CelTy::Str,
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
         )
         .expect("compiles");
     assert_eq!(count.load(Ordering::SeqCst), 0, "compiling calls nothing");
@@ -178,7 +184,15 @@ fn host_calls_fold_only_when_every_argument_is_known() {
     known
         .bind("k", &serde_json::json!({"r": "/a"}))
         .expect("binds");
-    let residual = env.specialize(&p, &known).expect("specializes");
+    let residual = env
+        .compile(
+            p.source(),
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                known: Some(&known),
+            },
+        )
+        .expect("specializes");
     let src = residual.source();
     assert!(src.contains("\"/a/\""), "{src}");
     assert_eq!(src.matches("count_me(").count(), 1, "{src}");
@@ -215,7 +229,9 @@ fn a_host_error_is_an_evaluation_error_not_a_panic() {
     )
     .expect("registers");
     env.declare("x", CelTy::Num);
-    let p = env.compile("boom(x) == 1.0").expect("compiles");
+    let p = env
+        .compile("boom(x) == 1.0", &CompileOpts::default())
+        .expect("compiles");
     let mut act = env.runtime().activation();
     act.bind_fact("x", CelValue::Num(1.0));
     let a = Vm::new()
@@ -263,7 +279,7 @@ fn a_host_argument_with_no_cel_value_form_is_an_error() {
     .expect("registers");
     env.declare("xs", CelTy::list(CelTy::Num));
     let p = env
-        .compile("total(xs.map(x, x * 2.0)) == 12.0")
+        .compile("total(xs.map(x, x * 2.0)) == 12.0", &CompileOpts::default())
         .expect("compiles");
     is_true(&env, &p, &|act| {
         act.bind_fact(
@@ -293,7 +309,9 @@ fn a_host_argument_with_no_cel_value_form_is_an_error() {
     )
     .expect("registers");
     env.declare("v", ty);
-    let p = env.compile("same_view(v)").expect("compiles");
+    let p = env
+        .compile("same_view(v)", &CompileOpts::default())
+        .expect("compiles");
     is_true(&env, &p, &|act| {
         act.bind_fact("v", CelValue::Lazy(Arc::clone(&view)));
     });
@@ -304,7 +322,9 @@ fn a_host_argument_with_no_cel_value_form_is_an_error() {
 fn emit_is_deterministic_with_hosts() {
     let mut env = with_twice();
     env.declare("x", CelTy::Num);
-    let p = env.compile("twice(twice(x)) == 8.0").expect("compiles");
+    let p = env
+        .compile("twice(twice(x)) == 8.0", &CompileOpts::default())
+        .expect("compiles");
     let (a, b) = (
         typed_cel::FastProgram::new(&p).expect("lowers"),
         typed_cel::FastProgram::new(&p).expect("lowers"),

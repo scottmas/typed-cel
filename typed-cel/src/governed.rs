@@ -151,7 +151,7 @@ fn node_for(path: String, ty: &CelTy) -> Result<Node, CelError> {
                 .collect(),
             open: r.index.is_some(),
         },
-        CelTy::Map(k, _) if **k == CelTy::Str => Kind::Container {
+        m if m.map_parts().is_some_and(|(k, _)| *k == CelTy::Str) => Kind::Container {
             slots: Vec::new(),
             open: true,
         },
@@ -188,7 +188,7 @@ fn node_for(path: String, ty: &CelTy) -> Result<Node, CelError> {
 fn child_ty(ty: &CelTy, key: &str) -> Option<CelTy> {
     match ty {
         CelTy::Record(r) => r.field_or_index(key).cloned(),
-        CelTy::Map(_, v) => Some((**v).clone()),
+        m if m.is_map() => m.map_parts().map(|(_, v)| v.clone()),
         _ => None,
     }
 }

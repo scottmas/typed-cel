@@ -204,7 +204,23 @@ impl Gen {
                 return vars[g.below(vars.len())].to_string();
             }
             let leaf = g.pick(&[
-                "n", "r.a", "r.o", "xs[0]", "m['a']", "m['z']", "0.0", "1.0", "2.5", "1", "0",
+                "n",
+                "r.a",
+                // Guarded reads: still a value, still of type `double`, and still exercising the
+                // absent branch (the else) and the present one (the then).
+                "(has(r.o) ? r.o : 0.0)",
+                "xs[0]",
+                "('a' in m ? m['a'] : 0.0)",
+                // `m` never holds `z`: this leaf exists to reach a run-time ERROR, which the
+                // metamorphic floors need. A presence proof removed the `No such key`, so the
+                // absent branch reads past the end of `xs` (at most three elements) — bounds are
+                // not presence, and stay a run-time error.
+                "('z' in m ? m['z'] : xs[3])",
+                "0.0",
+                "1.0",
+                "2.5",
+                "1",
+                "0",
                 "size(xs)",
             ]);
             g.spell(leaf)
@@ -237,8 +253,8 @@ impl Gen {
     }
 }
 
-/// The roster the typed modes compile against. `r.o` is OPTIONAL so a binding can omit it and
-/// `r.o` / `has(r.o)` reach `NoSuchKey` / `false` at run time.
+/// The roster the typed modes compile against. `r.o` is OPTIONAL so a binding can omit it and the
+/// GUARDED read takes its absent branch; unguarded, it would not compile (proven presence).
 pub fn roster() -> CelEnvironment {
     let mut e = CelEnvironment::new();
     e.declare("n", CelTy::Num);
@@ -508,7 +524,9 @@ impl Gen {
 
     fn hnum(&mut self, depth: u32) -> String {
         if depth == 0 || self.below(3) == 0 {
-            return self.pick(&["n", "r.a", "r.o", "1.0", "0.0"]).to_string();
+            return self
+                .pick(&["n", "r.a", "(has(r.o) ? r.o : 0.0)", "1.0", "0.0"])
+                .to_string();
         }
         match self.below(3) {
             0 => format!("twice({})", self.hnum(depth - 1)),

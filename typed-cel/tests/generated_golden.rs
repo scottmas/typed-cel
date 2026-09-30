@@ -22,6 +22,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::path::Path;
 
 use support::gen::{
@@ -85,7 +86,7 @@ fn lines(
     for seed in SEEDS {
         for (index, (src, acts)) in batch(seed).iter().enumerate() {
             let program = env
-                .compile(src)
+                .compile(src, &CompileOpts::default())
                 .unwrap_or_else(|e| panic!("seed={seed:#x}, index={index}: `{src}`:\n{e}"));
             for (a, json) in acts.iter().enumerate() {
                 let mut act = env.activation();

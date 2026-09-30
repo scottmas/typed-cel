@@ -9,6 +9,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -89,7 +90,9 @@ fn a_lazy_value_serves_a_select() {
     let reads = Arc::new(AtomicUsize::new(0));
     let mut env = CelEnvironment::new();
     env.declare("x", record("x", &[("field", CelTy::Num)]));
-    let program = env.compile("x.field > 1.0").unwrap();
+    let program = env
+        .compile("x.field > 1.0", &CompileOpts::default())
+        .unwrap();
 
     let mut activation = env.activation();
     activation
@@ -117,7 +120,9 @@ fn a_lazy_value_serves_a_comprehension() {
         "m",
         CelTy::map(CelTy::Str, record("entry", &[("n", CelTy::Num)])),
     );
-    let program = env.compile("m.exists(k, m[k].n > 0.0)").unwrap();
+    let program = env
+        .compile("m.exists(k, m[k].n > 0.0)", &CompileOpts::default())
+        .unwrap();
 
     let mut activation = env.activation();
     activation
@@ -151,7 +156,9 @@ fn a_missing_member_reads_as_no_such_key_not_as_zero() {
         "x",
         record("x", &[("field", CelTy::Num), ("absent", CelTy::Num)]),
     );
-    let program = env.compile("x.absent > 1.0").unwrap();
+    let program = env
+        .compile("x.absent > 1.0", &CompileOpts::default())
+        .unwrap();
 
     let mut activation = env.activation();
     activation
@@ -178,7 +185,9 @@ fn a_scalar_is_not_a_container() {
         "m",
         CelTy::map(CelTy::Str, record("entry", &[("n", CelTy::Num)])),
     );
-    let program = env.compile("m.exists(k, m[k].n > 0.0)").unwrap();
+    let program = env
+        .compile("m.exists(k, m[k].n > 0.0)", &CompileOpts::default())
+        .unwrap();
 
     let mut activation = env.activation();
     // A view with NO `keys` bound where the type says map.
@@ -224,7 +233,10 @@ fn a_lazy_member_is_read_once_per_read() {
         support::record_opt("r", &[("a", CelTy::Num), ("b", CelTy::Num)], &["b"]),
     );
     let program = env
-        .compile("r.a == 1.0 && r.a == 1.0 && has(r.b)")
+        .compile(
+            "r.a == 1.0 && r.a == 1.0 && has(r.b)",
+            &CompileOpts::default(),
+        )
         .expect("compiles");
     let mut fields = serde_json::Map::new();
     fields.insert("a".into(), serde_json::json!(1.0));

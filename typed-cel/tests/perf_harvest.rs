@@ -25,6 +25,7 @@ mod harness;
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::collections::BTreeMap;
 
 use typed_cel::fork;
@@ -624,7 +625,7 @@ fn harvest_corpora() {
         .iter()
         .enumerate()
     {
-        let program = env.compile(src).expect("compiles");
+        let program = env.compile(src, &CompileOpts::default()).expect("compiles");
         let fast = FastProgram::new(&program).expect("lowers");
         let nodes = perf::nodes(fork::expression_of(&program));
         for (j, binds) in acts.iter().enumerate() {
@@ -754,7 +755,7 @@ fn harvest_streamed() {
         ),
     );
     let src = r#"body.tier == "gold" && body.amount < 100.0"#;
-    let compiled = env.compile(src).expect("compiles");
+    let compiled = env.compile(src, &CompileOpts::default()).expect("compiles");
     let code = Arc::new(typed_cel::emit(&compiled).expect("emits"));
     let mut act = env.activation();
     act.bind("n", &serde_json::json!(3)).expect("binds");

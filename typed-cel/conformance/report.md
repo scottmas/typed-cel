@@ -14,7 +14,7 @@ Every case is compiled through the checker a policy compiles through, then evalu
   dynamic                    0       0       226      0
   encoders_ext               0       0         4      0
   enums                      0       0        85      0
-  fields                    18       0        42      0
+  fields                    15       2        43      0
   fp_math                   29       0         1      0
   integer_math              30       1        33      0
   lists                     19       0        20      0
@@ -35,9 +35,10 @@ Every case is compiled through the checker a policy compiles through, then evalu
   type_deduction             0       0        47      0
   unknowns                   0       0         0      0
   wrappers                   0       0        36      0
-  TOTAL                    524      27      1793      0
+  TOTAL                    521      29      1794      0
 
   Excluded by dialect:
+        1  diverges: absence must be proven
         1  diverges: duration() takes a string
         1  diverges: equality is homogeneous
         5  diverges: exact integers span int64 and uint64

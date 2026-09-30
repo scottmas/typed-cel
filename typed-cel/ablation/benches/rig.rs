@@ -5,8 +5,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use typed_cel::{
-    emit, CelActivation, CelEnvironment, CelTy, FactPoll, Facts, FastProgram, FastScratch, FieldId,
-    FieldPath, Record, Vm,
+    emit, CelActivation, CelEnvironment, CelTy, CompileOpts, FactPoll, Facts, FastProgram,
+    FastScratch, FieldId, FieldPath, Record, Vm,
 };
 use serde_json::{json, Value as J};
 
@@ -155,7 +155,9 @@ pub struct Row {
 }
 
 pub fn prepare(env: &CelEnvironment, src: &str, leg: Leg, n: usize) -> Row {
-    let p = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let p = env
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     let (pol, rq) = (policy(n), req());
     let bind = |roots: &[(&str, &J)]| -> CelActivation {
         let mut a = env.activation();
@@ -176,7 +178,13 @@ pub fn prepare(env: &CelEnvironment, src: &str, leg: Leg, n: usize) -> Row {
         Leg::Facts | Leg::Spec => {
             let residual = match leg {
                 Leg::Spec => env
-                    .specialize(&p, &bind(&[("policy", &pol)]))
+                    .compile(
+                        src,
+                        &CompileOpts {
+                            known: Some(&bind(&[("policy", &pol)])),
+                            ..Default::default()
+                        },
+                    )
                     .expect("specializes"),
                 _ => p,
             };

@@ -11,6 +11,7 @@
 mod support;
 
 use support::gen::Gen;
+use typed_cel::CompileOpts;
 use typed_cel::{
     emit, CelEnvironment, CelError, CelProgram, CelTy, CelValue, Facts, FastProgram, FastScratch,
     FieldId, Record, ResultKind, Vm,
@@ -119,9 +120,12 @@ fn declaring_an_enum_needs_a_declared_string_field() {
 fn a_listed_literal_compares_as_a_tag() {
     let env = env();
     let p = env
-        .compile_returning(
+        .compile(
             r#"req.access == "read" ? "r" : req.access != "write" ? "nw" : "w""#,
-            &CelTy::Str,
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
         )
         .expect("compiles");
     assert_eq!(p.result_kind(), ResultKind::Str);
@@ -144,7 +148,9 @@ fn an_unlisted_literal_compares_as_a_string() {
     let env = env();
     // "bogus" is not in the list, so it has no tag: the comparison stays a string comparison, and
     // a value outside the list that happens to BE "bogus" still equals it.
-    let p = env.compile(r#"req.access == "bogus""#).expect("compiles");
+    let p = env
+        .compile(r#"req.access == "bogus""#, &CompileOpts::default())
+        .expect("compiles");
     let fast = FastProgram::new(&p).expect("lowers");
     assert!(
         !fast.op_names().iter().any(|o| o.contains("Tag")),
@@ -171,7 +177,10 @@ fn an_unlisted_literal_compares_as_a_string() {
 fn an_or_chain_of_listed_values_is_one_tag_test() {
     let env = env();
     let p = env
-        .compile(r#"req.access == "read" || req.access == "exec" || req.access == "remove""#)
+        .compile(
+            r#"req.access == "read" || req.access == "exec" || req.access == "remove""#,
+            &CompileOpts::default(),
+        )
         .expect("compiles");
     let fast = FastProgram::new(&p).expect("lowers");
     assert_eq!(
@@ -194,7 +203,7 @@ fn generated_tag_programs_answer_alike_on_every_host() {
     for index in 0..600 {
         let src = gen_tag(&mut g, 3);
         let p: CelProgram = env
-            .compile(&src)
+            .compile(&src, &CompileOpts::default())
             .unwrap_or_else(|e| panic!("`{src}` does not compile: {e}"));
         let fast = FastProgram::new(&p).expect("lowers");
         let code = emit(&p).expect("emits");

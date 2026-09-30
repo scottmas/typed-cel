@@ -694,10 +694,6 @@ fn fields_map_fields_map_key_bool() {
     super::check("fields", "map_fields", "map_key_bool", 0);
 }
 #[test]
-fn fields_map_fields_map_field_access() {
-    super::check("fields", "map_fields", "map_field_access", 0);
-}
-#[test]
 fn fields_map_fields_map_no_such_key() {
     super::check("fields", "map_fields", "map_no_such_key", 0);
 }

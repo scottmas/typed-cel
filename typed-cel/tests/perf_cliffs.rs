@@ -14,6 +14,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::Arc;
 
 use typed_cel::profile::{self, CountingAlloc, RunProfile};
@@ -336,7 +337,7 @@ const NS_EVAL_SCRATCH: &str = "`names.exists(x, x == req.name)` at n=1: 348 ns t
 fn vm_eval_allocates_nothing_the_program_does_not_build() {
     const SRC: &str = "policy.names.exists(x, x == req.name)";
     let env = perf::env();
-    let program = env.compile(SRC).expect("compiles");
+    let program = env.compile(SRC, &CompileOpts::default()).expect("compiles");
     let code = typed_cel::emit(&program).expect("emits");
     let mut act = env.activation();
     act.bind("req", &perf::req(10)).expect("binds");
@@ -1073,7 +1074,7 @@ fn a_streamed_run_costs_the_same_at_every_document_size() {
         ),
     );
     let src = r#"body.tier == "gold" && body.amount < 100.0"#;
-    let compiled = env.compile(src).expect("compiles");
+    let compiled = env.compile(src, &CompileOpts::default()).expect("compiles");
     let code = Arc::new(typed_cel::emit(&compiled).expect("emits"));
     let mut act = env.activation();
     act.bind("n", &serde_json::json!(3)).expect("binds");

@@ -7,6 +7,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use serde_json::json;
 use support::env;
 use typed_cel::{DemandSet, Segment};
@@ -25,13 +26,15 @@ fn render(path: &[Segment]) -> String {
 
 fn paths(expr: &str) -> Vec<String> {
     let env = env();
-    let program = env.compile(expr).unwrap_or_else(|e| panic!("{expr}: {e}"));
+    let program = env
+        .compile(expr, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{expr}: {e}"));
     program.demand().paths().map(render).collect()
 }
 
 fn demand(expr: &str) -> DemandSet {
     env()
-        .compile(expr)
+        .compile(expr, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("{expr}: {e}"))
         .demand()
         .clone()
@@ -47,7 +50,10 @@ fn a_literal_path_is_harvested() {
     );
     // And the inherited `references()` really is roots-only, which is why this exists at all.
     let program = env()
-        .compile("files[\"/a/b\"].closed.elapsed > 5s")
+        .compile(
+            "files[\"/a/b\"].closed.elapsed > 5s",
+            &CompileOpts::default(),
+        )
         .unwrap();
     assert_eq!(
         program.demand().roots().into_iter().collect::<Vec<_>>(),
@@ -68,18 +74,19 @@ fn a_window_key_is_harvested() {
 
 /// A `Map<Str, Record{ avg: Map<Str, Num> }>` under a root named nothing like `metrics`, read
 /// through an aggregate named nothing like `max`. The library reports the SHAPE; if it reported
-/// only what one environment's vocabulary matched, this read would be invisible.
+/// only what one environment's vocabulary matched, this read would be invisible. Both maps are
+/// `unsafe_map`, as a demand-filled system root is.
 fn gauge_env() -> typed_cel::CelEnvironment {
     let mut e = typed_cel::CelEnvironment::new();
     e.declare(
         "gauges",
-        typed_cel::CelTy::map(
+        typed_cel::CelTy::unsafe_map(
             typed_cel::CelTy::Str,
             support::record(
                 "gauge",
                 &[(
                     "avg",
-                    typed_cel::CelTy::map(typed_cel::CelTy::Str, typed_cel::CelTy::Num),
+                    typed_cel::CelTy::unsafe_map(typed_cel::CelTy::Str, typed_cel::CelTy::Num),
                 )],
             ),
         ),
@@ -90,7 +97,10 @@ fn gauge_env() -> typed_cel::CelEnvironment {
 #[test]
 fn an_aggregate_is_reported_without_naming_its_root() {
     let program = gauge_env()
-        .compile("gauges[\"cpu\"].avg[\"40s\"] > 1.0")
+        .compile(
+            "gauges[\"cpu\"].avg[\"40s\"] > 1.0",
+            &CompileOpts::default(),
+        )
         .unwrap();
     let reads: Vec<(String, String, String, String)> = program
         .demand()
@@ -178,7 +188,10 @@ fn a_non_literal_key_outside_a_comprehension_is_a_build_error() {
     // expression into "populate everything" for the whole policy, silently.
     let env = env();
     let rendered = env
-        .compile("body.documents.all(d, files[d.id].closed.count > 0)")
+        .compile(
+            "body.documents.all(d, files[d.id].closed.count > 0)",
+            &CompileOpts::default(),
+        )
         .err()
         .expect("a computed key must be refused")
         .to_string();
@@ -241,12 +254,16 @@ fn the_demand_set_serializes() {
 
 #[test]
 fn the_demand_set_pre_populates_the_activation() {
-    // THE test that makes the language optional-free. A demanded path exists in the activation
+    // THE test that keeps the system roots total — what their `unsafe_map` type promises. A demanded path exists in the activation
     // from load, zero-valued, so a file that was never touched reads `0` rather than erroring —
     // and a key NOTHING demanded still errors, so a typo cannot silently read as "never happened".
     let env = env();
-    let named = env.compile("files[\"/a\"].closed.count > 0").unwrap();
-    let unnamed = env.compile("files[\"/b\"].closed.count > 0").unwrap();
+    let named = env
+        .compile("files[\"/a\"].closed.count > 0", &CompileOpts::default())
+        .unwrap();
+    let unnamed = env
+        .compile("files[\"/b\"].closed.count > 0", &CompileOpts::default())
+        .unwrap();
 
     // A host builds this from the union of every expression's demand set. Here: one key.
     let zero_event = json!({"elapsed": "0s", "count": 0.0});
@@ -314,7 +331,7 @@ fn labels_env() -> typed_cel::CelEnvironment {
 
 fn labels_paths(expr: &str) -> (Vec<String>, Vec<String>) {
     let program = labels_env()
-        .compile(expr)
+        .compile(expr, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("{expr}: {e}"));
     (
         program.demand().paths().map(render).collect(),

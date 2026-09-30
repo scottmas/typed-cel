@@ -8,6 +8,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::Arc;
 
 use support::events::{to_events, Ev};
@@ -40,8 +41,12 @@ fn env_of(body: CelTy) -> CelEnvironment {
     e
 }
 
+/// Through the unchecked-presence door: a streamed document's absent optional member settling at
+/// its object's close IS what this suite measures, so its programs read optional members unguarded
+/// — which the checker refuses (proven presence).
 fn shape_of(env: &CelEnvironment, src: &str) -> Result<GovernedShape, CelError> {
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = typed_cel::fork::compile_unchecked_presence(env, src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     GovernedShape::build("body", env.types().get("body").unwrap(), program.demand())
 }
 
@@ -329,7 +334,9 @@ fn settled_cells_never_change_and_generation_counts_settles() {
 fn a_demanded_string_past_the_cap_is_capped_never_truncated() {
     assert_eq!(GOVERNED_CELL_BYTES, 64 * 1024);
     let env = name_env();
-    let program = env.compile(r#"body.name == "x""#).unwrap();
+    let program = env
+        .compile(r#"body.name == "x""#, &CompileOpts::default())
+        .unwrap();
     let shape = GovernedShape::build("body", env.types().get("body").unwrap(), program.demand())
         .unwrap()
         .with_cell_cap(16);
@@ -447,7 +454,7 @@ fn wide_roots_and_wild_paths_are_refused_at_build() {
         &[("labels", CelTy::map(CelTy::Str, CelTy::Str))],
     ));
     let src = r#"body.labels.exists(k, body.labels[k] == "x")"#;
-    let program = env.compile(src).unwrap();
+    let program = env.compile(src, &CompileOpts::default()).unwrap();
     assert!(
         program.demand().wide_roots().any(|r| r == "body"),
         "{}",
@@ -475,7 +482,9 @@ fn non_settleable_types_are_refused_at_build() {
     ));
     // A `dyn` member never reaches a shape: `compile` refuses every use of one but `has()`
     // (`removed: dyn values`).
-    assert!(env.compile("body.blob == null").is_err());
+    assert!(env
+        .compile("body.blob == null", &CompileOpts::default())
+        .is_err());
     for (src, path, ty) in [
         ("size(body.tags) > 0", "body.tags", "list(string)"),
         (r#"body.raw == b"x""#, "body.raw", "bytes"),
@@ -628,7 +637,9 @@ fn in_on_a_map_key_settles_at_the_close_when_absent() {
     feed(&doc, &evs[close..]);
     assert_eq!(labels.poll_has("team").unwrap(), Presence::Known(false));
     // And agrees with the whole document, bound and evaluated.
-    let program = env.compile(r#""team" in body.labels"#).unwrap();
+    let program = env
+        .compile(r#""team" in body.labels"#, &CompileOpts::default())
+        .unwrap();
     let mut act = env.activation();
     act.bind(
         "body",
@@ -642,7 +653,7 @@ fn in_on_a_map_key_settles_at_the_close_when_absent() {
 fn a_non_literal_key_is_refused_at_shape_build() {
     let env = labels_env();
     let src = "k in body.labels";
-    let program = env.compile(src).unwrap();
+    let program = env.compile(src, &CompileOpts::default()).unwrap();
     assert!(
         program.demand().wide_roots().any(|r| r == "body"),
         "{}",

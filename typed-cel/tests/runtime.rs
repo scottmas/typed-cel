@@ -7,6 +7,10 @@
 //! refusal is what is asserted. DROPPED: it tested only an evaluator arm no checked program
 //! reaches (an opaque host value, a function registered on the evaluator) — those are gone, and
 //! ATTRIBUTION.md says so.
+//!
+//! A ported program that reads a map key it may lack is compiled through the unchecked-presence
+//! door: the checker refuses that read (proven presence), and what these tests pin is the runtime's
+//! answer when a key is missing anyway.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -26,12 +30,16 @@ fn rec(origin: &str, fields: &[(&str, CelTy)]) -> CelTy {
 
 /// `src`, closed, is `true` on the backend.
 fn yes(src: &str) {
-    assert_eq!(support::run_closed(src), Ok(Value::Bool(true)), "{src}");
+    assert_eq!(
+        support::run_closed_unchecked_presence(src),
+        Ok(Value::Bool(true)),
+        "{src}"
+    );
 }
 
 /// `src` is refused before it runs, by the parser or the checker.
 fn refused_in(env: &CelEnvironment, src: &str) -> CelError {
-    match typed_cel::fork::compile_any(env, src) {
+    match typed_cel::fork::compile_any_unchecked_presence(env, src) {
         Ok(_) => panic!("expected `{src}` to be refused, but it compiled"),
         Err(e) => e,
     }
@@ -66,7 +74,7 @@ fn lib_variables() {
         ("arr[0] == 1", true),
     ] {
         assert_eq!(
-            support::run(&env, src, &ctx),
+            support::run_unchecked_presence(&env, src, &ctx),
             Ok(Value::Bool(want)),
             "{src}"
         );
@@ -93,7 +101,7 @@ fn lib_execution_errors() {
         );
     }
     assert_eq!(
-        support::run(&env, "{null: true}", &[]),
+        support::run_unchecked_presence(&env, "{null: true}", &[]),
         Err(ExecutionError::unsupported_key_type(Value::Null))
     );
 }
@@ -117,7 +125,7 @@ fn objects_indexed_map_access() {
         (map(&[("Content-Type", Value::from("application/json"))])).into(),
     )];
     assert_eq!(
-        support::run(&env, "headers[\"Content-Type\"]", &ctx),
+        support::run_unchecked_presence(&env, "headers[\"Content-Type\"]", &ctx),
         Ok(Value::from("application/json"))
     );
 }
@@ -132,12 +140,12 @@ fn objects_numeric_compare() {
 fn objects_float_compare() {
     yes("1.0 > 0.0");
     assert_eq!(
-        support::run_closed("0.0 / 0.0 == 0.0 / 0.0"),
+        support::run_closed_unchecked_presence("0.0 / 0.0 == 0.0 / 0.0"),
         Ok(Value::Bool(false)),
         "NaN should not equal itself"
     );
     assert!(
-        support::run_closed("1.0 > 0.0 / 0.0").is_err(),
+        support::run_closed_unchecked_presence("1.0 > 0.0 / 0.0").is_err(),
         "NaN should not be comparable with inequality operators"
     );
 }
@@ -164,7 +172,7 @@ fn objects_size_fn_and_a_variable_named_size() {
         ("size", (Value::Num(3.0)).into()),
     ];
     assert_eq!(
-        support::run(&env, "size(requests) + size == 5", &ctx),
+        support::run_unchecked_presence(&env, "size(requests) + size == 5", &ctx),
         Ok(Value::Bool(true))
     );
 }
@@ -189,11 +197,11 @@ fn objects_out_of_bound_list_access() {
     env.declare("list", CelTy::list(CelTy::Num));
     let ctx: Vec<(&str, Value)> = vec![("list", (Value::list([])).into())];
     assert_eq!(
-        support::run(&env, "list[10]", &ctx),
+        support::run_unchecked_presence(&env, "list[10]", &ctx),
         Err(ExecutionError::IndexOutOfBounds(Value::Num(10.0)))
     );
     assert_eq!(
-        support::run(&env, "list[-1]", &ctx),
+        support::run_unchecked_presence(&env, "list[-1]", &ctx),
         Err(ExecutionError::IndexOutOfBounds(Value::Num(-1.0)))
     );
 }
@@ -204,7 +212,8 @@ fn objects_short_circuit_and() {
     env.declare("data", CelTy::map(CelTy::Str, CelTy::Str));
     let ctx: Vec<(&str, Value)> = vec![("data", (map(&[])).into())];
     assert!(
-        support::run(&env, "has(data.x) && data.x.startsWith(\"foo\")", &ctx).is_ok(),
+        support::run_unchecked_presence(&env, "has(data.x) && data.x.startsWith(\"foo\")", &ctx)
+            .is_ok(),
         "The AND expression should support short-circuit evaluation."
     );
 }
@@ -239,7 +248,11 @@ fn objects_number_math_is_exact_math() {
         (format!("{} + 1", i64::MAX), Value::UInt(1 << 63)),
         (format!("{} * 2", i64::MAX), Value::UInt(u64::MAX - 1)),
     ] {
-        assert_eq!(support::run_closed(&expr), Ok(want), "{expr}");
+        assert_eq!(
+            support::run_closed_unchecked_presence(&expr),
+            Ok(want),
+            "{expr}"
+        );
     }
 }
 
@@ -249,7 +262,7 @@ fn objects_index_missing_map_key() {
     env.declare("mymap", CelTy::map(CelTy::Str, CelTy::Num));
     let ctx: Vec<(&str, Value)> = vec![("mymap", (map(&[("a", Value::Num(1.0))])).into())];
     assert!(
-        support::run(&env, r#"mymap["missing"]"#, &ctx).is_err(),
+        support::run_unchecked_presence(&env, r#"mymap["missing"]"#, &ctx).is_err(),
         "Should error on missing map key"
     );
 }
@@ -270,7 +283,7 @@ fn functions_has() {
     let ctx: Vec<(&str, Value)> = vec![("foo", (map(&[("bar", Value::Num(1.0))])).into())];
     for src in ["has(foo.bar) == true", "has(foo.baz) == false"] {
         assert_eq!(
-            support::run(&env, src, &ctx),
+            support::run_unchecked_presence(&env, src, &ctx),
             Ok(Value::Bool(true)),
             "{src}"
         );
@@ -353,7 +366,7 @@ fn functions_matches() {
 #[test]
 fn functions_matches_err() {
     assert_eq!(
-        support::run_closed("'foobar'.matches('(foo') == true"),
+        support::run_closed_unchecked_presence("'foobar'.matches('(foo') == true"),
         Err(ExecutionError::FunctionError {
             function: "matches".to_string(),
             message: "'(foo' not a valid regex:\nregex parse error:\n    (foo\n    ^\nerror: unclosed group"
@@ -393,7 +406,7 @@ fn a_fractional_key_is_no_such_key_wherever_the_map_lives() {
         "[{1: 'a'}].filter(x, true)[0][1.5]",
         "[{1: 'a'}].map(m, m[1.5])",
     ] {
-        match support::run_closed(src) {
+        match support::run_closed_unchecked_presence(src) {
             Err(ExecutionError::NoSuchKey(k)) => assert_eq!(k.as_str(), "1.5", "{src}"),
             other => panic!("{src}: want NoSuchKey(\"1.5\"), got {other:?}"),
         }
@@ -406,7 +419,8 @@ fn a_fractional_key_is_no_such_key_wherever_the_map_lives() {
 fn values_render_as_the_error_contract_says() {
     let message = |src: &str| -> String {
         let env = CelEnvironment::new();
-        let p = typed_cel::fork::compile_any(&env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let p = typed_cel::fork::compile_any_unchecked_presence(&env, src)
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
         match typed_cel::FastProgram::new(&p)
             .expect("lowers")
             .eval(&env.activation())
@@ -485,7 +499,7 @@ fn values_render_as_the_error_contract_says() {
 #[test]
 fn a_map_result_comes_back_in_key_order() {
     let result = |src: &str| {
-        let p = typed_cel::fork::compile_any(&CelEnvironment::new(), src)
+        let p = typed_cel::fork::compile_any_unchecked_presence(&CelEnvironment::new(), src)
             .unwrap_or_else(|e| panic!("{src}: {e}"));
         let code = typed_cel::FastProgram::new(&p).expect("lowers");
         format!(

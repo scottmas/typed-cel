@@ -127,10 +127,6 @@ impl ConstPool {
         ConstPool { slots }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.slots.is_empty()
-    }
-
     pub(crate) fn slots(&self) -> &[(Arc<str>, CelValue)] {
         &self.slots
     }
@@ -1071,10 +1067,15 @@ pub(crate) fn recheck(
     max_depth: u32,
     e: &IdedExpr,
     slots: &[(String, CelTy)],
+    values: &[(Arc<str>, CelValue)],
     result: CelTy,
 ) -> Result<(DemandSet, HashMap<u64, CelTy>), String> {
     let checker = Checker::new(types, max_depth);
-    let (ty, demand, node_types) = checker.with_consts(slots).run_typed(e).map_err(|errors| {
+    let (checked, _unproven) = checker
+        .with_consts(slots)
+        .with_slot_values(values)
+        .run_presence(e);
+    let (ty, demand, node_types) = checked.map_err(|errors| {
         let first = errors.first().map(|e| e.message.as_str()).unwrap_or("");
         format!("the residual does not type-check: {first}")
     })?;
@@ -1107,22 +1108,36 @@ mod tests {
 
     #[test]
     fn an_ill_typed_residual_is_refused_with_the_checker_message() {
-        let e = recheck(&roster(), 32, &tree("req.path > 1.0"), &[], CelTy::Bool)
-            .expect_err("ill-typed");
+        let e = recheck(
+            &roster(),
+            32,
+            &tree("req.path > 1.0"),
+            &[],
+            &[],
+            CelTy::Bool,
+        )
+        .expect_err("ill-typed");
         assert!(e.starts_with("the residual does not type-check: "), "{e}");
     }
 
     #[test]
     fn a_residual_that_is_not_bool_is_refused() {
-        let e = recheck(&roster(), 32, &tree("req.size + 1.0"), &[], CelTy::Bool)
-            .expect_err("not bool");
+        let e = recheck(
+            &roster(),
+            32,
+            &tree("req.size + 1.0"),
+            &[],
+            &[],
+            CelTy::Bool,
+        )
+        .expect_err("not bool");
         assert_eq!(e, "the residual is double, not bool");
     }
 
     #[test]
     fn the_recheck_refuses_a_type_error() {
         for src in ["[1] == ['a']", "req.path > 1.0", "req.path.startsWith(1.0)"] {
-            let e = recheck(&roster(), 32, &tree(src), &[], CelTy::Bool)
+            let e = recheck(&roster(), 32, &tree(src), &[], &[], CelTy::Bool)
                 .expect_err("a type error is refused by the re-check");
             assert!(
                 e.starts_with("the residual does not type-check: "),
@@ -1133,8 +1148,15 @@ mod tests {
 
     #[test]
     fn a_well_typed_residual_hands_back_its_demand() {
-        let (d, _) =
-            recheck(&roster(), 32, &tree("req.size > 1.0"), &[], CelTy::Bool).expect("checks");
+        let (d, _) = recheck(
+            &roster(),
+            32,
+            &tree("req.size > 1.0"),
+            &[],
+            &[],
+            CelTy::Bool,
+        )
+        .expect("checks");
         assert_eq!(d.to_string(), "[req ▸ \"size\"]");
     }
 }

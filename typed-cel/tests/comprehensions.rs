@@ -8,6 +8,10 @@
 //! `e == 2` is a missing key. (The corpus case divides by zero; IEEE division has no error, so the
 //! element's error here is a lookup.)
 //!
+//! That lookup is a read the checker refuses (proven presence: `{1: true, 3: false}` is known not to
+//! hold `2`), so this file compiles through the unchecked-presence door. What it pins is the
+//! BACKEND's answer when a read fails anyway — every other check still applies.
+//!
 //! The direction that must NOT move is the other one, and it is the reason this file is careful.
 //! "An element errored, so keep going and answer false" is wrong in the UNSAFE direction: an
 //! `all()` whose elements all error must be an `Err`, which a caller maps to a deny. Turning it
@@ -23,7 +27,7 @@ use typed_cel::CelValue as Value;
 /// The backend's answer for `src`, which must type-check: a program the checker refuses never
 /// runs, so its answer would prove nothing.
 fn eval(src: &str) -> Result<Value, String> {
-    support::run_closed(src).map_err(|e| format!("eval: {e}"))
+    support::run_closed_unchecked_presence(src).map_err(|e| format!("eval: {e}"))
 }
 
 fn evaluates_to(src: &str, expected: &str) {
@@ -158,7 +162,7 @@ fn a_predicate_loop_answers_as_the_expansion_does() {
         "xs.map(e, [e, e + 1.0])",
         "size(xs.map(e, xs.filter(y, y < e))) >= 0.0",
     ] {
-        let program = typed_cel::fork::compile_any(&env, src).expect("compiles");
+        let program = typed_cel::fork::compile_any_unchecked_presence(&env, src).expect("compiles");
         let recognized = FastProgram::new(&program).expect("lowers");
         let literal =
             typed_cel::with_literal_comprehensions(|| FastProgram::new(&program)).expect("lowers");
@@ -181,7 +185,8 @@ fn a_predicate_loop_answers_as_the_expansion_does() {
                 m => format!("{range}.{m}(e, {pred})"),
             };
             let src = call("xs");
-            let program = typed_cel::fork::compile_any(&env, &src).expect("compiles");
+            let program =
+                typed_cel::fork::compile_any_unchecked_presence(&env, &src).expect("compiles");
             let recognized = FastProgram::new(&program).expect("lowers");
             let literal = typed_cel::with_literal_comprehensions(|| FastProgram::new(&program))
                 .expect("lowers");
@@ -205,7 +210,8 @@ fn a_predicate_loop_answers_as_the_expansion_does() {
                     "[{}]",
                     xs.iter().map(u8::to_string).collect::<Vec<_>>().join(", ")
                 ));
-                let program = typed_cel::fork::compile_any(&env, &lit).expect("compiles");
+                let program =
+                    typed_cel::fork::compile_any_unchecked_presence(&env, &lit).expect("compiles");
                 let got = answer(&FastProgram::new(&program).expect("lowers"), &[]);
                 let want = answer(
                     &typed_cel::with_literal_comprehensions(|| FastProgram::new(&program))
@@ -341,7 +347,8 @@ fn a_field_test_in_a_loop_answers_as_the_expansion_does() {
                 "map3" => format!("{range}.map(e, {pred}, {mapped})"),
                 m => format!("{range}.{m}(e, {pred})"),
             };
-            let program = typed_cel::fork::compile_any(&env, &src).expect("compiles");
+            let program =
+                typed_cel::fork::compile_any_unchecked_presence(&env, &src).expect("compiles");
             let recognized = FastProgram::new(&program).expect("lowers");
             let literal = typed_cel::with_literal_comprehensions(|| FastProgram::new(&program))
                 .expect("lowers");
@@ -559,13 +566,13 @@ fn a_scanned_loop_answers_as_its_unfused_twin() {
     };
     // A build loop never scans: each kept element would pay a failed test before the body ran it.
     for src in ["xs.filter(e, e > r.n)", "xs.map(e, e > r.n, e * 2.0)"] {
-        let program = typed_cel::fork::compile_any(&env, src).expect("compiles");
+        let program = typed_cel::fork::compile_any_unchecked_presence(&env, src).expect("compiles");
         let p = FastProgram::new(&program).expect("lowers");
         assert_eq!(p.scanned_loops(), 0, "`{src}` scans:\n{}", p.listing());
     }
     let (mut compared, mut mismatches) = (0, Vec::new());
     for src in SOURCES {
-        let program = typed_cel::fork::compile_any(&env, src).expect("compiles");
+        let program = typed_cel::fork::compile_any_unchecked_presence(&env, src).expect("compiles");
         let fused = FastProgram::new(&program).expect("lowers");
         let unfused = typed_cel::with_unfused_loops(|| FastProgram::new(&program)).expect("lowers");
         assert!(
@@ -686,7 +693,8 @@ fn a_map_loop_answers_as_the_expansion_does() {
             mac => format!("n.{mac}(k, n[k] < r.n)"),
         }));
     for src in sources {
-        let program = typed_cel::fork::compile_any(&env, &src).expect("compiles");
+        let program =
+            typed_cel::fork::compile_any_unchecked_presence(&env, &src).expect("compiles");
         let recognized = FastProgram::new(&program).expect("lowers");
         let literal =
             typed_cel::with_literal_comprehensions(|| FastProgram::new(&program)).expect("lowers");
@@ -732,7 +740,7 @@ fn a_logic_chain_answers_by_the_absorption_rule() {
     // 1 → true, 2 → false, 3 and 4 → two different missing keys.
     let leaf = |v: &str| format!("{{1: true, 2: false}}[{v}]");
     let run = |src: &str, vals: &[u8]| -> String {
-        let program = typed_cel::fork::compile_any(&env, src).expect("compiles");
+        let program = typed_cel::fork::compile_any_unchecked_presence(&env, src).expect("compiles");
         let fast = FastProgram::new(&program).expect("lowers");
         let mut act = env.runtime().activation();
         for (v, x) in VARS.iter().zip(vals) {
@@ -867,7 +875,8 @@ fn a_nested_loop_answers_as_the_expansion_does() {
                     format!("xss.{o}(xs, xs.{i}(y, {pred}))"),
                     format!("xss.{o}(xs, xs.{i}(y, {pred}) || size(xs) == 0.0)"),
                 ] {
-                    let program = typed_cel::fork::compile_any(&env, &src).expect("compiles");
+                    let program = typed_cel::fork::compile_any_unchecked_presence(&env, &src)
+                        .expect("compiles");
                     let recognized = FastProgram::new(&program).expect("lowers");
                     let literal =
                         typed_cel::with_literal_comprehensions(|| FastProgram::new(&program))

@@ -13,6 +13,7 @@ mod support;
 #[path = "support/scripted.rs"]
 mod scripted;
 
+use typed_cel::CompileOpts;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -88,7 +89,9 @@ impl LazyValue for Keyless {
 
 /// Evaluate `src` with the tree walker and the VM, assert they agree, and return the walker's.
 fn both(env: &CelEnvironment, act: &CelActivation, src: &str) -> Result<bool, CelError> {
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = env
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     let walked = program.evaluate(act);
     let bytecode = typed_cel::emit(&program).expect("emits");
     let vm = Vm::new().eval(&bytecode, act);

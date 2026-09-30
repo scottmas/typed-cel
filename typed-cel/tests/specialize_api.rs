@@ -7,6 +7,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -90,14 +91,20 @@ fn full(env: &CelEnvironment, p: &J, r: &J) -> CelActivation {
 }
 
 fn compile(env: &CelEnvironment, src: &str) -> CelProgram {
-    env.compile(src)
+    env.compile(src, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("`{src}` compiles: {e}"))
 }
 
 fn spec(env: &CelEnvironment, src: &str, p: &J) -> (CelProgram, CelProgram) {
     let original = compile(env, src);
     let residual = env
-        .specialize(&original, &known(env, p))
+        .compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&known(env, p)),
+                ..Default::default()
+            },
+        )
         .unwrap_or_else(|e| panic!("`{src}` specializes: {e}"));
     (original, residual)
 }
@@ -273,7 +280,15 @@ fn a_lazily_bound_root_is_unknown_and_never_read() {
     let mut k = known(&env, &policy(false));
     k.bind_lazy("live", view).expect("live binds");
     let original = compile(&env, "policy.limit == 7.0 && live.flag");
-    let residual = env.specialize(&original, &k).expect("specializes");
+    let residual = env
+        .compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&k),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     // `true &&` drops out: `live.flag` is declared `bool`, so `true && x` is `x`.
     assert_eq!(residual.source(), "live.flag");
     assert_eq!(
@@ -295,7 +310,13 @@ fn bind_lazy_after_bind_makes_the_root_unknown() {
     k.bind_lazy("policy", view).expect("policy rebinds lazily");
     let original = compile(&env, "policy.limit == 7.0 && req.flag");
     let residual = env
-        .specialize(&original, &k)
+        .compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&k),
+                ..Default::default()
+            },
+        )
         .expect("a lazily bound root is not a known root");
     assert_eq!(residual.source(), "(policy.limit == 7.0) && req.flag");
     assert_eq!(
@@ -415,7 +436,10 @@ fn costly() -> (CelEnvironment, CelProgram, CelActivation) {
     let p = json!({"fs": {"open": false, "root": "/ws", "deny_roots": roots}, "limit": 7});
     // Estimate 906: comprehension 1 + range 3 + init 1 + cond 3×100 + step 6×100 + result 1.
     let original = env
-        .compile("policy.fs.deny_roots.exists(r, req.path == r)")
+        .compile(
+            "policy.fs.deny_roots.exists(r, req.path == r)",
+            &CompileOpts::default(),
+        )
         .expect("the original is under the cost bound");
     let k = known(&env, &p);
     (env, original, k)
@@ -425,7 +449,13 @@ fn costly() -> (CelEnvironment, CelProgram, CelActivation) {
 fn residual_cost_is_bounded() {
     let (env, original, k) = costly();
     // The residual: 256 × 4 + 255 = 1 279.
-    match env.specialize(&original, &k) {
+    match env.compile(
+        original.source(),
+        &CompileOpts {
+            known: Some(&k),
+            ..Default::default()
+        },
+    ) {
         Err(CelError::Bounds { .. }) => {}
         other => panic!("expected CelError::Bounds, got {other:?}"),
     }
@@ -449,7 +479,15 @@ fn the_residual_runs_on_the_vm() {
 #[test]
 fn a_specialize_error_carries_the_authored_source() {
     let (env, original, k) = costly();
-    let err = env.specialize(&original, &k).expect_err("over the bound");
+    let err = env
+        .compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&k),
+                ..Default::default()
+            },
+        )
+        .expect_err("over the bound");
     assert_eq!(err.source(), Some(original.source()));
     assert_eq!(
         err.source(),
@@ -508,7 +546,13 @@ fn an_empty_known_list_specializes() {
     ] {
         let original = compile(&env, src);
         let residual = env
-            .specialize(&original, &known(&env, &empty))
+            .compile(
+                original.source(),
+                &CompileOpts {
+                    known: Some(&known(&env, &empty)),
+                    ..Default::default()
+                },
+            )
             .unwrap_or_else(|e| panic!("`{src}` specializes: {e}"));
         for r in reqs() {
             assert_eq!(
@@ -655,6 +699,7 @@ fn mixed_env() -> CelEnvironment {
         ),
     );
     e.declare("s", CelTy::Str);
+    e.declare("q", e.types().get("r").expect("declared").clone());
     e
 }
 
@@ -666,13 +711,20 @@ fn a_constant_slot_is_typed_from_the_declaration() {
         .expect("r binds");
     for (src, slot_ty) in [
         // The whole record: its declared record type, not the map a literal of it would be.
-        ("r.o == s", env.types().get("r").expect("declared").clone()),
+        ("r == q", env.types().get("r").expect("declared").clone()),
         // A list field: `list(string)`, from the declaration.
         ("s in r.l", CelTy::list(CelTy::Str)),
     ] {
         let original = compile(&env, src);
-        let (residual, slots) = typed_cel::fork::specialize_slots(&env, &original, &k)
-            .unwrap_or_else(|e| panic!("`{src}` specializes: {e}"));
+        let (residual, slots) = typed_cel::fork::compile_slots(
+            &env,
+            original.source(),
+            &CompileOpts {
+                known: Some(&k),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("`{src}` specializes: {e}"));
         assert_eq!(
             slots,
             vec![("$k0".to_string(), slot_ty.clone())],
@@ -687,38 +739,33 @@ fn a_constant_slot_is_typed_from_the_declaration() {
     }
 }
 
+/// A KNOWN value that lacks an optional field the program reads is a compile error, not a residual
+/// that reads the hole (`$k0.o == s`) and fails at every evaluation: the known value is in view
+/// when the program is checked, so the absence is found where the author can read it. Guarded, the
+/// guard folds against the value and the read goes with it.
 #[test]
-fn the_absent_field_case_specializes_without_gradual_typing() {
+fn an_absent_field_of_a_known_value_is_refused_at_compile() {
     let env = mixed_env();
-    let r = json!({"n": 7, "s": "a", "l": ["x", "y"]});
     let mut k = env.activation();
-    k.bind("r", &r).expect("r binds");
-    let original = compile(&env, "r.o == s");
-    // `specialize` re-checks with the STRICT checker; a record written out as a literal would be
-    // refused there.
+    k.bind("r", &json!({"n": 7, "s": "a", "l": ["x", "y"]}))
+        .expect("r binds");
+    let opts = CompileOpts {
+        known: Some(&k),
+        ..Default::default()
+    };
+    let e = env
+        .compile("r.o == s", &opts)
+        .expect_err("the known `r` has no `o`")
+        .to_string();
+    assert!(e.contains("`r.o` is absent: the KNOWN value of `r`"), "{e}");
     let residual = env
-        .specialize(&original, &k)
-        .unwrap_or_else(|e| panic!("specializes without gradual typing: {e}"));
-    assert_eq!(
-        residual.source(),
-        "$k0.o == s\n// $k0 = {\"l\": [\"x\", \"y\"], \"n\": 7, \"s\": \"a\"}"
-    );
-    let mut u = env.activation();
-    u.bind("s", &json!("a")).expect("s binds");
-    let mut ku = env.activation();
-    ku.bind("r", &r).expect("r binds");
-    ku.bind("s", &json!("a")).expect("s binds");
-    let native = original.evaluate(&ku).expect_err("`o` is absent");
-    let spec_err = residual
-        .evaluate(&u)
-        .expect_err("`o` is absent in the residual too");
-    let vm_err = Vm::new()
-        .eval(&emit(&residual).expect("emits"), &u)
-        .expect_err("and on the VM");
-    let tail = |e: &CelError| e.to_string().lines().last().unwrap_or_default().to_string();
-    assert_eq!(tail(&native), "  could not be evaluated: No such key: o");
-    assert_eq!(tail(&spec_err), tail(&native));
-    assert_eq!(tail(&vm_err), tail(&native));
+        .compile("has(r.o) && r.o == s", &opts)
+        .expect("a guarded read compiles");
+    assert_eq!(residual.source(), "false");
+    let residual = env
+        .compile("!has(r.o) || r.o == s", &opts)
+        .expect("a guarded read compiles");
+    assert_eq!(residual.source(), "true");
 }
 
 /// A closed subtree the backend cannot lower is a backend DEFECT, and specialization says so: it
@@ -730,13 +777,28 @@ fn a_fold_that_cannot_lower_is_refused_not_kept() {
     let program = compile(&env, src);
     let k = known(&env, &policy(true));
     // The same program, unrefused, DID fold — so the door below had a lowering to refuse.
-    let residual = env.specialize(&program, &k).expect("specializes");
+    let residual = env
+        .compile(
+            program.source(),
+            &CompileOpts {
+                known: Some(&k),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     assert!(
         !residual.source().contains("policy"),
         "nothing folded: {}",
         residual.source()
     );
-    match typed_cel::fork::specialize_with_lowering_refused(&env, &program, &k) {
+    match typed_cel::fork::compile_with_lowering_refused(
+        &env,
+        program.source(),
+        &CompileOpts {
+            known: Some(&k),
+            ..Default::default()
+        },
+    ) {
         Err(CelError::Specialize { message, .. }) => assert!(
             message.contains("could not lower a closed subtree"),
             "{message}"
@@ -758,7 +820,15 @@ fn folding_reads_known_locals_before_roots() {
     let mut k = env.activation();
     k.bind("policy", &json!({"xs": ["a", "b"]})).expect("binds");
     k.bind("x", &json!("b")).expect("binds");
-    let residual = env.specialize(&program, &k).expect("specializes");
+    let residual = env
+        .compile(
+            program.source(),
+            &CompileOpts {
+                known: Some(&k),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     assert_eq!(residual.source(), "true");
 }
 
@@ -808,7 +878,9 @@ fn fs_open_allow_all_residual_is_path_utf8() {
         "policy",
         typed_cel::Record::new("policy", [("fs", typed_cel::CelTy::from(fs))]),
     );
-    let program = env.compile(OPEN).expect("compiles");
+    let program = env
+        .compile(OPEN, &CompileOpts::default())
+        .expect("compiles");
     let mut known = env.activation();
     known
         .bind(
@@ -819,6 +891,14 @@ fn fs_open_allow_all_residual_is_path_utf8() {
             }}),
         )
         .expect("binds");
-    let residual = env.specialize(&program, &known).expect("specializes");
+    let residual = env
+        .compile(
+            program.source(),
+            &CompileOpts {
+                known: Some(&known),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     assert_eq!(residual.source(), "req.path_utf8");
 }

@@ -5,6 +5,7 @@
 //! non-bool expression being a BUILD error. A decision point with more than two outcomes names the
 //! type it must produce instead, and the checker still proves it.
 
+use typed_cel::CompileOpts;
 use typed_cel::{
     emit, CelEnvironment, CelError, CelTy, CelValue, Facts, FastProgram, FastScratch, FieldId,
     Record, ResultKind, Vm,
@@ -19,7 +20,7 @@ fn str_of(v: &CelValue) -> Option<&str> {
 
 #[test]
 fn compile_is_still_bool_only() {
-    match CelEnvironment::new().compile("\"x\"") {
+    match CelEnvironment::new().compile("\"x\"", &CompileOpts::default()) {
         Err(CelError::NotBoolean { actual, .. }) => assert_eq!(actual, "string"),
         other => panic!("want NotBoolean, got {other:?}"),
     }
@@ -29,7 +30,13 @@ fn compile_is_still_bool_only() {
 fn compile_returning_accepts_its_declared_type() {
     let env = CelEnvironment::new();
     let p = env
-        .compile_returning("\"allow\"", &CelTy::Str)
+        .compile(
+            "\"allow\"",
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
+        )
         .expect("a string program compiles as a string program");
     assert_eq!(p.result_kind(), ResultKind::Str);
     let got = Vm::new()
@@ -39,14 +46,22 @@ fn compile_returning_accepts_its_declared_type() {
 
     // `compile` itself answers `Bool` for the kind.
     assert_eq!(
-        env.compile("true").expect("compiles").result_kind(),
+        env.compile("true", &CompileOpts::default())
+            .expect("compiles")
+            .result_kind(),
         ResultKind::Bool
     );
 }
 
 #[test]
 fn compile_returning_refuses_any_other_type() {
-    match CelEnvironment::new().compile_returning("true", &CelTy::Str) {
+    match CelEnvironment::new().compile(
+        "true",
+        &CompileOpts {
+            returning: Some(&CelTy::Str),
+            ..Default::default()
+        },
+    ) {
         Err(CelError::WrongResultType {
             expected, actual, ..
         }) => {
@@ -59,7 +74,13 @@ fn compile_returning_refuses_any_other_type() {
     // A ternary whose arms disagree is refused by the checker, before the result type is looked at.
     let mut env = CelEnvironment::new();
     env.declare("x", CelTy::Bool);
-    match env.compile_returning("x ? \"a\" : 1", &CelTy::Str) {
+    match env.compile(
+        "x ? \"a\" : 1",
+        &CompileOpts {
+            returning: Some(&CelTy::Str),
+            ..Default::default()
+        },
+    ) {
         Err(CelError::Check { .. }) => {}
         other => panic!("want a check error, got {other:?}"),
     }
@@ -70,7 +91,13 @@ fn dyn_is_not_a_string() {
     let mut env = CelEnvironment::new();
     env.declare("d", CelTy::Dyn);
     let err = env
-        .compile_returning("d", &CelTy::Str)
+        .compile(
+            "d",
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
+        )
         .expect_err("uncertainty must not become a tag");
     assert!(
         matches!(
@@ -84,7 +111,13 @@ fn dyn_is_not_a_string() {
 #[test]
 fn an_unsupported_result_type_is_refused() {
     let err = CelEnvironment::new()
-        .compile_returning("[1]", &CelTy::list(CelTy::Num))
+        .compile(
+            "[1]",
+            &CompileOpts {
+                returning: Some(&CelTy::list(CelTy::Num)),
+                ..Default::default()
+            },
+        )
         .expect_err("a list is not a result kind");
     assert!(matches!(err, CelError::WrongResultType { .. }), "{err:?}");
 }
@@ -100,14 +133,26 @@ fn env_ku() -> CelEnvironment {
 fn a_specialized_program_keeps_its_result_type() {
     let env = env_ku();
     let p = env
-        .compile_returning("k.a == u ? \"allow\" : \"eacces\"", &CelTy::Str)
+        .compile(
+            "k.a == u ? \"allow\" : \"eacces\"",
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
+        )
         .expect("compiles");
     let mut known = env.activation();
     known
         .bind("k", &serde_json::json!({"a": "z"}))
         .expect("binds");
     let residual = env
-        .specialize(&p, &known)
+        .compile(
+            p.source(),
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                known: Some(&known),
+            },
+        )
         .expect("a Str residual re-checks");
     assert_eq!(residual.result_kind(), ResultKind::Str);
     let src = residual.source();
@@ -129,14 +174,28 @@ fn a_specialized_program_keeps_its_result_type() {
 fn a_program_folded_to_a_constant_string_is_a_literal() {
     let env = env_ku();
     let p = env
-        .compile_returning("k.a == u ? \"allow\" : \"eacces\"", &CelTy::Str)
+        .compile(
+            "k.a == u ? \"allow\" : \"eacces\"",
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
+        )
         .expect("compiles");
     let mut known = env.activation();
     known
         .bind("k", &serde_json::json!({"a": "z"}))
         .expect("binds");
     known.bind("u", &serde_json::json!("z")).expect("binds");
-    let residual = env.specialize(&p, &known).expect("specializes");
+    let residual = env
+        .compile(
+            p.source(),
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                known: Some(&known),
+            },
+        )
+        .expect("specializes");
     assert_eq!(residual.source(), "\"allow\"");
     assert_eq!(residual.result_kind(), ResultKind::Str);
 }
@@ -166,9 +225,12 @@ fn the_fast_backend_answers_a_tag_id() {
     let mut env = CelEnvironment::new();
     env.declare("u", CelTy::Str);
     let p = env
-        .compile_returning(
+        .compile(
             r#"u == "a" ? "allow" : u == "r" ? "readonly" : u == "?" ? "maybe" : u"#,
-            &CelTy::Str,
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
         )
         .expect("compiles");
     let fast = FastProgram::new(&p).expect("lowers");
@@ -201,7 +263,9 @@ fn the_fast_backend_answers_a_tag_id() {
 fn a_tag_from_a_non_string_program_is_an_error() {
     let mut env = CelEnvironment::new();
     env.declare("u", CelTy::Str);
-    let p = env.compile("u == \"a\"").expect("compiles");
+    let p = env
+        .compile("u == \"a\"", &CompileOpts::default())
+        .expect("compiles");
     let fast = FastProgram::new(&p).expect("lowers");
     let err = fast
         .decide_tag(&One("a"), &mut FastScratch::default(), TAGS)

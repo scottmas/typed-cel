@@ -14,8 +14,9 @@
 //! - **An operator can answer "what does this policy watch?" from the artifact**, without running
 //!   it.
 //!
-//! It is also what makes the language optional-free: every demanded path exists in the activation
-//! from load, zero-valued, so there is no absence to write syntax for.
+//! It is also what makes the SYSTEM environment's keyed roots total: every demanded path exists in
+//! the activation from load, zero-valued, which is why those roots are declared `unsafe_map` and a
+//! read of one needs no presence proof. Everything else proves presence (`added: proven presence`).
 
 use std::collections::{BTreeMap, BTreeSet};
 

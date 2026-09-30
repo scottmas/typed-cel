@@ -125,7 +125,8 @@ fn hex_digits(text: &str) -> Option<String> {
 }
 
 const OPTIONAL_SYNTAX_REMOVED: &str =
-    "optional syntax is not in the typed-CEL dialect (removed: optional syntax)";
+    "optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be \
+     absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it";
 
 pub struct Parser {
     ast: ast::Ast,
@@ -1939,10 +1940,10 @@ ERROR: <input>:1:5: Syntax error: extraneous input 'b' expecting <EOF>
             TestInfo {
                 i: "a.?b && a[?b]",
                 p: "",
-                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax)
+                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
 | a.?b && a[?b]
 | .^
-ERROR: <input>:1:10: optional syntax is not in the typed-CEL dialect (removed: optional syntax)
+ERROR: <input>:1:10: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
 | a.?b && a[?b]
 | .........^",
                 ..Default::default()
@@ -1950,10 +1951,10 @@ ERROR: <input>:1:10: optional syntax is not in the typed-CEL dialect (removed: o
             TestInfo {
                 i: "[?a, ?b]",
                 p: "",
-                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax)
+                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
 | [?a, ?b]
 | .^
-ERROR: <input>:1:6: optional syntax is not in the typed-CEL dialect (removed: optional syntax)
+ERROR: <input>:1:6: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
 | [?a, ?b]
 | .....^",
                 ..Default::default()
@@ -1961,7 +1962,7 @@ ERROR: <input>:1:6: optional syntax is not in the typed-CEL dialect (removed: op
             TestInfo {
                 i: "{?\'key\': value}",
                 p: "",
-                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax)
+                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
 | {?\'key\': value}
 | .^",
                 ..Default::default()
@@ -1974,7 +1975,7 @@ ERROR: <input>:1:6: optional syntax is not in the typed-CEL dialect (removed: op
                 e: "ERROR: <input>:1:1: message construction `Msg{...}` is not in the typed-CEL dialect (removed: protobuf)
 | Msg{?field: value} && {?\'key\': value}
 | ^
-ERROR: <input>:1:24: optional syntax is not in the typed-CEL dialect (removed: optional syntax)
+ERROR: <input>:1:24: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
 | Msg{?field: value} && {?\'key\': value}
 | .......................^",
                 ..Default::default()

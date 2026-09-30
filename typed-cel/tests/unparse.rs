@@ -6,6 +6,7 @@
 
 use typed_cel::fork::ast::{EntryExpr, Expr, IdedExpr, LiteralValue};
 use typed_cel::fork::parser::Parser;
+use typed_cel::CompileOpts;
 
 fn parse(src: &str) -> IdedExpr {
     Parser::default()
@@ -349,7 +350,10 @@ fn a_residual_renders_its_slots_by_name_and_appends_a_legend() {
     );
     env.declare("s", CelTy::Str);
     let program = env
-        .compile(r#"s in k.caps && k.roots.filter(r, s.startsWith(r)).size() > 0.0"#)
+        .compile(
+            r#"s in k.caps && k.roots.filter(r, s.startsWith(r)).size() > 0.0"#,
+            &CompileOpts::default(),
+        )
         .expect("compiles");
     let mut known = env.activation();
     known
@@ -358,7 +362,15 @@ fn a_residual_renders_its_slots_by_name_and_appends_a_legend() {
             &serde_json::json!({"roots": ["/a", "/b"], "caps": {"z": 2, "y": 0.5}}),
         )
         .expect("k binds");
-    let residual = env.specialize(&program, &known).expect("specializes");
+    let residual = env
+        .compile(
+            program.source(),
+            &CompileOpts {
+                known: Some(&known),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     assert_eq!(
         residual.source(),
         concat!(

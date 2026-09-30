@@ -9,6 +9,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::{Arc, Mutex};
 
 use support::record_opt;
@@ -69,14 +70,18 @@ fn activation(env: &CelEnvironment, facts: SyncFacts) -> typed_cel::CelActivatio
 }
 
 /// `CelProgram::evaluate` of `src` over `facts`.
+/// Through the unchecked-presence door: a fact a provider does not supply is what several cases
+/// here measure, and reading one unguarded is refused by the checker (proven presence).
 fn evaluate(env: &CelEnvironment, src: &str, facts: SyncFacts) -> Result<bool, CelError> {
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = typed_cel::fork::compile_unchecked_presence(env, src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     program.evaluate(&activation(env, facts))
 }
 
 /// The FIRST `Vm::resume` of `src` over `facts`. A `Need` is a failure: a sync fact never waits.
 fn resume(env: &CelEnvironment, src: &str, facts: SyncFacts) -> Result<bool, CelError> {
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = typed_cel::fork::compile_unchecked_presence(env, src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     let bc = typed_cel::emit(&program).expect("emits");
     let bindings = activation(env, facts).into_bindings();
     let mut run = VmRun::new(Arc::new(bc));

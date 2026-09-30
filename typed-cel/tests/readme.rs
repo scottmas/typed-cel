@@ -465,3 +465,47 @@ fn the_dialect_doc_records_the_divergence() {
         );
     }
 }
+
+/// The proven-presence rows exist, each naming what it must: the two additions, the one
+/// that supersedes specialization, and the divergence the conformance lane cites.
+#[test]
+fn the_dialect_rows_this_plan_adds_exist() {
+    let doc = readme();
+    let added = rows_under(&doc, "### Added");
+    let row = |rows: &[Vec<String>], id: &str| -> Vec<String> {
+        rows.iter()
+            .find(|r| backticked(&r[0]).first().map(String::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("README.md has no `{id}` row"))
+            .clone()
+    };
+    for (id, items) in [
+        ("added: proven presence", &["CelEnvironment::compile"][..]),
+        ("added: unsafe_map", &["CelTy::unsafe_map"][..]),
+        (
+            "added: compile with known values",
+            &[
+                "CelEnvironment::compile",
+                "CompileOpts",
+                "Parsed",
+                "CelEnvironment::parse",
+            ][..],
+        ),
+    ] {
+        let r = row(&added, id);
+        let named = backticked(&r[2]);
+        for item in items {
+            assert!(
+                named.iter().any(|n| n == item),
+                "`{id}` does not name `{item}`: {named:?}"
+            );
+        }
+    }
+    assert!(
+        row(&added, "added: proven presence")
+            .iter()
+            .any(|cell| cell.contains("unproven_record_reads_are_refused")),
+        "`added: proven presence` names its rejection test"
+    );
+    let divergences = rows_under(&doc, "### Divergences");
+    row(&divergences, "diverges: absence must be proven");
+}

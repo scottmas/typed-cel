@@ -6,6 +6,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use serde_json::json;
 use support::{env, record, record_opt};
 use typed_cel::{CelEnvironment, CelTy};
@@ -41,7 +42,9 @@ fn session() -> serde_json::Value {
 /// Compile against the shared environment and evaluate.
 fn assertion(expr: &str, body_json: serde_json::Value) -> Result<bool, String> {
     let env = env();
-    let program = env.compile(expr).unwrap_or_else(|e| panic!("{expr}: {e}"));
+    let program = env
+        .compile(expr, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{expr}: {e}"));
     let mut activation = env.activation();
     activation
         .bind("body", &body_json)
@@ -93,6 +96,9 @@ fn an_empty_list_satisfies_all() {
     );
 }
 
+/// The checker REFUSES this program — `body.a` is optional and nothing proves it present (proven
+/// presence). The test pins the RUNTIME's answer for when something else breaks the promise, so it
+/// compiles through the unchecked test door.
 #[test]
 fn a_missing_optional_field_is_a_deny() {
     // `{"a?": "string"}` declared, `a` absent at runtime. An assertion that CANNOT be evaluated
@@ -103,7 +109,9 @@ fn a_missing_optional_field_is_a_deny() {
         "body",
         record_opt("body", &[("a", CelTy::Str), ("b", CelTy::Str)], &["a", "b"]),
     );
-    let program = env.compile("body.a == 'x'").unwrap();
+    let program =
+        typed_cel::fork::compile_unchecked_presence(&env, "body.a == 'x'", &CompileOpts::default())
+            .unwrap();
     let mut activation = env.activation();
     activation.bind("body", &json!({})).unwrap();
     let outcome = program.evaluate(&activation);
@@ -113,8 +121,72 @@ fn a_missing_optional_field_is_a_deny() {
     );
 
     // And the trap it guards: two absent fields must not compare equal.
-    let both = env.compile("body.a == body.b").unwrap();
+    let both = typed_cel::fork::compile_unchecked_presence(
+        &env,
+        "body.a == body.b",
+        &CompileOpts::default(),
+    )
+    .unwrap();
     assert!(both.evaluate(&activation).is_err());
+}
+
+/// A checked program cannot reach `No such key` through an optional field or a map key any more:
+/// the checker makes it prove presence. It stays reachable, as defence in depth, wherever a value
+/// breaks a promise the types made — and each is still an error naming the key, never a value.
+#[test]
+fn a_broken_promise_is_still_a_run_time_error() {
+    use typed_cel::{CelError, CelValue, LazyValue, Record};
+    use std::sync::Arc;
+    let key_named = |r: Result<bool, CelError>, key: &str| {
+        let e = r
+            .expect_err("a broken promise must not evaluate")
+            .to_string();
+        assert!(e.contains(&format!("No such key: {key}")), "{e}");
+    };
+
+    // 1. A view that fails to supply a member its declared type REQUIRES.
+    #[derive(Debug)]
+    struct Hollow;
+    impl LazyValue for Hollow {
+        fn member(&self, name: &str) -> Result<CelValue, CelError> {
+            Err(CelError::NoSuchMember {
+                key: name.to_string(),
+            })
+        }
+    }
+    let mut env = CelEnvironment::new();
+    env.declare("v", Record::new("v", [("req", CelTy::Num)]));
+    let p = env.compile("v.req > 1", &CompileOpts::default()).unwrap();
+    let mut act = env.activation();
+    act.bind_lazy("v", CelValue::Lazy(Arc::new(Hollow)))
+        .unwrap();
+    key_named(p.evaluate(&act), "req");
+
+    // 2. A host function whose result lacks a field its declared record requires.
+    let mut env = CelEnvironment::new();
+    env.register_host(
+        "lookup",
+        &[],
+        Record::new("row", [("owner", CelTy::Str)]).into(),
+        false,
+        Arc::new(|_: &[CelValue]| Ok(CelValue::Map(typed_cel::CelMap::new([])))),
+    )
+    .unwrap();
+    env.declare("s", CelTy::Str);
+    let p = env
+        .compile("lookup().owner == s", &CompileOpts::default())
+        .unwrap();
+    let mut act = env.activation();
+    act.bind("s", &json!("x")).unwrap();
+    key_named(p.evaluate(&act), "owner");
+
+    // 3. An `unsafe_map` whose runtime does not hold a key a program names.
+    let mut env = CelEnvironment::new();
+    env.declare("u", CelTy::unsafe_map(CelTy::Str, CelTy::Num));
+    let p = env.compile("u['k'] > 1", &CompileOpts::default()).unwrap();
+    let mut act = env.activation();
+    act.bind("u", &json!({})).unwrap();
+    key_named(p.evaluate(&act), "k");
 }
 
 #[test]
@@ -124,7 +196,9 @@ fn a_null_field_is_not_true() {
         "body",
         record("body", &[("a", CelTy::Null), ("b", CelTy::Str)]),
     );
-    let program = env.compile("body.a == 'x'").unwrap();
+    let program = env
+        .compile("body.a == 'x'", &CompileOpts::default())
+        .unwrap();
     let mut activation = env.activation();
     activation
         .bind("body", &json!({"a": null, "b": "y"}))
@@ -138,7 +212,7 @@ fn an_evaluation_error_is_an_err() {
     env.declare("n", CelTy::Num);
     // `0 / n` with `n == 0` is NaN, and NaN has no order: `>` is an evaluation error. (Division by
     // zero itself is IEEE `inf`, not an error — `removed: integer values`.)
-    let program = env.compile("0 / n > 0").unwrap();
+    let program = env.compile("0 / n > 0", &CompileOpts::default()).unwrap();
     let mut activation = env.activation();
     activation.bind("n", &json!(0.0)).unwrap();
     let outcome = program.evaluate(&activation);
@@ -160,11 +234,11 @@ fn a_non_bool_result_is_an_error_not_a_false() {
     env.declare("s", CelTy::Str);
     env.declare("d", CelTy::Dyn);
     assert!(
-        env.compile("s").is_err(),
+        env.compile("s", &CompileOpts::default()).is_err(),
         "a string-typed expression must not compile as an assertion"
     );
     assert!(
-        env.compile("d == 1.0").is_err(),
+        env.compile("d == 1.0", &CompileOpts::default()).is_err(),
         "`dyn` must not be comparable — that is the hole a non-bool result would come through"
     );
 
@@ -264,7 +338,7 @@ fn evaluation_returns_a_bare_result() {
     // the library has no opinion about what a failure should cause.
     let mut env = CelEnvironment::new();
     env.declare("n", CelTy::Num);
-    let program = env.compile("n > 0").unwrap();
+    let program = env.compile("n > 0", &CompileOpts::default()).unwrap();
     let mut activation = env.activation();
     activation.bind("n", &json!(1.0)).unwrap();
 
@@ -282,7 +356,10 @@ fn an_evaluation_error_says_what_went_wrong_and_not_what_to_do() {
     // leave the coupling somewhere a grep for the type cannot find it.
     let mut env = CelEnvironment::new();
     env.declare("rec", record_opt("rec", &[("a", CelTy::Str)], &["a"]));
-    let program = env.compile("rec.a == 'x'").unwrap();
+    // Unchecked presence: the absent field is the error whose TEXT this pins.
+    let program =
+        typed_cel::fork::compile_unchecked_presence(&env, "rec.a == 'x'", &CompileOpts::default())
+            .unwrap();
     let mut activation = env.activation();
     activation.bind("rec", &json!({})).unwrap();
 

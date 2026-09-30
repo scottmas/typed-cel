@@ -26,6 +26,15 @@ pub enum CelTy {
     Duration,
     List(Rc<CelTy>),
     Map(Rc<CelTy>, Rc<CelTy>),
+    /// A map whose DECLARER asserts that every key a program can name reads as a value. The
+    /// checker trusts that assertion: a read of it needs no presence proof. Only a hand-built
+    /// environment declares one (the system environment's `files`, `listeners`, …, filled from
+    /// the program's own demand); a schema never derives one. A runtime that breaks the promise
+    /// still raises `NoSuchKey`, and the caller's fail-safe direction applies.
+    ///
+    /// Everywhere but the presence rules it is a map: every site that treats the two alike goes
+    /// through [`CelTy::map_parts`] or [`CelTy::same_shape`].
+    UnsafeMap(Rc<CelTy>, Rc<CelTy>),
     /// A structural record. No name, no registry, no global table.
     Record(Rc<Record>),
     /// No static knowledge.
@@ -58,6 +67,59 @@ impl CelTy {
         CelTy::Map(Rc::new(key), Rc::new(value))
     }
 
+    /// `UnsafeMap(k, v)`, without the `Rc`s at the call site. See [`CelTy::UnsafeMap`] for the
+    /// promise its declarer makes.
+    pub fn unsafe_map(key: CelTy, value: CelTy) -> CelTy {
+        CelTy::UnsafeMap(Rc::new(key), Rc::new(value))
+    }
+
+    /// The key and value types of a map of either kind. Every site that treats the two alike goes
+    /// through this, so the only places that tell them apart are the presence rules.
+    pub fn map_parts(&self) -> Option<(&CelTy, &CelTy)> {
+        match self {
+            CelTy::Map(k, v) | CelTy::UnsafeMap(k, v) => Some((k, v)),
+            _ => None,
+        }
+    }
+
+    /// Is this a map of either kind?
+    pub fn is_map(&self) -> bool {
+        self.map_parts().is_some()
+    }
+
+    /// Equal, except that a `map` and an `unsafe_map` of the same parts are the same SHAPE: their
+    /// values are interchangeable, so `m == u` compares and `[m, u]` is a list of one type. Only
+    /// the presence rules tell the two apart.
+    pub fn same_shape(&self, other: &CelTy) -> bool {
+        match (self.map_parts(), other.map_parts()) {
+            (Some((ka, va)), Some((kb, vb))) => ka.same_shape(kb) && va.same_shape(vb),
+            (None, None) => match (self, other) {
+                (CelTy::List(a), CelTy::List(b)) => a.same_shape(b),
+                _ => self == other,
+            },
+            _ => false,
+        }
+    }
+
+    /// The type a position holding a value of `self` or of `other` has, when the two are the
+    /// [same shape](CelTy::same_shape): wherever one side is a plain `map`, the join is a plain
+    /// `map`, because nothing promises every key of it. `None` when the shapes differ.
+    pub fn join_shape(&self, other: &CelTy) -> Option<CelTy> {
+        if self == other {
+            return Some(self.clone());
+        }
+        match (self, other) {
+            (CelTy::List(a), CelTy::List(b)) => Some(CelTy::list(a.join_shape(b)?)),
+            (CelTy::UnsafeMap(ka, va), CelTy::UnsafeMap(kb, vb)) => {
+                Some(CelTy::unsafe_map(ka.join_shape(kb)?, va.join_shape(vb)?))
+            }
+            _ => {
+                let ((ka, va), (kb, vb)) = (self.map_parts()?, other.map_parts()?);
+                Some(CelTy::map(ka.join_shape(kb)?, va.join_shape(vb)?))
+            }
+        }
+    }
+
     /// How the type reads in a diagnostic. Spec CEL's names where they exist, because the author
     /// is writing CEL and a name they cannot look up is not a name.
     pub fn name(&self) -> String {
@@ -70,6 +132,7 @@ impl CelTy {
             CelTy::Duration => "duration".into(),
             CelTy::List(t) => format!("list({})", t.name()),
             CelTy::Map(k, v) => format!("map({}, {})", k.name(), v.name()),
+            CelTy::UnsafeMap(k, v) => format!("unsafe_map({}, {})", k.name(), v.name()),
             CelTy::Record(r) => r.origin.clone(),
             CelTy::Dyn => "dyn".into(),
             // The reason, not an opaque word: a checker diagnostic quoting a type has to say why
@@ -154,7 +217,7 @@ impl CelTy {
             // index checks on them. A record or a map derived from an object definition therefore
             // does not exclude arrays. The keys an array offers are its stringified indices, which
             // is exactly what such a schema checks against.
-            (CelTy::Map(k, val), J::Object(_) | J::Array(_)) => {
+            (CelTy::Map(k, val) | CelTy::UnsafeMap(k, val), J::Object(_) | J::Array(_)) => {
                 // A JSON object's keys are always strings, so a `Map` whose key type could not
                 // admit a string is a type no JSON value can inhabit. One line, deliberately —
                 // not a special case a later reader deletes as dead.
@@ -277,8 +340,9 @@ pub struct Record {
     /// left to chance: this is the order a diagnostic's "available: …" roster reads out, and a
     /// roster that reorders between runs is a diff nobody can review.
     pub fields: Vec<(String, CelTy)>,
-    /// The subset of `fields` a schema declared with `?`. Carried, never erased: naming an
-    /// optional field type-checks, and it is the RUNTIME that treats a missing one as an error.
+    /// The subset of `fields` a schema declared with `?`. Carried, never erased: a read of an
+    /// optional field type-checks only where something proves it present (`check.rs`,
+    /// `require_present`). The runtime's `NoSuchKey` for a missing one stays, as defence in depth.
     pub optional: BTreeSet<String>,
     /// The index signature, when the schema declared one alongside its props.
     ///

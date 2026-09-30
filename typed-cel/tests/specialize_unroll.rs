@@ -11,6 +11,7 @@ use serde_json::json;
 use support::known::fold_text;
 use typed_cel::fork::ast::{EntryExpr, Expr, IdedExpr};
 use typed_cel::fork::parser::Parser;
+use typed_cel::CompileOpts;
 use typed_cel::{CelEnvironment, CelLimits, CelTy, Record};
 
 fn env_with(limits: CelLimits) -> CelEnvironment {
@@ -184,10 +185,20 @@ fn an_empty_known_range_unrolls_to_the_fold_identity() {
 #[test]
 fn the_unrolled_chain_is_balanced() {
     let env = env();
-    let original = env.compile("p.big.exists(x, u.s == x)").expect("compiles");
+    let original = env
+        .compile("p.big.exists(x, u.s == x)", &CompileOpts::default())
+        .expect("compiles");
     let mut act = env.activation();
     act.bind("p", &p()).expect("binds");
-    let residual = env.specialize(&original, &act).expect("specializes");
+    let residual = env
+        .compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&act),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     let r = typed_cel::fork::expression_of(&residual);
     assert_eq!(op_depth(r, "_||_"), 7, "ceil(log2 100)");
     let text = residual.source();

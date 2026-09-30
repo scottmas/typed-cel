@@ -458,7 +458,7 @@ fn bind_value(ty: &CelTy, json: &serde_json::Value, path: &str) -> Result<CelVal
             }
             CelValue::list(out)
         }
-        (CelTy::Map(k, v), J::Object(entries)) => {
+        (CelTy::Map(k, v) | CelTy::UnsafeMap(k, v), J::Object(entries)) => {
             if **k != CelTy::Str {
                 return Err(mismatch());
             }

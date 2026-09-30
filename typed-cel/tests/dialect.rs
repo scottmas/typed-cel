@@ -14,6 +14,7 @@
 //! implementation detail — and is asserted — is that no spelling of a removed construct is
 //! available to a policy.
 
+use typed_cel::CompileOpts;
 use std::rc::Rc;
 
 use typed_cel::{CelEnvironment, CelTy, Record};
@@ -239,7 +240,7 @@ fn all_refused_at_check(spellings: &[&str]) {
     let env = checker_env();
     let mut leaked = Vec::new();
     for src in spellings {
-        if env.compile(src).is_ok() {
+        if env.compile(*src, &CompileOpts::default()).is_ok() {
             leaked.push(format!("  {src}"));
         }
     }
@@ -251,7 +252,7 @@ fn all_refused_at_check(spellings: &[&str]) {
 }
 
 fn checks(src: &str) {
-    if let Err(e) = checker_env().compile(src) {
+    if let Err(e) = checker_env().compile(src, &CompileOpts::default()) {
         panic!("expected `{src}` to check, got:\n{e}");
     }
 }
@@ -301,7 +302,7 @@ fn extension_libraries_are_gone() {
 /// these three tests is the MESSAGE: a removal whose diagnostic says "undeclared variable" tells a
 /// reader they made a typo, which is the one reading that sends them looking for the name.
 fn refusal(env: &CelEnvironment, src: &str) -> String {
-    env.compile(src)
+    env.compile(src, &CompileOpts::default())
         .err()
         .unwrap_or_else(|| panic!("`{src}` compiles today; it must not"))
         .to_string()
@@ -417,7 +418,12 @@ fn backtick_field_selection_is_gone() {
     }
 
     // The index form is the one spelling, and it keeps working.
-    assert!(env.compile("m['content-type'] == 1").is_ok());
+    assert!(env
+        .compile(
+            "'content-type' in m && m['content-type'] == 1",
+            &CompileOpts::default()
+        )
+        .is_ok());
 }
 
 /// `src` evaluates to `want` (its `Debug` text) on the backend.
@@ -437,7 +443,9 @@ fn one_numeric_type_many_representations() {
     // The checked program that used to type-check and then fail: a bound double beside a literal.
     let mut env = CelEnvironment::new();
     env.declare("x", CelTy::Num);
-    let program = env.compile("x + 1 == 3.0").expect("checks");
+    let program = env
+        .compile("x + 1 == 3.0", &CompileOpts::default())
+        .expect("checks");
     let mut activation = env.activation();
     activation.bind("x", &serde_json::json!(2)).unwrap();
     assert_eq!(
@@ -594,7 +602,7 @@ fn dyn_values_are_gone() {
 fn a_map_macro_types_its_result() {
     let env = dyn_env();
     // `list(double)` compares with `x`, a `list(double)`; `list(dyn)` would be refused.
-    env.compile("xs.map(x, x + 1.0) == x")
+    env.compile("xs.map(x, x + 1.0) == x", &CompileOpts::default())
         .unwrap_or_else(|e| panic!("a map over list(double) types as list(double): {e}"));
     let err = refusal(&env, r#"xs.map(x, x + 1.0) == ["a"]"#);
     assert!(err.contains("list(double)"), "{err}");
@@ -604,10 +612,13 @@ fn a_map_macro_types_its_result() {
 #[test]
 fn has_on_an_unknown_member_still_checks() {
     let env = dyn_env();
-    env.compile("has(body.blob)")
+    env.compile("has(body.blob)", &CompileOpts::default())
         .unwrap_or_else(|e| panic!("`has(body.blob)` must check: {e}"));
-    env.compile("has(body.blob) && body.name == 'a'")
-        .unwrap_or_else(|e| panic!("`has(body.blob)` must check beside a use of body: {e}"));
+    env.compile(
+        "has(body.blob) && body.name == 'a'",
+        &CompileOpts::default(),
+    )
+    .unwrap_or_else(|e| panic!("`has(body.blob)` must check beside a use of body: {e}"));
 }
 
 /// Assert each spelling is refused by the CHECKER, citing `row`.

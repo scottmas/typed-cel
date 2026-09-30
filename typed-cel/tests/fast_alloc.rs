@@ -5,6 +5,7 @@
 //! A counting allocator (this binary's only test, so nothing else allocates on its thread while it
 //! counts) holds the claim at ZERO allocations per decision.
 
+use typed_cel::CompileOpts;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -165,7 +166,9 @@ fn reqs() -> Vec<Req> {
 #[test]
 fn a_facts_read_allocates_nothing() {
     let env = env();
-    let program = env.compile(OPEN).expect("compiles");
+    let program = env
+        .compile(OPEN, &CompileOpts::default())
+        .expect("compiles");
     let mut known = env.activation();
     known
         .bind(
@@ -177,7 +180,15 @@ fn a_facts_read_allocates_nothing() {
                 "deny_roots": ["/secret", "/root", "/etc/shadow"]}}),
         )
         .expect("binds");
-    let residual = env.specialize(&program, &known).expect("specializes");
+    let residual = env
+        .compile(
+            program.source(),
+            &CompileOpts {
+                known: Some(&known),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     let code = FastProgram::new(&residual).expect("lowers");
     assert!(code.matcher_count() >= 3, "{}", residual.source());
 

@@ -31,8 +31,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use typed_cel::{
-    emit, CelActivation, CelBytecode, CelEnvironment, CelLimits, CelProgram, CelTy, Facts,
-    FastProgram, FastScratch, FieldId, Record, RunLiveness, StreamedProgram, Vm,
+    emit, CelActivation, CelBytecode, CelEnvironment, CelLimits, CelProgram, CelTy, CompileOpts,
+    Facts, FastProgram, FastScratch, FieldId, Record, RunLiveness, StreamedProgram, Vm,
 };
 
 #[global_allocator]
@@ -896,7 +896,7 @@ fn prepared(env: &CelEnvironment, w: &Workload) -> Prepared {
     let id = w.id;
     let policy_json = serde_json::to_value(&w.policy).expect("policy serializes");
     let program = env
-        .compile(&w.dialect)
+        .compile(&w.dialect, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("{id}: {e}"));
     let bytecode = emit(&program).unwrap_or_else(|e| panic!("{id}: {e}"));
     let facts = facts_for(bytecode.program(), &w.policy, &w.requests);
@@ -904,7 +904,13 @@ fn prepared(env: &CelEnvironment, w: &Workload) -> Prepared {
         let mut known = env.activation();
         known.bind("policy", &policy_json).expect("policy binds");
         let residual = env
-            .specialize(&program, &known)
+            .compile(
+                &w.dialect,
+                &CompileOpts {
+                    known: Some(&known),
+                    ..Default::default()
+                },
+            )
             .unwrap_or_else(|e| panic!("{id}: {e}"));
         let fast = FastProgram::new(&residual).unwrap_or_else(|e| panic!("{id}: {e}"));
         let f = facts_for(&fast, &w.policy, &w.requests).unwrap_or_else(|p| {
@@ -948,7 +954,7 @@ fn run_workload(env: &CelEnvironment, w: &Workload, out: &mut String) {
 
     // (2) / (3a), (3b), (4)
     let Prepared {
-        program,
+        program: _,
         bytecode,
         facts,
         specialized,
@@ -1038,16 +1044,26 @@ fn run_workload(env: &CelEnvironment, w: &Workload, out: &mut String) {
 
     // Compile time.
     let up_us = median_us(|| cel::Program::compile(&w.upstream).unwrap());
-    let typed_us = median_us(|| env.compile(&w.dialect).unwrap());
+    let typed_us = median_us(|| env.compile(&w.dialect, &CompileOpts::default()).unwrap());
     let bc_us = median_us(|| {
-        let p = env.compile(&w.dialect).unwrap();
+        let p = env.compile(&w.dialect, &CompileOpts::default()).unwrap();
         emit(&p).unwrap()
     });
+    // (4) is parse / compile with known / lower: the text is parsed once, outside the timing, the
+    // way a caller that compiles one program against many policies keeps it.
     let (spec_us, lower_us) = if reads_policy {
+        let parsed = env.parse(&w.dialect).unwrap();
         let s = median_us(|| {
             let mut known = env.activation();
             known.bind("policy", &policy_json).unwrap();
-            env.specialize(&program, &known).unwrap()
+            env.compile(
+                &parsed,
+                &CompileOpts {
+                    known: Some(&known),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
         });
         let residual = &specialized.as_ref().unwrap().0;
         let l = median_us(|| FastProgram::new(residual).unwrap());
@@ -1068,13 +1084,13 @@ fn run_workload(env: &CelEnvironment, w: &Workload, out: &mut String) {
         count::retained(f)
     };
     let mem_prog = {
-        let f = || env.compile(&w.dialect).unwrap();
+        let f = || env.compile(&w.dialect, &CompileOpts::default()).unwrap();
         black_box(f());
         count::retained(f)
     };
     let mem_bc = {
         let f = || {
-            let p = env.compile(&w.dialect).unwrap();
+            let p = env.compile(&w.dialect, &CompileOpts::default()).unwrap();
             let b = emit(&p).unwrap();
             (p, b)
         };
@@ -1083,10 +1099,18 @@ fn run_workload(env: &CelEnvironment, w: &Workload, out: &mut String) {
     };
     let mem_spec = if reads_policy {
         let f = || {
-            let p = env.compile(&w.dialect).unwrap();
+            let p = env.parse(&w.dialect).unwrap();
             let mut known = env.activation();
             known.bind("policy", &policy_json).unwrap();
-            let residual = env.specialize(&p, &known).unwrap();
+            let residual = env
+                .compile(
+                    &p,
+                    &CompileOpts {
+                        known: Some(&known),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
             let fast = FastProgram::new(&residual).unwrap();
             drop(known);
             drop(p);
@@ -1176,7 +1200,7 @@ fn run_streamed(id: &str, early: bool, out: &mut String) {
         verdict_of(up_prog.execute(&c))
     };
 
-    let program = env.compile(BODY).unwrap();
+    let program = env.compile(BODY, &CompileOpts::default()).unwrap();
     let bytecode = emit(&program).unwrap();
     let vm = Vm::new();
     let act = |text: &str| -> Result<bool, String> {
@@ -1235,16 +1259,16 @@ fn run_streamed(id: &str, early: bool, out: &mut String) {
     raw(out, format!("@state\t{id}\t{}\t{state}", docs[0].len()));
 
     let up_us = median_us(|| cel::Program::compile(BODY).unwrap());
-    let typed_us = median_us(|| env.compile(BODY).unwrap());
-    let bc_us = median_us(|| emit(&env.compile(BODY).unwrap()).unwrap());
+    let typed_us = median_us(|| env.compile(BODY, &CompileOpts::default()).unwrap());
+    let bc_us = median_us(|| emit(&env.compile(BODY, &CompileOpts::default()).unwrap()).unwrap());
     raw(
         out,
         format!("@compile\t{id}\t{up_us}\t{typed_us}\t{bc_us}\t-\t-"),
     );
     let mem_up = count::retained(|| cel::Program::compile(BODY).unwrap());
-    let mem_prog = count::retained(|| env.compile(BODY).unwrap());
+    let mem_prog = count::retained(|| env.compile(BODY, &CompileOpts::default()).unwrap());
     let mem_bc = count::retained(|| {
-        let p = env.compile(BODY).unwrap();
+        let p = env.compile(BODY, &CompileOpts::default()).unwrap();
         let b = emit(&p).unwrap();
         (p, b)
     });
@@ -1442,7 +1466,7 @@ fn render(r: &Runs, hist: Option<&Runs>) -> String {
     s += "<!-- ablation:end -->\n\n### Time and allocations\n\n";
     s += &time_table(r, None, WORKLOADS, &mut wide);
     s += "\n### Compile and memory\n\n";
-    s += "| workload | (1) compile | checked compile | (3) compile + emit | (4) compile / specialize / lower | (1) `Program` | `CelProgram` | (3) + `CelBytecode` | (4) residual + `FastProgram` |\n";
+    s += "| workload | (1) compile | checked compile | (3) compile + emit | (4) parse / compile with known / lower | (1) `Program` | `CelProgram` | (3) + `CelBytecode` | (4) residual + `FastProgram` |\n";
     s += "|---|---:|---:|---:|---:|---:|---:|---:|---:|\n";
     for id in WORKLOADS {
         let (Some(c), Some(m)) = (r.compile.get(*id), r.mem.get(*id)) else {
@@ -1676,8 +1700,11 @@ fn cycles(args: &[String]) {
     }
     if wanted("constant_true") {
         // The program `true`: every cycle it costs is the fixed per-call path.
-        let fast = FastProgram::new(&env.compile("true").expect("`true` compiles"))
-            .expect("`true` lowers");
+        let fast = FastProgram::new(
+            &env.compile("true", &CompileOpts::default())
+                .expect("`true` compiles"),
+        )
+        .expect("`true` lowers");
         let facts: Vec<ReqFacts> = (0..8).map(|_| ReqFacts { vals: Vec::new() }).collect();
         let mut s = FastScratch::default();
         cycles_row(&mut out, "constant_true", "bytecode_facts", 8, &ctr, |i| {
@@ -1885,8 +1912,11 @@ fn trace(args: &[String]) {
     let env = env();
     if id == "constant_true" {
         // The fixed per-call path alone.
-        let fast = FastProgram::new(&env.compile("true").expect("`true` compiles"))
-            .expect("`true` lowers");
+        let fast = FastProgram::new(
+            &env.compile("true", &CompileOpts::default())
+                .expect("`true` compiles"),
+        )
+        .expect("`true` lowers");
         let facts = ReqFacts { vals: Vec::new() };
         let mut s = FastScratch::default();
         for _ in 0..1000 {

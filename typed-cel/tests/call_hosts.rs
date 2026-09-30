@@ -4,6 +4,7 @@
 //! implementation to resolve it with; and a run with no dispatcher fails the call as an evaluation
 //! error, never a panic.
 
+use typed_cel::CompileOpts;
 use std::sync::Arc;
 
 use typed_cel::{
@@ -69,7 +70,13 @@ fn req_act(env: &CelEnvironment) -> typed_cel::CelActivation {
 fn a_call_host_reaches_the_dispatcher() {
     let env = env_with(&[("probe_len", vec![CelTy::Str, req_ty()], CelTy::Num)]);
     let p = env
-        .compile_returning(r#"probe_len("abc", req) == 3.0"#, &CelTy::Bool)
+        .compile(
+            r#"probe_len("abc", req) == 3.0"#,
+            &CompileOpts {
+                returning: Some(&CelTy::Bool),
+                ..Default::default()
+            },
+        )
         .expect("compiles");
     let bc = emit(&p).expect("emits");
     let mut d = Counting::answering(vec![("probe_len", Some(CelValue::Num(3.0)))]);
@@ -84,7 +91,9 @@ fn a_call_host_reaches_the_dispatcher() {
 #[test]
 fn an_unknown_call_host_is_an_evaluation_error() {
     let env = env_with(&[("x", vec![], CelTy::Bool)]);
-    let p = env.compile("x()").expect("compiles");
+    let p = env
+        .compile("x()", &CompileOpts::default())
+        .expect("compiles");
     let bc = emit(&p).expect("emits");
     let mut d = Counting::default();
     let err = Vm::new()
@@ -106,19 +115,39 @@ fn an_unknown_call_host_is_an_evaluation_error() {
 fn a_call_host_is_never_folded() {
     let mut env = env_with(&[("probe_k", vec![CelTy::Str], CelTy::Str)]);
     env.declare("k", Record::new("k", [("r", CelTy::Str)]));
-    let p = env.compile(r#"probe_k(k.r) == "x""#).expect("compiles");
+    let p = env
+        .compile(r#"probe_k(k.r) == "x""#, &CompileOpts::default())
+        .expect("compiles");
     let mut known = env.activation();
     known
         .bind("k", &serde_json::json!({"r": "/a"}))
         .expect("binds");
-    let residual = env.specialize(&p, &known).expect("specializes");
+    let residual = env
+        .compile(
+            p.source(),
+            &CompileOpts {
+                known: Some(&known),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     let src = residual.source();
     assert!(src.contains("probe_k("), "{src}");
     assert!(src.contains("\"/a\""), "the known argument folded: {src}");
     // A zero-argument call is closed too, and stays.
     let env = env_with(&[("probe_z", vec![], CelTy::Bool)]);
-    let p = env.compile("probe_z()").expect("compiles");
-    let residual = env.specialize(&p, &env.activation()).expect("specializes");
+    let p = env
+        .compile("probe_z()", &CompileOpts::default())
+        .expect("compiles");
+    let residual = env
+        .compile(
+            p.source(),
+            &CompileOpts {
+                known: Some(&env.activation()),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     assert!(
         residual.source().contains("probe_z("),
         "{}",
@@ -133,7 +162,7 @@ fn or_skips_the_right_side_after_true() {
         ("probe_b", vec![req_ty()], CelTy::Bool),
     ]);
     let bc = emit(
-        &env.compile("probe_a(req) || probe_b(req)")
+        &env.compile("probe_a(req) || probe_b(req)", &CompileOpts::default())
             .expect("compiles"),
     )
     .expect("emits");
@@ -160,7 +189,7 @@ fn or_evaluates_the_right_side_after_an_error() {
         ("probe_b", vec![req_ty()], CelTy::Bool),
     ]);
     let bc = emit(
-        &env.compile("probe_a(req) || probe_b(req)")
+        &env.compile("probe_a(req) || probe_b(req)", &CompileOpts::default())
             .expect("compiles"),
     )
     .expect("emits");
@@ -237,10 +266,7 @@ fn outcome_ty() -> CelTy {
 fn a_call_host_answers_a_lazy_record() {
     let env = env_with(&[("rule", vec![], outcome_ty())]);
     let bc = emit(
-        &env.compile_returning(
-            r#"rule().admits ? (rule().how == "opaque" ? "allow:opaque" : "allow:route") : "refuse""#,
-            &CelTy::Str,
-        )
+        &env.compile(r#"rule().admits ? (rule().how == "opaque" ? "allow:opaque" : "allow:route") : "refuse""#, &CompileOpts { returning: Some(&CelTy::Str), ..Default::default() })
         .expect("compiles"),
     )
     .expect("emits");
@@ -300,7 +326,13 @@ impl Facts for NoFacts {
 fn a_tag_decision_dispatches_call_hosts() {
     let env = env_with(&[("probe_a", vec![], CelTy::Bool)]);
     let p = env
-        .compile_returning(r#"probe_a() ? "yes" : "no""#, &CelTy::Str)
+        .compile(
+            r#"probe_a() ? "yes" : "no""#,
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
+        )
         .expect("compiles");
     let bc = emit(&p).expect("emits");
     assert_eq!(bc.program().call_hosts(), vec!["probe_a"]);
@@ -316,8 +348,14 @@ fn a_tag_decision_dispatches_call_hosts() {
     }
     // A program that names none lists none.
     let plain = emit(
-        &env.compile_returning(r#""yes""#, &CelTy::Str)
-            .expect("compiles"),
+        &env.compile(
+            r#""yes""#,
+            &CompileOpts {
+                returning: Some(&CelTy::Str),
+                ..Default::default()
+            },
+        )
+        .expect("compiles"),
     )
     .expect("emits");
     assert!(plain.program().call_hosts().is_empty());
@@ -330,7 +368,9 @@ fn evaluate_fails_an_undispatched_call_host_as_the_backend_does() {
     let mut env = CelEnvironment::new();
     env.declare_call_host("f", &[CelTy::Str], CelTy::Bool)
         .expect("declares");
-    let program = env.compile(r#"f("x")"#).expect("compiles");
+    let program = env
+        .compile(r#"f("x")"#, &CompileOpts::default())
+        .expect("compiles");
     let evaluated = program
         .evaluate(&env.activation())
         .expect_err("no dispatcher answers `f`");
@@ -373,10 +413,16 @@ impl HostDispatch for Nested {
 fn a_call_host_may_evaluate_a_comprehension_inside_a_comprehension() {
     let env = env_with(&[("probe_nested", vec![CelTy::Str], CelTy::Bool)]);
     let inner = env
-        .compile(r#"[req.x, "q"].exists(v, v == "abc")"#)
+        .compile(
+            r#"[req.x, "q"].exists(v, v == "abc")"#,
+            &CompileOpts::default(),
+        )
         .expect("compiles");
     let outer = env
-        .compile(r#"["a", "b", "c"].exists(s, probe_nested(s))"#)
+        .compile(
+            r#"["a", "b", "c"].exists(s, probe_nested(s))"#,
+            &CompileOpts::default(),
+        )
         .expect("compiles");
     let mut d = Nested {
         inner: emit(&inner).expect("emits"),

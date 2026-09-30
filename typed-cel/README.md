@@ -11,8 +11,8 @@ subtractions.
 
 - [Quickstart](#quickstart) · [Installation](#installation) · [Core Concepts](#core-concepts)
 - [Why a typed dialect](#why-a-typed-dialect) — what the dialect gives up, and what it buys, measured
-- [Usage](#usage) — declaring, compiling, evaluating, bytecode, specializing, demand, shape queries,
-  lazy values
+- [Usage](#usage) — declaring, compiling, evaluating, bytecode, specializing, demand, proving
+  presence, shape queries, lazy values
 - [API Reference](#api-reference) and [Signatures](#signatures) — every function the dialect has
 - [Configuration](#configuration) — features and bounds
 - [Relationship to spec CEL](#relationship-to-spec-cel) — **the divergences live here**
@@ -23,14 +23,14 @@ subtractions.
 ## Quickstart
 
 ```rust
-use typed_cel::{CelEnvironment, CelTy, Record};
+use typed_cel::{CelEnvironment, CelTy, CompileOpts, Record};
 use serde_json::json;
 
 let mut env = CelEnvironment::new();
 env.declare("body", Record::new("body", [("user_id", CelTy::Str), ("amount", CelTy::Num)]));
 env.declare("session", Record::new("session", [("user_id", CelTy::Str)]));
 
-let program = env.compile("body.user_id == session.user_id && body.amount < 100")?;
+let program = env.compile("body.user_id == session.user_id && body.amount < 100", &CompileOpts::default())?;
 
 let mut activation = env.activation();
 activation.bind("body", &json!({"user_id": "u1", "amount": 42}))?;
@@ -39,7 +39,7 @@ activation.bind("session", &json!({"user_id": "u1"}))?;
 assert_eq!(program.evaluate(&activation)?, true);
 ```
 
-`env.compile("body.no_such_field == 1")` fails at build time with a caret under the field and the
+`env.compile("body.no_such_field == 1", &CompileOpts::default())` fails at build time with a caret under the field and the
 list of fields that do exist.
 
 ## Installation
@@ -70,7 +70,7 @@ Five things about that are worth knowing before writing any of it:
 
 - **The result must BE `bool`.** Not "be truthy", not "be compatible with". An expression that
   evaluates to a string is a compile error rather than a condition that is always true. A program
-  with more than two outcomes is compiled with `compile_returning`, which requires the declared
+  with more than two outcomes is compiled with `CompileOpts::returning`, which requires the declared
   type EXACTLY in the same way — `dyn` never qualifies.
 - **There is one numeric type.** The checker knows one number type, `double`; there is no `int`
   and no `uint` to reconcile. Its VALUES are held exactly: an integer (up to `u64::MAX`) is an
@@ -87,9 +87,17 @@ Five things about that are worth knowing before writing any of it:
   (`register_host`) that belong to that environment alone — a numeric argument arrives as
   `CelValue::Int`, `UInt` or `Num`, read with `CelValue::num` — and a host function never shadows a
   dialect name — a built-in, a removal, a macro or an operator spelling is refused at registration.
-- **There is no optional syntax**, because there is nothing absent to write it for: every path an
-  expression names is present in the activation from load, zero-valued. See
-  [Extracting demand](#extracting-demand).
+- **There is no optional syntax, and absence is real.** An optional field, a key only an index
+  signature allows, and any `map` key may be absent, and a read of one compiles only where it is
+  PROVEN present — by `has`/`in`, by iterating the container, by a known value, or by an
+  `unsafe_map` declaration. See [Proving presence](#proving-presence):
+
+  ```text
+  schema:   {"discount?": "number"}
+  policy:   body.discount < 10                          -> compile error: `body.discount` may be absent
+  fixed:    has(body.discount) && body.discount < 10    -> compiles
+  or:       !has(body.discount) || body.discount < 10   -> compiles
+  ```
 
 Comparisons are homogeneous — `(T, T) -> bool` with `T` a real type variable — so
 `body.amount == session.user_id` is a build error, and so is `elapsed > 300` where a duration was
@@ -140,7 +148,8 @@ decision (allocations per decision); the columns are defined in
 - ordering beyond numbers, strings and durations (`removed: ordering beyond numbers and strings`)
 - timestamps and every clock read (`removed: timestamp`)
 - protobuf messages and enums (`removed: protobuf`)
-- optional syntax: `.?`, `[?]`, `optional.*` (`removed: optional syntax`)
+- optional syntax: `.?`, `[?]`, `optional.*` (`removed: optional syntax`) — absence is proven with
+  `has()`/`in` instead
 - type values and conversion functions: `type()`, `int()`, `string()`, … (`removed: type values`, `removed: type conversion functions`)
 - `size()` on strings (`removed: size() on strings`)
 - bytes concatenation (`removed: bytes concatenation`)
@@ -217,9 +226,10 @@ goes wrong.
 went wrong. This is where a policy's mistakes are found:
 
 ```rust
-let program = env.compile("body.user_id == session.user_id")?;   // ok
+let cond = CompileOpts::default();                                 // a condition: `bool`
+let program = env.compile("body.user_id == session.user_id", &cond)?;   // ok
 
-env.compile("body.no_such_field == session.user_id")             // error, at build:
+env.compile("body.no_such_field == session.user_id", &cond)      // error, at build:
 //   body.no_such_field == session.user_id
 //        ^^^^^^^^^^^^^
 //   no field `no_such_field` on `body`; available: user_id, tenant_id, amount
@@ -257,7 +267,11 @@ The mapping lives with whoever chose it.
 Binding is **schema-directed**: the declared type leads and the JSON is pulled to match, rather than
 the JSON's shape choosing a type. A declared-optional field that is absent at runtime stays absent,
 so `NoSuchKey` fires and the caller maps the `Err` to a deny — filling it with `null` would make
-`body.a == body.b` true when *neither* exists.
+`body.a == body.b` true when *neither* exists. A CHECKED program cannot reach that path through an
+optional field or a `map` key (it must prove presence first, [Proving presence](#proving-presence));
+the binder keeps the behaviour as defence in depth, for a value that breaks its type's promise — a
+lazy view missing a member, a host result missing a field, an `unsafe_map` runtime that did not
+pre-create a key (`a_broken_promise_is_still_a_run_time_error`).
 
 ### Running bytecode
 
@@ -265,7 +279,7 @@ A compiled program can also be lowered for the fast backend — a register machi
 values, every name resolved to a field or a constant and every function to an op at lowering:
 
 ```rust
-let program = env.compile("body.amount > 5")?;
+let program = env.compile("body.amount > 5", &CompileOpts::default())?;
 let bytecode = typed_cel::emit(&program)?;       // Result<CelBytecode, CelError>
 let vm = typed_cel::Vm::new();
 vm.eval(&bytecode, &activation)?;                 // Result<bool, CelError> — same answers as program.evaluate
@@ -282,14 +296,16 @@ for data still arriving.
 ### Specializing
 
 A decision whose configuration is fixed for a process's life can be compiled against it once. Bind
-the fixed roots and `specialize`; the result is an ordinary `CelProgram` over the remaining roots:
+the fixed roots and compile with them KNOWN (`CompileOpts::known`); the result is an ordinary
+`CelProgram` over the remaining roots. Checking happens inside that same compile, with the known
+values in view:
 
 ```rust
-let program = env.compile(r#"policy.fs.deny_roots.exists(r, req.path == r || req.path.startsWith(r + "/"))"#)?;
+let source = r#"policy.fs.deny_roots.exists(r, req.path == r || req.path.startsWith(r + "/"))"#;
 let mut known = env.activation();
 known.bind("policy", &json!({"mode": "enforce", "fs": {"root": "/ws", "deny_roots": ["/etc", "/proc"]}, "limit": 7}))?;
 
-let residual = env.specialize(&program, &known)?;   // Result<CelProgram, CelError>
+let residual = env.compile(source, &CompileOpts { known: Some(&known), ..Default::default() })?;   // Result<CelProgram, CelError>
 residual.source();   // ((req.path == "/etc") || req.path.startsWith("/etc/")) || ((req.path == "/proc") || req.path.startsWith("/proc/"))
 residual.demand();   // [req ▸ path]
 ```
@@ -319,7 +335,7 @@ The crate's most unusual export, and the one with no analogue in any other CEL i
 answers **"what does this expression read?"** as data, before anything runs:
 
 ```rust
-let program = env.compile("files[\"/run/secrets/tls.key\"].closed.elapsed > 30s")?;
+let program = env.compile("files[\"/run/secrets/tls.key\"].closed.elapsed > 30s", &CompileOpts::default())?;
 program.demand().paths();       // [ files ▸ "/run/secrets/tls.key" ▸ "closed" ▸ "elapsed" ]
 program.demand().keyed_reads(); // [ ("files", "/run/secrets/tls.key", "closed", "elapsed") ]
 ```
@@ -333,14 +349,60 @@ Two consumers need it, for different reasons:
 - **An operator can answer "what does this policy watch?" from the artifact**, without running it:
   a policy whose watched surface cannot be enumerated cannot be reviewed.
 
-Demand is also what makes the language optional-free. Every demanded path exists in the activation
-from load, zero-valued, so `files["/a"].closed.elapsed` reads `0s` for a file that was never
-touched — there is no absence to write syntax for, which is why
-[`removed: optional syntax`](#removed) costs nothing.
+Demand is also what makes the SYSTEM environment's keyed roots total. Every demanded path exists in
+the activation from load, zero-valued, so `files["/a"].closed.elapsed` reads `0s` for a file that
+was never touched — which is why those roots are declared `unsafe_map` (`added: unsafe_map`) and a
+read of one needs no presence proof. Everything else proves presence
+([Proving presence](#proving-presence)).
 
 A computed key (`files[somevar]`) is a build error rather than a widening, because widening one
 unreviewable expression silently turns the whole policy into "populate everything". The one
 exception is a comprehension over the same map, where the iteration itself proves the range.
+
+### Proving presence
+
+A read is **possibly absent** exactly when its container is filled by someone other than the
+program: a record field the schema declared optional (`?`), a key only a record's index signature
+allows, and any `map` key. A required field needs nothing. A possibly-absent read compiles only
+where one of four things proves it present, and nothing else does:
+
+1. a guard — `has(p)` / `'k' in m` — in a position the rules below allow;
+2. iteration over the same container (`m.all(k, m[k] > 0)`);
+3. a KNOWN value supplied to `compile` (`CompileOpts::known`) that contains the path — a map
+   literal is one too, so `{"a": 1}["a"]` compiles and `{"a": 1}["b"]` does not;
+4. the container's declared type is `unsafe_map(K, V)`, whose declarer asserts every nameable key
+   reads as a value (`added: unsafe_map`).
+
+A **presence path** is a root (a declared variable, or a comprehension variable identified by its
+SCOPE, never by its name) followed by literal keys. A field select and a literal-key index produce
+the same segment, so `has(m.k)` proves `m["k"]`. `P(e)` is what `e` proves present when it is
+`true`, `N(e)` when it is `false`:
+
+| expression | `P` (when true) | `N` (when false) |
+|---|---|---|
+| `has(p)` (a `Select` with `test`) | `{p}` and every prefix of `p` | `{}` |
+| `k in x`, `k` a string literal (`x` a map or a record — the one guard for a key no selector can spell, `'x-trace' in headers`) | `{x.k}` and every prefix | `{}` |
+| `!e` | `N(e)` | `P(e)` |
+| `a && b` | `P(a) ∪ P(b)` | `{}` |
+| `a \|\| b` | `{}` | `N(a) ∪ N(b)` |
+| anything else | `{}` | `{}` |
+
+Proofs flow down, and ORDER-INSENSITIVELY: each side of `a && b` is checked with what the other
+side proves when true, and each side of `a || b` with what the other proves when false — CEL's
+`&&`/`||` absorb an error on either side, so `body.o > 1 && has(body.o)` is as safe as its mirror.
+A guard never proves the reads inside itself: `has(a.b)` READS `a`, so `has(a) && has(a.b) &&
+a.b.c > 1` is the chain. The one exception to the symmetry is `c ? t : f`: `t` is checked with
+`P(c)`, `f` with `N(c)`, and `c` with nothing new, because a conditional does NOT absorb an error in
+its condition. A read whose operand has no presence path (`(c ? x : y).f`, a host call's result) is
+proven only by its operand's TYPE.
+
+This is TypeScript's `noUncheckedIndexedAccess`, on by construction. The fix a refusal suggests is
+one of two guards, depending on what the absent case should mean:
+
+```text
+has(body.discount) && body.discount < 10     // absent: false
+!has(body.discount) || body.discount < 10    // absent: true
+```
 
 ### Querying an expression's shape
 
@@ -348,7 +410,7 @@ Demand answers "what does this read?". `conjuncts` answers "what shape is this?"
 a lint over an expression, without re-parsing the authored source in the caller:
 
 ```rust
-let program = env.compile("uptime > 40s && metrics.cpu.max[\"40s\"] < 0.05")?;
+let program = env.compile("uptime > 40s && metrics.cpu.max[\"40s\"] < 0.05", &CompileOpts::default())?;
 program.conjuncts();
 // [ Conjunct { path: uptime,                       operator: ">", literal: Duration("40s") },
 //   Conjunct { path: metrics ▸ "cpu" ▸ "max" ▸ "40s", operator: "<", literal: Num(0.05) } ]
@@ -431,7 +493,7 @@ is not a breaking change.
 
 | item | purpose |
 |---|---|
-| `CelEnvironment` | `new`, `with_limits`, `declare(name, ty)`, `compile`, `specialize`, `activation`, `limits`, `types` |
+| `CelEnvironment` | `new`, `with_limits`, `declare(name, ty)`, `parse`, `compile(source, &CompileOpts)`, `activation`, `limits`, `types` |
 | `CelProgram` | `evaluate(&CelActivation) -> Result<bool, CelError>`, `source`, `demand`, `conjuncts` |
 | `CelActivation` | `bind(name, &serde_json::Value)` (schema-directed), `bind_lazy(name, CelValue)`, `bind_fact(name, CelValue)` |
 | `CelError` | `source`, `span`, `available`, `all`; `Display` renders the first error only |
@@ -575,12 +637,13 @@ three outcomes:
 ```text
   google/cel-spec v0.25.1 — 2344 cases, each checked, then evaluated
 
-      524  pass
-       27  pass statically (the case expects an error; the checker refused it first)
-     1793  excluded by dialect
+      521  pass
+       29  pass statically (the case expects an error; the checker refused it first)
+     1794  excluded by dialect
         0  fail
 
   Excluded by dialect:
+        1  diverges: absence must be proven
         1  diverges: duration() takes a string
         1  diverges: equality is homogeneous
         5  diverges: exact integers span int64 and uint64
@@ -621,7 +684,7 @@ keeps working, nobody notices, and a policy gets written against something this 
 |---|---|---|---|
 | `removed: protobuf` | protobuf messages, `Expr::Struct`, enums, wrappers | `message_construction_is_gone` | nothing in either environment produces one |
 | `removed: dyn()` | `dyn()` | `dyn_is_gone` | one numeric type and a real checker make it unnecessary; it exists to defeat type checking |
-| `removed: optional syntax` | `[?k]`, `.?f`, `optional.*`, `orValue` | `optional_syntax_is_gone` | unused — absence is handled by a total activation — and `.?field` is measurably wrong on maps |
+| `removed: optional syntax` | `[?k]`, `.?f`, `optional.*`, `orValue` | `optional_syntax_is_gone` | absence is proven at compile time instead (`added: proven presence`); an optional VALUE type would be a second way to say the same thing, and `.?field` is measurably wrong on maps |
 | `removed: timestamp` | `timestamp`, and every wall-clock reading | `timestamp_is_gone` | **a clock read in a sandbox decision is a bug.** `CLOCK_MONOTONIC` is a repo rule; a revocation that fires because NTP stepped is not a policy |
 | `removed: uint` | the `u` literal suffix, `uint()` and the `uint` type | `uint_is_gone` | one numeric type: a large integer is written without a `u` and held exactly. The trap where a serde-converted positive integer arrives as a `u64` and picks a different arithmetic stays closed because arithmetic and comparison are defined across every representation of a number |
 | `removed: size() on strings` | `size()` over a string | `size_on_a_string_is_gone` | it returns **bytes**, not code points: `size('πέντε')` is 10. A length predicate that means something different on non-ASCII input is worse than none |
@@ -665,6 +728,7 @@ Spec CEL says one thing and this dialect does another, on purpose.
 |---|---|---|
 | `diverges: one numeric type` | one number TYPE, `double`, to the checker; at run time its values are held exactly — an `i64`, a `u64` above `i64::MAX`, or an `f64` (`CelNum`) — and compare by value across those | ergonomic: no `1` vs `1.0` type errors, no operator whose meaning depends on how an operand was spelled. The values are exact because a rounded one is a bypass: `9007199254740993` and `9007199254740992` are different account ids and one double |
 | `diverges: exact integers span int64 and uint64` | an integer is exact across `[i64::MIN, u64::MAX]`: `9223372036854775807 + 1` is `9223372036854775808`, where spec CEL's `int` overflows. Past that range it is an error here too | the one number type has no `int64` to overflow; stopping at `i64::MAX` would refuse a `u64` id or `RLIM_INFINITY` a document legitimately carries. Pinned by `one_numeric_type_many_representations` |
+| `diverges: absence must be proven` | a read that may be absent — an optional field, a key only an index signature allows, any `map` key — must be proven present at compile time; spec CEL evaluates it and errors at run time | a policy that silently denies every request missing an optional field is a bug found at authoring time; pinned by `unproven_map_reads_are_refused` |
 | `diverges: literal-key record index` | a string-literal index into a record is checked field access | `headers['content-type']` must keep unknown-key detection |
 | `diverges: dyn must be narrowed` | a `dyn` value must be narrowed before it is used; spec CEL checks one against everything | a schema's `unknown` is a statement about DATA; CEL's `dyn` is a statement about VERIFICATION. This dialect DELETED `dyn()` because it exists to defeat type checking, so a schema must not be able to manufacture what an author may not write |
 | `diverges: undeclared names are compile errors` | an unbound variable or an unknown function is a CHECK error; spec CEL defers both to evaluation, where a short circuit can absorb the error (spec CEL answers `true` for an unbound `x` or-ed with `true`) | a typo in a generated program must never be silently absorbed by a short circuit. Every name a program may read is declared in its environment |
@@ -719,10 +783,12 @@ not a status report — it either has its API or it is in the test's output.
 | `added: all check errors` | every error the checker found, not just the first | `CelError::all`, `CheckError` | `Display` still renders only the first, because a cascade is a diagnostic nobody reads — but a policy compiler listing a file's problems wants every one, and dropping them at the boundary meant it could never have them |
 | `added: structural query` | the top-level `&&` conjuncts of a compiled expression | `CelProgram::conjuncts`, `Conjunct`, `Literal` | a caller that lints an expression's SHAPE — "is there a guard conjunct for each window this reads?" — would otherwise re-parse the authored source, which is a second parser that disagrees with the first the day either changes. `&&` is the only connective a guard can be proven through, so a `||` is ONE opaque conjunct |
 | `added: the lazy seam` | activations that are read, not materialized | `LazyValue`, `CelValue`, `CelKey`, `CelActivation::bind_lazy` | an expression may be evaluated on every tick for the life of a process. Building a map of the process's state per tick makes the cost of a policy proportional to that state rather than to the policy. The trait is the crate's ONLY extension point, and what crosses it is `CelValue`, the crate's one value type. See [Serving values on access](#serving-values-on-access) |
-| `added: specialization` | fold the roots an activation binds out of a compiled expression, leaving a residual over the rest | `CelEnvironment::specialize`, `CelError::Specialize` | a decision whose configuration is fixed for a process's life is compiled against it ONCE; the per-call program reads only the per-call input. The fold runs on the backend, so it adds no second semantics. See [Specializing](#specializing) |
+| `added: compile with known values` | one `compile(source, &CompileOpts)`: the required result type, and the roots whose values are known now. The check runs WITH the known values in view (a known value proves presence), then every read of a known root folds, leaving a residual over the rest | `CelEnvironment::compile`, `CompileOpts`, `Parsed`, `CelEnvironment::parse`, `CelError::Specialize` | a decision whose configuration is fixed for a process's life is compiled against it ONCE; the per-call program reads only the per-call input. The fold runs on the backend, so it adds no second semantics. See [Specializing](#specializing) |
+| `added: proven presence` | a read that may be absent — an optional field, a key only an index signature allows, any `map` key — compiles only where something proves it present: a guard (`has`, `in`), iteration over the same container, a known value, or an `unsafe_map` declaration | `CelEnvironment::compile` | a policy that silently denies every request missing an optional field is found when it is written. Pinned by `unproven_record_reads_are_refused` and `a_compiled_program_never_raises_no_such_key`. See [Proving presence](#proving-presence) |
+| `added: unsafe_map` | a map type whose DECLARER asserts every key a program can name reads as a value, so a read of one needs no proof; a schema never derives one | `CelTy::unsafe_map` | an embedder that fills a root from the program's own demand (pre-creating every key the program names) has a root that is total by construction — and saying so in the type keeps the same program text meaning the same thing against the same declared types everywhere |
 | `added: host functions` | typed, pure functions an embedding environment declares | `CelEnvironment::register_host`, `HostCall` | an embedder's matching engines (route tables, schema checks) are exposed as calls the checker types and partial evaluation treats as opaque until every argument is known, instead of being re-implemented in CEL or left outside it. The backend dispatches them, and builds a matcher through one over a known list |
 | `added: closed string sets` | an environment may declare that a string field holds one of a fixed list of values; nothing about its meaning changes | `CelEnvironment::declare_enum`, `TAG_OTHER`, `Facts` | a field like an access mode is compared with a handful of literals on every decision. The fast backend compares a listed literal as a TAG — the value's index — which a `Facts` provider may answer without producing a string at all; `f == "a" \|\| f == "b"` over listed values is one mask test. A literal outside the list is still an ordinary string comparison |
-| `added: typed results` | programs that must produce a declared non-bool type, and the runtime to run them | `CelEnvironment::compile_returning`, `ResultKind`, `CelRuntime`, `CelActivation::bind_fact`, `Vm::eval_result`, `FastProgram::decide_tag` | a decision point with more than two outcomes (allow / read-only / a specific errno) needs a result the checker can still prove the type of, and a specialization of it keeps that type. The fast backend answers such a program with the index of a tag rather than a string value, so the answer allocates nothing |
+| `added: typed results` | programs that must produce a declared non-bool type, and the runtime to run them | `CelEnvironment::compile`, `CompileOpts`, `ResultKind`, `CelRuntime`, `CelActivation::bind_fact`, `Vm::eval_result`, `FastProgram::decide_tag` | a decision point with more than two outcomes (allow / read-only / a specific errno) needs a result the checker can still prove the type of, and a specialization of it keeps that type. The fast backend answers such a program with the index of a tag rather than a string value, so the answer allocates nothing |
 | `added: bytecode` | a CHECKED expression lowered to a register program over unboxed values and run by one fast backend (`src/fast/`); an unchecked expression has no lowering | `emit`, `CelBytecode`, `Vm::eval`, `FastProgram`, `Facts` | one evaluation is a loop over explicit state rather than a recursive walk, which is what lets an evaluation stop and resume, and it reads host data by field rather than packing it into values. Held to its answers by the cel-spec corpus, a frozen golden of every generated program's answer, single-engine laws over generated programs (every host alike, eager and lazy) and pinned edges (`tests/generated_golden.rs`, `tests/metamorphic.rs`, `tests/backend_edges.rs`) |
 
 ## Testing

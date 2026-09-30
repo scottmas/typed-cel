@@ -9,6 +9,7 @@
 
 use typed_cel::fork::ast::{EntryExpr, Expr, IdedExpr};
 use typed_cel::profile::{self, RunProfile};
+use typed_cel::CompileOpts;
 use typed_cel::{
     emit, CelActivation, CelEnvironment, CelProgram, CelTy, FactPoll, Facts, FastProgram,
     FastScratch, FieldId, FieldPath, Vm,
@@ -248,7 +249,7 @@ pub struct Prepared {
 /// leg over a program that reads a collection whole).
 pub fn prepare(env: &CelEnvironment, src: &str, leg: Leg, policy: &J, req: &J) -> Option<Prepared> {
     let compiled = env
-        .compile(src)
+        .compile(src, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("`{src}` does not compile: {e}"));
     let bind = |roots: &[(&str, &J)]| {
         let mut a = env.activation();
@@ -292,7 +293,15 @@ pub fn prepare(env: &CelEnvironment, src: &str, leg: Leg, policy: &J, req: &J) -
                 (("req", req), ("policy", policy))
             };
             let known_act = bind(&[known]);
-            let (residual, sp) = profile::measure(|| env.specialize(&compiled, &known_act));
+            let (residual, sp) = profile::measure(|| {
+                env.compile(
+                    compiled.source(),
+                    &CompileOpts {
+                        known: Some(&known_act),
+                        ..Default::default()
+                    },
+                )
+            });
             let residual = residual.unwrap_or_else(|e| panic!("`{src}` specializes: {e}"));
             let fast = FastProgram::new(&residual).expect("the residual lowers");
             let facts = facts_over(&fast, &[rest]);

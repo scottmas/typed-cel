@@ -4,29 +4,29 @@
 0x9e3779b97f4a7c15 1 0 ok true
 0x9e3779b97f4a7c15 1 1 ok true
 0x9e3779b97f4a7c15 1 2 err could not be evaluated: Index out of bounds: Int(0)
-0x9e3779b97f4a7c15 2 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 2 0 ok false
 0x9e3779b97f4a7c15 2 1 ok false
 0x9e3779b97f4a7c15 2 2 ok false
 0x9e3779b97f4a7c15 3 0 ok false
 0x9e3779b97f4a7c15 3 1 ok false
 0x9e3779b97f4a7c15 3 2 ok false
-0x9e3779b97f4a7c15 4 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 4 0 ok false
 0x9e3779b97f4a7c15 4 1 ok false
-0x9e3779b97f4a7c15 4 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 4 2 ok true
 0x9e3779b97f4a7c15 5 0 ok true
 0x9e3779b97f4a7c15 5 1 ok true
 0x9e3779b97f4a7c15 5 2 ok false
-0x9e3779b97f4a7c15 6 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 6 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 6 0 ok true
+0x9e3779b97f4a7c15 6 1 ok true
 0x9e3779b97f4a7c15 6 2 ok false
 0x9e3779b97f4a7c15 7 0 ok true
 0x9e3779b97f4a7c15 7 1 ok true
 0x9e3779b97f4a7c15 7 2 ok false
-0x9e3779b97f4a7c15 8 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 8 0 ok false
 0x9e3779b97f4a7c15 8 1 ok false
-0x9e3779b97f4a7c15 8 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 8 2 ok false
 0x9e3779b97f4a7c15 9 0 ok false
-0x9e3779b97f4a7c15 9 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 9 1 ok false
 0x9e3779b97f4a7c15 9 2 ok false
 0x9e3779b97f4a7c15 10 0 ok true
 0x9e3779b97f4a7c15 10 1 ok true
@@ -49,9 +49,9 @@
 0x9e3779b97f4a7c15 16 0 ok true
 0x9e3779b97f4a7c15 16 1 ok true
 0x9e3779b97f4a7c15 16 2 ok true
-0x9e3779b97f4a7c15 17 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 17 0 ok false
 0x9e3779b97f4a7c15 17 1 ok false
-0x9e3779b97f4a7c15 17 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 17 2 ok false
 0x9e3779b97f4a7c15 18 0 ok true
 0x9e3779b97f4a7c15 18 1 ok true
 0x9e3779b97f4a7c15 18 2 ok false
@@ -64,18 +64,18 @@
 0x9e3779b97f4a7c15 21 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 21 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 21 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x9e3779b97f4a7c15 22 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 22 0 ok false
 0x9e3779b97f4a7c15 22 1 ok false
 0x9e3779b97f4a7c15 22 2 err could not be evaluated: Index out of bounds: Int(0)
-0x9e3779b97f4a7c15 23 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 23 0 ok true
 0x9e3779b97f4a7c15 23 1 ok true
-0x9e3779b97f4a7c15 23 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 23 2 ok true
 0x9e3779b97f4a7c15 24 0 ok true
 0x9e3779b97f4a7c15 24 1 ok true
 0x9e3779b97f4a7c15 24 2 ok true
-0x9e3779b97f4a7c15 25 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 25 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 25 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 25 0 ok true
+0x9e3779b97f4a7c15 25 1 ok true
+0x9e3779b97f4a7c15 25 2 ok false
 0x9e3779b97f4a7c15 26 0 ok false
 0x9e3779b97f4a7c15 26 1 ok false
 0x9e3779b97f4a7c15 26 2 ok false
@@ -89,7 +89,7 @@
 0x9e3779b97f4a7c15 29 1 ok true
 0x9e3779b97f4a7c15 29 2 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 30 0 ok true
-0x9e3779b97f4a7c15 30 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 30 1 ok false
 0x9e3779b97f4a7c15 30 2 ok true
 0x9e3779b97f4a7c15 31 0 ok true
 0x9e3779b97f4a7c15 31 1 ok true
@@ -111,11 +111,11 @@
 0x9e3779b97f4a7c15 36 2 ok false
 0x9e3779b97f4a7c15 37 0 ok true
 0x9e3779b97f4a7c15 37 1 ok false
-0x9e3779b97f4a7c15 37 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 37 2 ok false
 0x9e3779b97f4a7c15 38 0 ok true
 0x9e3779b97f4a7c15 38 1 ok true
 0x9e3779b97f4a7c15 38 2 ok true
-0x9e3779b97f4a7c15 39 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 39 0 ok true
 0x9e3779b97f4a7c15 39 1 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 39 2 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 40 0 ok false
@@ -172,7 +172,7 @@
 0x9e3779b97f4a7c15 57 0 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 57 1 ok false
 0x9e3779b97f4a7c15 57 2 ok false
-0x9e3779b97f4a7c15 58 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 58 0 ok false
 0x9e3779b97f4a7c15 58 1 ok true
 0x9e3779b97f4a7c15 58 2 ok true
 0x9e3779b97f4a7c15 59 0 ok false
@@ -196,9 +196,9 @@
 0x9e3779b97f4a7c15 65 0 ok true
 0x9e3779b97f4a7c15 65 1 ok true
 0x9e3779b97f4a7c15 65 2 ok true
-0x9e3779b97f4a7c15 66 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 66 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 66 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 66 0 ok true
+0x9e3779b97f4a7c15 66 1 ok false
+0x9e3779b97f4a7c15 66 2 ok false
 0x9e3779b97f4a7c15 67 0 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 67 1 ok false
 0x9e3779b97f4a7c15 67 2 ok false
@@ -242,8 +242,8 @@
 0x9e3779b97f4a7c15 80 1 ok true
 0x9e3779b97f4a7c15 80 2 ok true
 0x9e3779b97f4a7c15 81 0 ok false
-0x9e3779b97f4a7c15 81 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 81 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 81 1 ok true
+0x9e3779b97f4a7c15 81 2 ok true
 0x9e3779b97f4a7c15 82 0 ok false
 0x9e3779b97f4a7c15 82 1 ok false
 0x9e3779b97f4a7c15 82 2 ok false
@@ -252,20 +252,20 @@
 0x9e3779b97f4a7c15 83 2 ok false
 0x9e3779b97f4a7c15 84 0 ok false
 0x9e3779b97f4a7c15 84 1 ok false
-0x9e3779b97f4a7c15 84 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 84 2 ok false
 0x9e3779b97f4a7c15 85 0 ok true
 0x9e3779b97f4a7c15 85 1 ok true
 0x9e3779b97f4a7c15 85 2 ok false
 0x9e3779b97f4a7c15 86 0 ok true
-0x9e3779b97f4a7c15 86 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 86 1 ok false
 0x9e3779b97f4a7c15 86 2 ok true
-0x9e3779b97f4a7c15 87 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 87 0 ok false
 0x9e3779b97f4a7c15 87 1 ok false
 0x9e3779b97f4a7c15 87 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 88 0 ok false
 0x9e3779b97f4a7c15 88 1 ok false
 0x9e3779b97f4a7c15 88 2 ok false
-0x9e3779b97f4a7c15 89 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 89 0 ok false
 0x9e3779b97f4a7c15 89 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 89 2 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 90 0 err could not be evaluated: Index out of bounds: Int(0)
@@ -328,9 +328,9 @@
 0x9e3779b97f4a7c15 109 0 ok true
 0x9e3779b97f4a7c15 109 1 ok true
 0x9e3779b97f4a7c15 109 2 ok true
-0x9e3779b97f4a7c15 110 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 110 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 110 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 110 0 ok false
+0x9e3779b97f4a7c15 110 1 ok false
+0x9e3779b97f4a7c15 110 2 ok false
 0x9e3779b97f4a7c15 111 0 ok true
 0x9e3779b97f4a7c15 111 1 ok true
 0x9e3779b97f4a7c15 111 2 ok true
@@ -370,9 +370,9 @@
 0x9e3779b97f4a7c15 123 0 ok true
 0x9e3779b97f4a7c15 123 1 ok false
 0x9e3779b97f4a7c15 123 2 ok true
-0x9e3779b97f4a7c15 124 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 124 1 err could not be evaluated: Index out of bounds: Int(0)
-0x9e3779b97f4a7c15 124 2 err could not be evaluated: Index out of bounds: Int(0)
+0x9e3779b97f4a7c15 124 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
+0x9e3779b97f4a7c15 124 1 ok true
+0x9e3779b97f4a7c15 124 2 ok true
 0x9e3779b97f4a7c15 125 0 ok true
 0x9e3779b97f4a7c15 125 1 ok true
 0x9e3779b97f4a7c15 125 2 ok true
@@ -388,9 +388,9 @@
 0x9e3779b97f4a7c15 129 0 ok true
 0x9e3779b97f4a7c15 129 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 129 2 err could not be evaluated: Index out of bounds: Int(0)
-0x9e3779b97f4a7c15 130 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 130 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 130 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 130 0 ok true
+0x9e3779b97f4a7c15 130 1 ok true
+0x9e3779b97f4a7c15 130 2 ok true
 0x9e3779b97f4a7c15 131 0 ok false
 0x9e3779b97f4a7c15 131 1 ok false
 0x9e3779b97f4a7c15 131 2 ok false
@@ -403,12 +403,12 @@
 0x9e3779b97f4a7c15 134 0 ok false
 0x9e3779b97f4a7c15 134 1 ok false
 0x9e3779b97f4a7c15 134 2 ok false
-0x9e3779b97f4a7c15 135 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 135 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 135 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 135 0 ok true
+0x9e3779b97f4a7c15 135 1 ok true
+0x9e3779b97f4a7c15 135 2 ok true
 0x9e3779b97f4a7c15 136 0 ok true
-0x9e3779b97f4a7c15 136 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 136 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 136 1 ok true
+0x9e3779b97f4a7c15 136 2 ok true
 0x9e3779b97f4a7c15 137 0 ok true
 0x9e3779b97f4a7c15 137 1 ok true
 0x9e3779b97f4a7c15 137 2 ok true
@@ -439,8 +439,8 @@
 0x9e3779b97f4a7c15 146 0 ok false
 0x9e3779b97f4a7c15 146 1 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 146 2 ok false
-0x9e3779b97f4a7c15 147 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 147 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 147 0 ok true
+0x9e3779b97f4a7c15 147 1 ok true
 0x9e3779b97f4a7c15 147 2 ok true
 0x9e3779b97f4a7c15 148 0 ok false
 0x9e3779b97f4a7c15 148 1 ok false
@@ -461,8 +461,8 @@
 0x9e3779b97f4a7c15 153 1 ok false
 0x9e3779b97f4a7c15 153 2 ok false
 0x9e3779b97f4a7c15 154 0 ok false
-0x9e3779b97f4a7c15 154 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 154 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 154 1 ok false
+0x9e3779b97f4a7c15 154 2 ok false
 0x9e3779b97f4a7c15 155 0 ok false
 0x9e3779b97f4a7c15 155 1 ok false
 0x9e3779b97f4a7c15 155 2 ok false
@@ -474,22 +474,22 @@
 0x9e3779b97f4a7c15 157 2 ok true
 0x9e3779b97f4a7c15 158 0 ok false
 0x9e3779b97f4a7c15 158 1 ok false
-0x9e3779b97f4a7c15 158 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 158 2 ok true
 0x9e3779b97f4a7c15 159 0 ok true
 0x9e3779b97f4a7c15 159 1 ok true
 0x9e3779b97f4a7c15 159 2 ok true
 0x9e3779b97f4a7c15 160 0 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 160 1 err could not be evaluated: Index out of bounds: Int(0)
-0x9e3779b97f4a7c15 160 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 160 2 ok true
 0x9e3779b97f4a7c15 161 0 ok true
 0x9e3779b97f4a7c15 161 1 ok true
 0x9e3779b97f4a7c15 161 2 ok true
 0x9e3779b97f4a7c15 162 0 ok true
 0x9e3779b97f4a7c15 162 1 ok true
 0x9e3779b97f4a7c15 162 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x9e3779b97f4a7c15 163 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 163 0 ok true
 0x9e3779b97f4a7c15 163 1 ok false
-0x9e3779b97f4a7c15 163 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 163 2 ok true
 0x9e3779b97f4a7c15 164 0 ok false
 0x9e3779b97f4a7c15 164 1 ok true
 0x9e3779b97f4a7c15 164 2 ok false
@@ -499,8 +499,8 @@
 0x9e3779b97f4a7c15 166 0 ok false
 0x9e3779b97f4a7c15 166 1 ok false
 0x9e3779b97f4a7c15 166 2 ok false
-0x9e3779b97f4a7c15 167 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 167 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 167 0 ok true
+0x9e3779b97f4a7c15 167 1 ok true
 0x9e3779b97f4a7c15 167 2 ok false
 0x9e3779b97f4a7c15 168 0 ok true
 0x9e3779b97f4a7c15 168 1 ok true
@@ -523,8 +523,8 @@
 0x9e3779b97f4a7c15 174 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 174 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 174 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x9e3779b97f4a7c15 175 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 175 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 175 0 ok false
+0x9e3779b97f4a7c15 175 1 ok true
 0x9e3779b97f4a7c15 175 2 ok false
 0x9e3779b97f4a7c15 176 0 ok false
 0x9e3779b97f4a7c15 176 1 ok false
@@ -547,9 +547,9 @@
 0x9e3779b97f4a7c15 182 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 182 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 182 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x9e3779b97f4a7c15 183 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 183 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 183 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 183 0 ok true
+0x9e3779b97f4a7c15 183 1 ok false
+0x9e3779b97f4a7c15 183 2 ok false
 0x9e3779b97f4a7c15 184 0 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 184 1 ok false
 0x9e3779b97f4a7c15 184 2 err could not be evaluated: Index out of bounds: Int(0)
@@ -557,14 +557,14 @@
 0x9e3779b97f4a7c15 185 1 ok false
 0x9e3779b97f4a7c15 185 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 186 0 ok true
-0x9e3779b97f4a7c15 186 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 186 1 ok true
 0x9e3779b97f4a7c15 186 2 ok true
 0x9e3779b97f4a7c15 187 0 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 187 1 ok false
 0x9e3779b97f4a7c15 187 2 ok true
 0x9e3779b97f4a7c15 188 0 ok false
 0x9e3779b97f4a7c15 188 1 ok false
-0x9e3779b97f4a7c15 188 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 188 2 ok false
 0x9e3779b97f4a7c15 189 0 ok false
 0x9e3779b97f4a7c15 189 1 ok false
 0x9e3779b97f4a7c15 189 2 ok false
@@ -581,7 +581,7 @@
 0x9e3779b97f4a7c15 193 1 ok true
 0x9e3779b97f4a7c15 193 2 ok true
 0x9e3779b97f4a7c15 194 0 ok true
-0x9e3779b97f4a7c15 194 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 194 1 ok true
 0x9e3779b97f4a7c15 194 2 ok true
 0x9e3779b97f4a7c15 195 0 ok false
 0x9e3779b97f4a7c15 195 1 ok false
@@ -604,8 +604,8 @@
 0x9e3779b97f4a7c15 201 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 201 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 201 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x9e3779b97f4a7c15 202 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 202 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 202 0 ok true
+0x9e3779b97f4a7c15 202 1 ok true
 0x9e3779b97f4a7c15 202 2 ok true
 0x9e3779b97f4a7c15 203 0 ok false
 0x9e3779b97f4a7c15 203 1 ok false
@@ -641,8 +641,8 @@
 0x9e3779b97f4a7c15 213 1 ok true
 0x9e3779b97f4a7c15 213 2 ok true
 0x9e3779b97f4a7c15 214 0 ok true
-0x9e3779b97f4a7c15 214 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 214 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 214 1 ok false
+0x9e3779b97f4a7c15 214 2 ok false
 0x9e3779b97f4a7c15 215 0 ok false
 0x9e3779b97f4a7c15 215 1 ok false
 0x9e3779b97f4a7c15 215 2 ok false
@@ -673,28 +673,28 @@
 0x9e3779b97f4a7c15 224 0 ok false
 0x9e3779b97f4a7c15 224 1 ok true
 0x9e3779b97f4a7c15 224 2 ok false
-0x9e3779b97f4a7c15 225 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 225 0 ok false
 0x9e3779b97f4a7c15 225 1 ok false
-0x9e3779b97f4a7c15 225 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 225 2 ok false
 0x9e3779b97f4a7c15 226 0 ok false
 0x9e3779b97f4a7c15 226 1 ok false
 0x9e3779b97f4a7c15 226 2 ok true
 0x9e3779b97f4a7c15 227 0 ok false
-0x9e3779b97f4a7c15 227 1 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 227 1 ok false
 0x9e3779b97f4a7c15 227 2 ok false
 0x9e3779b97f4a7c15 228 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 228 1 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 228 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x9e3779b97f4a7c15 229 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 229 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 229 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 229 0 ok true
+0x9e3779b97f4a7c15 229 1 ok true
+0x9e3779b97f4a7c15 229 2 ok true
 0x9e3779b97f4a7c15 230 0 ok true
 0x9e3779b97f4a7c15 230 1 ok true
 0x9e3779b97f4a7c15 230 2 ok true
 0x9e3779b97f4a7c15 231 0 ok false
 0x9e3779b97f4a7c15 231 1 ok false
 0x9e3779b97f4a7c15 231 2 ok false
-0x9e3779b97f4a7c15 232 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 232 0 ok true
 0x9e3779b97f4a7c15 232 1 ok true
 0x9e3779b97f4a7c15 232 2 ok true
 0x9e3779b97f4a7c15 233 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
@@ -730,9 +730,9 @@
 0x9e3779b97f4a7c15 243 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 243 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 243 2 ok false
-0x9e3779b97f4a7c15 244 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 244 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 244 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 244 0 ok false
+0x9e3779b97f4a7c15 244 1 ok false
+0x9e3779b97f4a7c15 244 2 ok false
 0x9e3779b97f4a7c15 245 0 ok false
 0x9e3779b97f4a7c15 245 1 ok false
 0x9e3779b97f4a7c15 245 2 ok false
@@ -758,23 +758,23 @@
 0x9e3779b97f4a7c15 252 1 ok false
 0x9e3779b97f4a7c15 252 2 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 253 0 ok true
-0x9e3779b97f4a7c15 253 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 253 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 253 1 ok true
+0x9e3779b97f4a7c15 253 2 ok true
 0x9e3779b97f4a7c15 254 0 ok true
 0x9e3779b97f4a7c15 254 1 ok false
 0x9e3779b97f4a7c15 254 2 ok false
 0x9e3779b97f4a7c15 255 0 ok false
 0x9e3779b97f4a7c15 255 1 ok false
-0x9e3779b97f4a7c15 255 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 255 2 ok false
 0x9e3779b97f4a7c15 256 0 ok true
 0x9e3779b97f4a7c15 256 1 ok true
 0x9e3779b97f4a7c15 256 2 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 257 0 ok false
 0x9e3779b97f4a7c15 257 1 ok true
 0x9e3779b97f4a7c15 257 2 ok true
-0x9e3779b97f4a7c15 258 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 258 0 ok false
 0x9e3779b97f4a7c15 258 1 ok false
-0x9e3779b97f4a7c15 258 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 258 2 ok false
 0x9e3779b97f4a7c15 259 0 ok true
 0x9e3779b97f4a7c15 259 1 ok true
 0x9e3779b97f4a7c15 259 2 ok true
@@ -802,9 +802,9 @@
 0x9e3779b97f4a7c15 267 0 ok false
 0x9e3779b97f4a7c15 267 1 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 267 2 ok false
-0x9e3779b97f4a7c15 268 0 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 268 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 268 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 268 0 ok true
+0x9e3779b97f4a7c15 268 1 ok true
+0x9e3779b97f4a7c15 268 2 ok true
 0x9e3779b97f4a7c15 269 0 ok true
 0x9e3779b97f4a7c15 269 1 ok true
 0x9e3779b97f4a7c15 269 2 ok true
@@ -818,23 +818,23 @@
 0x9e3779b97f4a7c15 272 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 272 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 273 0 ok true
-0x9e3779b97f4a7c15 273 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 273 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 273 1 ok false
+0x9e3779b97f4a7c15 273 2 ok false
 0x9e3779b97f4a7c15 274 0 ok true
 0x9e3779b97f4a7c15 274 1 ok true
 0x9e3779b97f4a7c15 274 2 ok true
 0x9e3779b97f4a7c15 275 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 275 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x9e3779b97f4a7c15 275 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x9e3779b97f4a7c15 276 0 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 276 0 ok true
 0x9e3779b97f4a7c15 276 1 ok false
 0x9e3779b97f4a7c15 276 2 ok true
 0x9e3779b97f4a7c15 277 0 ok false
 0x9e3779b97f4a7c15 277 1 ok false
 0x9e3779b97f4a7c15 277 2 ok false
 0x9e3779b97f4a7c15 278 0 ok true
-0x9e3779b97f4a7c15 278 1 err could not be evaluated: No such key: o
-0x9e3779b97f4a7c15 278 2 err could not be evaluated: No such key: o
+0x9e3779b97f4a7c15 278 1 ok false
+0x9e3779b97f4a7c15 278 2 ok false
 0x9e3779b97f4a7c15 279 0 ok true
 0x9e3779b97f4a7c15 279 1 err could not be evaluated: Index out of bounds: Int(0)
 0x9e3779b97f4a7c15 279 2 ok true
@@ -902,8 +902,8 @@
 0xd1b54a32d192ed03 0 1 ok true
 0xd1b54a32d192ed03 0 2 ok false
 0xd1b54a32d192ed03 1 0 ok false
-0xd1b54a32d192ed03 1 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 1 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 1 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
+0xd1b54a32d192ed03 1 2 ok true
 0xd1b54a32d192ed03 2 0 ok true
 0xd1b54a32d192ed03 2 1 ok true
 0xd1b54a32d192ed03 2 2 ok true
@@ -920,7 +920,7 @@
 0xd1b54a32d192ed03 6 1 ok true
 0xd1b54a32d192ed03 6 2 ok true
 0xd1b54a32d192ed03 7 0 ok false
-0xd1b54a32d192ed03 7 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 7 1 ok true
 0xd1b54a32d192ed03 7 2 ok false
 0xd1b54a32d192ed03 8 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 8 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
@@ -928,7 +928,7 @@
 0xd1b54a32d192ed03 9 0 ok false
 0xd1b54a32d192ed03 9 1 ok false
 0xd1b54a32d192ed03 9 2 ok false
-0xd1b54a32d192ed03 10 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 10 0 ok true
 0xd1b54a32d192ed03 10 1 ok true
 0xd1b54a32d192ed03 10 2 ok true
 0xd1b54a32d192ed03 11 0 ok false
@@ -940,7 +940,7 @@
 0xd1b54a32d192ed03 13 0 ok true
 0xd1b54a32d192ed03 13 1 ok true
 0xd1b54a32d192ed03 13 2 ok true
-0xd1b54a32d192ed03 14 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 14 0 ok true
 0xd1b54a32d192ed03 14 1 ok true
 0xd1b54a32d192ed03 14 2 ok true
 0xd1b54a32d192ed03 15 0 ok false
@@ -955,15 +955,15 @@
 0xd1b54a32d192ed03 18 0 ok false
 0xd1b54a32d192ed03 18 1 ok false
 0xd1b54a32d192ed03 18 2 ok false
-0xd1b54a32d192ed03 19 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 19 0 ok false
 0xd1b54a32d192ed03 19 1 ok false
-0xd1b54a32d192ed03 19 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 19 2 ok false
 0xd1b54a32d192ed03 20 0 ok false
-0xd1b54a32d192ed03 20 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 20 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 20 1 ok false
+0xd1b54a32d192ed03 20 2 ok false
 0xd1b54a32d192ed03 21 0 ok true
-0xd1b54a32d192ed03 21 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 21 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 21 1 ok false
+0xd1b54a32d192ed03 21 2 ok false
 0xd1b54a32d192ed03 22 0 ok true
 0xd1b54a32d192ed03 22 1 ok true
 0xd1b54a32d192ed03 22 2 ok true
@@ -989,19 +989,19 @@
 0xd1b54a32d192ed03 29 1 ok true
 0xd1b54a32d192ed03 29 2 ok true
 0xd1b54a32d192ed03 30 0 ok false
-0xd1b54a32d192ed03 30 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 30 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 30 1 ok false
+0xd1b54a32d192ed03 30 2 ok true
 0xd1b54a32d192ed03 31 0 ok false
-0xd1b54a32d192ed03 31 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 31 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 31 1 ok true
+0xd1b54a32d192ed03 31 2 ok false
 0xd1b54a32d192ed03 32 0 ok false
 0xd1b54a32d192ed03 32 1 ok false
-0xd1b54a32d192ed03 32 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 32 2 ok false
 0xd1b54a32d192ed03 33 0 ok false
 0xd1b54a32d192ed03 33 1 ok false
 0xd1b54a32d192ed03 33 2 ok false
-0xd1b54a32d192ed03 34 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 34 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 34 0 ok true
+0xd1b54a32d192ed03 34 1 ok false
 0xd1b54a32d192ed03 34 2 ok false
 0xd1b54a32d192ed03 35 0 ok false
 0xd1b54a32d192ed03 35 1 ok false
@@ -1012,9 +1012,9 @@
 0xd1b54a32d192ed03 37 0 ok false
 0xd1b54a32d192ed03 37 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 37 2 ok false
-0xd1b54a32d192ed03 38 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 38 0 ok true
 0xd1b54a32d192ed03 38 1 ok true
-0xd1b54a32d192ed03 38 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 38 2 ok true
 0xd1b54a32d192ed03 39 0 ok false
 0xd1b54a32d192ed03 39 1 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 39 2 err could not be evaluated: Index out of bounds: Int(0)
@@ -1041,7 +1041,7 @@
 0xd1b54a32d192ed03 46 2 ok true
 0xd1b54a32d192ed03 47 0 ok false
 0xd1b54a32d192ed03 47 1 ok false
-0xd1b54a32d192ed03 47 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 47 2 ok false
 0xd1b54a32d192ed03 48 0 ok true
 0xd1b54a32d192ed03 48 1 ok true
 0xd1b54a32d192ed03 48 2 ok true
@@ -1057,12 +1057,12 @@
 0xd1b54a32d192ed03 52 0 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 52 1 ok false
 0xd1b54a32d192ed03 52 2 ok true
-0xd1b54a32d192ed03 53 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 53 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 53 0 ok false
+0xd1b54a32d192ed03 53 1 ok false
 0xd1b54a32d192ed03 53 2 ok false
 0xd1b54a32d192ed03 54 0 ok false
 0xd1b54a32d192ed03 54 1 ok true
-0xd1b54a32d192ed03 54 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 54 2 ok true
 0xd1b54a32d192ed03 55 0 ok true
 0xd1b54a32d192ed03 55 1 ok true
 0xd1b54a32d192ed03 55 2 ok false
@@ -1072,11 +1072,11 @@
 0xd1b54a32d192ed03 57 0 ok false
 0xd1b54a32d192ed03 57 1 ok false
 0xd1b54a32d192ed03 57 2 ok false
-0xd1b54a32d192ed03 58 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 58 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 58 0 ok false
+0xd1b54a32d192ed03 58 1 ok true
 0xd1b54a32d192ed03 58 2 ok false
 0xd1b54a32d192ed03 59 0 ok false
-0xd1b54a32d192ed03 59 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 59 1 ok false
 0xd1b54a32d192ed03 59 2 ok false
 0xd1b54a32d192ed03 60 0 ok true
 0xd1b54a32d192ed03 60 1 ok true
@@ -1093,8 +1093,8 @@
 0xd1b54a32d192ed03 64 0 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 64 1 ok true
 0xd1b54a32d192ed03 64 2 ok true
-0xd1b54a32d192ed03 65 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 65 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 65 0 ok true
+0xd1b54a32d192ed03 65 1 ok true
 0xd1b54a32d192ed03 65 2 ok true
 0xd1b54a32d192ed03 66 0 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 66 1 err could not be evaluated: Index out of bounds: Int(0)
@@ -1117,7 +1117,7 @@
 0xd1b54a32d192ed03 72 0 ok true
 0xd1b54a32d192ed03 72 1 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 72 2 ok true
-0xd1b54a32d192ed03 73 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 73 0 ok true
 0xd1b54a32d192ed03 73 1 ok true
 0xd1b54a32d192ed03 73 2 ok true
 0xd1b54a32d192ed03 74 0 ok true
@@ -1133,8 +1133,8 @@
 0xd1b54a32d192ed03 77 1 ok true
 0xd1b54a32d192ed03 77 2 ok true
 0xd1b54a32d192ed03 78 0 ok true
-0xd1b54a32d192ed03 78 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 78 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 78 1 ok true
+0xd1b54a32d192ed03 78 2 ok true
 0xd1b54a32d192ed03 79 0 ok true
 0xd1b54a32d192ed03 79 1 ok false
 0xd1b54a32d192ed03 79 2 ok true
@@ -1156,7 +1156,7 @@
 0xd1b54a32d192ed03 85 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 85 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 85 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0xd1b54a32d192ed03 86 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 86 0 ok false
 0xd1b54a32d192ed03 86 1 ok true
 0xd1b54a32d192ed03 86 2 ok false
 0xd1b54a32d192ed03 87 0 ok true
@@ -1175,7 +1175,7 @@
 0xd1b54a32d192ed03 91 1 ok true
 0xd1b54a32d192ed03 91 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 92 0 ok false
-0xd1b54a32d192ed03 92 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 92 1 ok false
 0xd1b54a32d192ed03 92 2 ok false
 0xd1b54a32d192ed03 93 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 93 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
@@ -1189,9 +1189,9 @@
 0xd1b54a32d192ed03 96 0 ok false
 0xd1b54a32d192ed03 96 1 ok false
 0xd1b54a32d192ed03 96 2 ok false
-0xd1b54a32d192ed03 97 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 97 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 97 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 97 0 ok false
+0xd1b54a32d192ed03 97 1 ok false
+0xd1b54a32d192ed03 97 2 ok false
 0xd1b54a32d192ed03 98 0 ok false
 0xd1b54a32d192ed03 98 1 ok false
 0xd1b54a32d192ed03 98 2 ok false
@@ -1210,11 +1210,11 @@
 0xd1b54a32d192ed03 103 0 ok true
 0xd1b54a32d192ed03 103 1 ok true
 0xd1b54a32d192ed03 103 2 err could not be evaluated: Index out of bounds: Int(0)
-0xd1b54a32d192ed03 104 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 104 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 104 2 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 105 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 105 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 104 0 ok false
+0xd1b54a32d192ed03 104 1 ok true
+0xd1b54a32d192ed03 104 2 ok false
+0xd1b54a32d192ed03 105 0 ok true
+0xd1b54a32d192ed03 105 1 ok true
 0xd1b54a32d192ed03 105 2 ok true
 0xd1b54a32d192ed03 106 0 ok true
 0xd1b54a32d192ed03 106 1 ok true
@@ -1226,8 +1226,8 @@
 0xd1b54a32d192ed03 108 1 ok false
 0xd1b54a32d192ed03 108 2 ok false
 0xd1b54a32d192ed03 109 0 ok false
-0xd1b54a32d192ed03 109 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 109 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 109 1 ok false
+0xd1b54a32d192ed03 109 2 ok false
 0xd1b54a32d192ed03 110 0 ok false
 0xd1b54a32d192ed03 110 1 ok false
 0xd1b54a32d192ed03 110 2 ok false
@@ -1249,9 +1249,9 @@
 0xd1b54a32d192ed03 116 0 ok true
 0xd1b54a32d192ed03 116 1 ok true
 0xd1b54a32d192ed03 116 2 ok true
-0xd1b54a32d192ed03 117 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 117 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 117 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 117 0 ok false
+0xd1b54a32d192ed03 117 1 ok true
+0xd1b54a32d192ed03 117 2 ok false
 0xd1b54a32d192ed03 118 0 ok false
 0xd1b54a32d192ed03 118 1 ok false
 0xd1b54a32d192ed03 118 2 ok false
@@ -1330,9 +1330,9 @@
 0xd1b54a32d192ed03 143 0 ok false
 0xd1b54a32d192ed03 143 1 ok false
 0xd1b54a32d192ed03 143 2 ok false
-0xd1b54a32d192ed03 144 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 144 0 ok true
 0xd1b54a32d192ed03 144 1 ok true
-0xd1b54a32d192ed03 144 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 144 2 ok true
 0xd1b54a32d192ed03 145 0 ok false
 0xd1b54a32d192ed03 145 1 ok false
 0xd1b54a32d192ed03 145 2 ok false
@@ -1354,13 +1354,13 @@
 0xd1b54a32d192ed03 151 0 ok true
 0xd1b54a32d192ed03 151 1 ok false
 0xd1b54a32d192ed03 151 2 ok true
-0xd1b54a32d192ed03 152 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 152 0 ok false
 0xd1b54a32d192ed03 152 1 ok false
-0xd1b54a32d192ed03 152 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 152 2 ok true
 0xd1b54a32d192ed03 153 0 ok true
 0xd1b54a32d192ed03 153 1 ok true
 0xd1b54a32d192ed03 153 2 ok true
-0xd1b54a32d192ed03 154 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 154 0 ok true
 0xd1b54a32d192ed03 154 1 ok true
 0xd1b54a32d192ed03 154 2 ok true
 0xd1b54a32d192ed03 155 0 ok false
@@ -1370,8 +1370,8 @@
 0xd1b54a32d192ed03 156 1 ok false
 0xd1b54a32d192ed03 156 2 ok false
 0xd1b54a32d192ed03 157 0 ok false
-0xd1b54a32d192ed03 157 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 157 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 157 1 ok false
+0xd1b54a32d192ed03 157 2 ok false
 0xd1b54a32d192ed03 158 0 ok false
 0xd1b54a32d192ed03 158 1 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 158 2 ok false
@@ -1418,10 +1418,10 @@
 0xd1b54a32d192ed03 172 1 ok false
 0xd1b54a32d192ed03 172 2 ok false
 0xd1b54a32d192ed03 173 0 ok true
-0xd1b54a32d192ed03 173 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 173 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 173 1 ok false
+0xd1b54a32d192ed03 173 2 ok true
 0xd1b54a32d192ed03 174 0 ok false
-0xd1b54a32d192ed03 174 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 174 1 ok false
 0xd1b54a32d192ed03 174 2 ok false
 0xd1b54a32d192ed03 175 0 ok true
 0xd1b54a32d192ed03 175 1 ok true
@@ -1434,13 +1434,13 @@
 0xd1b54a32d192ed03 177 2 ok false
 0xd1b54a32d192ed03 178 0 ok false
 0xd1b54a32d192ed03 178 1 ok false
-0xd1b54a32d192ed03 178 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 178 2 ok false
 0xd1b54a32d192ed03 179 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 179 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 179 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 180 0 ok true
-0xd1b54a32d192ed03 180 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 180 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 180 1 ok false
+0xd1b54a32d192ed03 180 2 ok false
 0xd1b54a32d192ed03 181 0 ok true
 0xd1b54a32d192ed03 181 1 ok true
 0xd1b54a32d192ed03 181 2 ok true
@@ -1486,7 +1486,7 @@
 0xd1b54a32d192ed03 195 0 ok false
 0xd1b54a32d192ed03 195 1 ok false
 0xd1b54a32d192ed03 195 2 err could not be evaluated: Index out of bounds: Int(0)
-0xd1b54a32d192ed03 196 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 196 0 ok false
 0xd1b54a32d192ed03 196 1 ok false
 0xd1b54a32d192ed03 196 2 ok false
 0xd1b54a32d192ed03 197 0 ok true
@@ -1509,7 +1509,7 @@
 0xd1b54a32d192ed03 202 2 ok false
 0xd1b54a32d192ed03 203 0 ok false
 0xd1b54a32d192ed03 203 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0xd1b54a32d192ed03 203 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 203 2 ok true
 0xd1b54a32d192ed03 204 0 ok true
 0xd1b54a32d192ed03 204 1 ok true
 0xd1b54a32d192ed03 204 2 ok true
@@ -1540,9 +1540,9 @@
 0xd1b54a32d192ed03 213 0 ok true
 0xd1b54a32d192ed03 213 1 ok false
 0xd1b54a32d192ed03 213 2 ok false
-0xd1b54a32d192ed03 214 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 214 0 ok true
 0xd1b54a32d192ed03 214 1 ok false
-0xd1b54a32d192ed03 214 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 214 2 ok true
 0xd1b54a32d192ed03 215 0 ok true
 0xd1b54a32d192ed03 215 1 ok true
 0xd1b54a32d192ed03 215 2 ok true
@@ -1574,16 +1574,16 @@
 0xd1b54a32d192ed03 224 1 ok false
 0xd1b54a32d192ed03 224 2 ok false
 0xd1b54a32d192ed03 225 0 ok false
-0xd1b54a32d192ed03 225 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 225 1 ok false
 0xd1b54a32d192ed03 225 2 ok false
 0xd1b54a32d192ed03 226 0 ok true
 0xd1b54a32d192ed03 226 1 ok true
 0xd1b54a32d192ed03 226 2 ok true
-0xd1b54a32d192ed03 227 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 227 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 227 0 ok false
+0xd1b54a32d192ed03 227 1 ok false
 0xd1b54a32d192ed03 227 2 ok false
-0xd1b54a32d192ed03 228 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 228 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 228 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
+0xd1b54a32d192ed03 228 1 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 228 2 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 229 0 ok true
 0xd1b54a32d192ed03 229 1 ok true
@@ -1594,9 +1594,9 @@
 0xd1b54a32d192ed03 231 0 ok true
 0xd1b54a32d192ed03 231 1 ok true
 0xd1b54a32d192ed03 231 2 ok false
-0xd1b54a32d192ed03 232 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 232 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 232 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 232 0 ok false
+0xd1b54a32d192ed03 232 1 ok true
+0xd1b54a32d192ed03 232 2 ok true
 0xd1b54a32d192ed03 233 0 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 233 1 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 233 2 err could not be evaluated: Index out of bounds: Int(0)
@@ -1615,18 +1615,18 @@
 0xd1b54a32d192ed03 238 0 ok false
 0xd1b54a32d192ed03 238 1 ok false
 0xd1b54a32d192ed03 238 2 ok false
-0xd1b54a32d192ed03 239 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 239 0 ok true
 0xd1b54a32d192ed03 239 1 ok true
 0xd1b54a32d192ed03 239 2 ok true
 0xd1b54a32d192ed03 240 0 ok false
 0xd1b54a32d192ed03 240 1 ok false
-0xd1b54a32d192ed03 240 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 240 2 ok true
 0xd1b54a32d192ed03 241 0 ok false
 0xd1b54a32d192ed03 241 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 241 2 err could not be evaluated: Index out of bounds: Int(0)
-0xd1b54a32d192ed03 242 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 242 0 ok true
 0xd1b54a32d192ed03 242 1 ok true
-0xd1b54a32d192ed03 242 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 242 2 ok true
 0xd1b54a32d192ed03 243 0 ok true
 0xd1b54a32d192ed03 243 1 ok true
 0xd1b54a32d192ed03 243 2 ok true
@@ -1649,8 +1649,8 @@
 0xd1b54a32d192ed03 249 1 ok false
 0xd1b54a32d192ed03 249 2 ok false
 0xd1b54a32d192ed03 250 0 ok true
-0xd1b54a32d192ed03 250 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 250 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 250 1 ok false
+0xd1b54a32d192ed03 250 2 ok false
 0xd1b54a32d192ed03 251 0 ok false
 0xd1b54a32d192ed03 251 1 ok false
 0xd1b54a32d192ed03 251 2 ok false
@@ -1661,12 +1661,12 @@
 0xd1b54a32d192ed03 253 1 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 253 2 ok false
 0xd1b54a32d192ed03 254 0 err could not be evaluated: Index out of bounds: Int(0)
-0xd1b54a32d192ed03 254 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 254 2 err could not be evaluated: Index out of bounds: Int(0)
+0xd1b54a32d192ed03 254 1 ok false
+0xd1b54a32d192ed03 254 2 ok false
 0xd1b54a32d192ed03 255 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 255 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 255 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0xd1b54a32d192ed03 256 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 256 0 ok true
 0xd1b54a32d192ed03 256 1 ok true
 0xd1b54a32d192ed03 256 2 ok true
 0xd1b54a32d192ed03 257 0 ok false
@@ -1677,22 +1677,22 @@
 0xd1b54a32d192ed03 258 2 ok true
 0xd1b54a32d192ed03 259 0 ok false
 0xd1b54a32d192ed03 259 1 ok true
-0xd1b54a32d192ed03 259 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 259 2 ok true
 0xd1b54a32d192ed03 260 0 ok false
 0xd1b54a32d192ed03 260 1 ok false
 0xd1b54a32d192ed03 260 2 ok false
 0xd1b54a32d192ed03 261 0 ok true
-0xd1b54a32d192ed03 261 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 261 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 261 1 ok true
+0xd1b54a32d192ed03 261 2 ok true
 0xd1b54a32d192ed03 262 0 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 262 1 err could not be evaluated: Index out of bounds: Int(0)
 0xd1b54a32d192ed03 262 2 ok false
 0xd1b54a32d192ed03 263 0 ok false
 0xd1b54a32d192ed03 263 1 ok false
 0xd1b54a32d192ed03 263 2 ok false
-0xd1b54a32d192ed03 264 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 264 0 ok false
 0xd1b54a32d192ed03 264 1 ok false
-0xd1b54a32d192ed03 264 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 264 2 ok false
 0xd1b54a32d192ed03 265 0 ok true
 0xd1b54a32d192ed03 265 1 ok true
 0xd1b54a32d192ed03 265 2 ok true
@@ -1715,11 +1715,11 @@
 0xd1b54a32d192ed03 271 1 ok true
 0xd1b54a32d192ed03 271 2 ok true
 0xd1b54a32d192ed03 272 0 ok true
-0xd1b54a32d192ed03 272 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 272 1 ok true
 0xd1b54a32d192ed03 272 2 ok true
-0xd1b54a32d192ed03 273 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 273 0 ok false
 0xd1b54a32d192ed03 273 1 ok false
-0xd1b54a32d192ed03 273 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 273 2 ok true
 0xd1b54a32d192ed03 274 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 274 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 274 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
@@ -1732,11 +1732,11 @@
 0xd1b54a32d192ed03 277 0 ok false
 0xd1b54a32d192ed03 277 1 ok false
 0xd1b54a32d192ed03 277 2 ok false
-0xd1b54a32d192ed03 278 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 278 0 ok false
 0xd1b54a32d192ed03 278 1 ok true
 0xd1b54a32d192ed03 278 2 ok false
-0xd1b54a32d192ed03 279 0 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 279 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 279 0 ok true
+0xd1b54a32d192ed03 279 1 ok true
 0xd1b54a32d192ed03 279 2 ok true
 0xd1b54a32d192ed03 280 0 ok true
 0xd1b54a32d192ed03 280 1 ok true
@@ -1777,15 +1777,15 @@
 0xd1b54a32d192ed03 292 0 ok false
 0xd1b54a32d192ed03 292 1 ok false
 0xd1b54a32d192ed03 292 2 ok true
-0xd1b54a32d192ed03 293 0 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 293 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 293 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0xd1b54a32d192ed03 293 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 293 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0xd1b54a32d192ed03 294 0 ok false
-0xd1b54a32d192ed03 294 1 err could not be evaluated: No such key: o
-0xd1b54a32d192ed03 294 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 294 1 ok false
+0xd1b54a32d192ed03 294 2 ok false
 0xd1b54a32d192ed03 295 0 ok true
 0xd1b54a32d192ed03 295 1 ok true
-0xd1b54a32d192ed03 295 2 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 295 2 ok true
 0xd1b54a32d192ed03 296 0 ok true
 0xd1b54a32d192ed03 296 1 ok true
 0xd1b54a32d192ed03 296 2 ok false
@@ -1796,14 +1796,14 @@
 0xd1b54a32d192ed03 298 1 ok false
 0xd1b54a32d192ed03 298 2 ok false
 0xd1b54a32d192ed03 299 0 ok true
-0xd1b54a32d192ed03 299 1 err could not be evaluated: No such key: o
+0xd1b54a32d192ed03 299 1 ok false
 0xd1b54a32d192ed03 299 2 ok false
 0x2545f4914f6cdd1d 0 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 0 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 0 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 1 0 ok false
-0x2545f4914f6cdd1d 1 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 1 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 1 1 ok false
+0x2545f4914f6cdd1d 1 2 ok false
 0x2545f4914f6cdd1d 2 0 ok false
 0x2545f4914f6cdd1d 2 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 2 2 ok false
@@ -1819,27 +1819,27 @@
 0x2545f4914f6cdd1d 6 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 6 1 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 6 2 ok true
-0x2545f4914f6cdd1d 7 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 7 0 ok false
 0x2545f4914f6cdd1d 7 1 ok false
 0x2545f4914f6cdd1d 7 2 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 8 0 ok true
 0x2545f4914f6cdd1d 8 1 ok true
 0x2545f4914f6cdd1d 8 2 ok true
-0x2545f4914f6cdd1d 9 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 9 0 ok true
 0x2545f4914f6cdd1d 9 1 ok false
-0x2545f4914f6cdd1d 9 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 9 2 ok true
 0x2545f4914f6cdd1d 10 0 ok true
 0x2545f4914f6cdd1d 10 1 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 10 2 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 11 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 11 1 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 11 2 err could not be evaluated: Index out of bounds: Int(0)
-0x2545f4914f6cdd1d 12 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 12 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 12 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 12 0 ok false
+0x2545f4914f6cdd1d 12 1 ok false
+0x2545f4914f6cdd1d 12 2 ok false
 0x2545f4914f6cdd1d 13 0 ok false
 0x2545f4914f6cdd1d 13 1 ok false
-0x2545f4914f6cdd1d 13 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 13 2 ok false
 0x2545f4914f6cdd1d 14 0 ok true
 0x2545f4914f6cdd1d 14 1 ok true
 0x2545f4914f6cdd1d 14 2 ok true
@@ -1892,8 +1892,8 @@
 0x2545f4914f6cdd1d 30 1 ok false
 0x2545f4914f6cdd1d 30 2 ok false
 0x2545f4914f6cdd1d 31 0 ok false
-0x2545f4914f6cdd1d 31 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 31 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 31 1 ok false
+0x2545f4914f6cdd1d 31 2 ok false
 0x2545f4914f6cdd1d 32 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 32 1 ok true
 0x2545f4914f6cdd1d 32 2 ok true
@@ -1914,7 +1914,7 @@
 0x2545f4914f6cdd1d 37 2 ok false
 0x2545f4914f6cdd1d 38 0 ok false
 0x2545f4914f6cdd1d 38 1 ok false
-0x2545f4914f6cdd1d 38 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 38 2 ok false
 0x2545f4914f6cdd1d 39 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 39 1 ok true
 0x2545f4914f6cdd1d 39 2 err could not be evaluated: Index out of bounds: Int(0)
@@ -1954,9 +1954,9 @@
 0x2545f4914f6cdd1d 51 0 ok true
 0x2545f4914f6cdd1d 51 1 ok true
 0x2545f4914f6cdd1d 51 2 ok false
-0x2545f4914f6cdd1d 52 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 52 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 52 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 52 0 ok false
+0x2545f4914f6cdd1d 52 1 ok true
+0x2545f4914f6cdd1d 52 2 ok true
 0x2545f4914f6cdd1d 53 0 ok true
 0x2545f4914f6cdd1d 53 1 ok false
 0x2545f4914f6cdd1d 53 2 ok false
@@ -1975,9 +1975,9 @@
 0x2545f4914f6cdd1d 58 0 ok false
 0x2545f4914f6cdd1d 58 1 ok true
 0x2545f4914f6cdd1d 58 2 ok false
-0x2545f4914f6cdd1d 59 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 59 0 ok false
 0x2545f4914f6cdd1d 59 1 ok false
-0x2545f4914f6cdd1d 59 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 59 2 ok false
 0x2545f4914f6cdd1d 60 0 ok true
 0x2545f4914f6cdd1d 60 1 ok false
 0x2545f4914f6cdd1d 60 2 ok true
@@ -1998,7 +1998,7 @@
 0x2545f4914f6cdd1d 65 2 ok false
 0x2545f4914f6cdd1d 66 0 ok false
 0x2545f4914f6cdd1d 66 1 ok false
-0x2545f4914f6cdd1d 66 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 66 2 ok false
 0x2545f4914f6cdd1d 67 0 ok true
 0x2545f4914f6cdd1d 67 1 ok true
 0x2545f4914f6cdd1d 67 2 ok true
@@ -2013,7 +2013,7 @@
 0x2545f4914f6cdd1d 70 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 71 0 ok false
 0x2545f4914f6cdd1d 71 1 ok false
-0x2545f4914f6cdd1d 71 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 71 2 ok false
 0x2545f4914f6cdd1d 72 0 ok true
 0x2545f4914f6cdd1d 72 1 ok true
 0x2545f4914f6cdd1d 72 2 ok true
@@ -2033,7 +2033,7 @@
 0x2545f4914f6cdd1d 77 1 ok false
 0x2545f4914f6cdd1d 77 2 ok false
 0x2545f4914f6cdd1d 78 0 ok false
-0x2545f4914f6cdd1d 78 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 78 1 ok true
 0x2545f4914f6cdd1d 78 2 ok true
 0x2545f4914f6cdd1d 79 0 ok true
 0x2545f4914f6cdd1d 79 1 ok true
@@ -2045,7 +2045,7 @@
 0x2545f4914f6cdd1d 81 1 ok true
 0x2545f4914f6cdd1d 81 2 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 82 0 err could not be evaluated: Index out of bounds: Int(0)
-0x2545f4914f6cdd1d 82 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 82 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 82 2 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 83 0 ok false
 0x2545f4914f6cdd1d 83 1 ok false
@@ -2095,9 +2095,9 @@
 0x2545f4914f6cdd1d 98 0 ok true
 0x2545f4914f6cdd1d 98 1 ok true
 0x2545f4914f6cdd1d 98 2 ok false
-0x2545f4914f6cdd1d 99 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 99 0 ok true
 0x2545f4914f6cdd1d 99 1 ok true
-0x2545f4914f6cdd1d 99 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 99 2 ok true
 0x2545f4914f6cdd1d 100 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 100 1 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 100 2 ok false
@@ -2113,12 +2113,12 @@
 0x2545f4914f6cdd1d 104 0 ok false
 0x2545f4914f6cdd1d 104 1 ok false
 0x2545f4914f6cdd1d 104 2 ok false
-0x2545f4914f6cdd1d 105 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 105 0 ok false
 0x2545f4914f6cdd1d 105 1 ok true
-0x2545f4914f6cdd1d 105 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 105 2 ok false
 0x2545f4914f6cdd1d 106 0 ok true
-0x2545f4914f6cdd1d 106 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 106 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 106 1 ok false
+0x2545f4914f6cdd1d 106 2 ok false
 0x2545f4914f6cdd1d 107 0 ok true
 0x2545f4914f6cdd1d 107 1 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 107 2 err could not be evaluated: Index out of bounds: Int(0)
@@ -2134,7 +2134,7 @@
 0x2545f4914f6cdd1d 111 0 ok false
 0x2545f4914f6cdd1d 111 1 ok false
 0x2545f4914f6cdd1d 111 2 ok false
-0x2545f4914f6cdd1d 112 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 112 0 ok true
 0x2545f4914f6cdd1d 112 1 ok true
 0x2545f4914f6cdd1d 112 2 ok false
 0x2545f4914f6cdd1d 113 0 ok true
@@ -2193,7 +2193,7 @@
 0x2545f4914f6cdd1d 130 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 131 0 ok false
 0x2545f4914f6cdd1d 131 1 ok true
-0x2545f4914f6cdd1d 131 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 131 2 ok true
 0x2545f4914f6cdd1d 132 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 132 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 132 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
@@ -2224,9 +2224,9 @@
 0x2545f4914f6cdd1d 141 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 141 1 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 141 2 ok true
-0x2545f4914f6cdd1d 142 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 142 0 ok true
 0x2545f4914f6cdd1d 142 1 ok true
-0x2545f4914f6cdd1d 142 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 142 2 ok true
 0x2545f4914f6cdd1d 143 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 143 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 143 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
@@ -2241,7 +2241,7 @@
 0x2545f4914f6cdd1d 146 2 ok false
 0x2545f4914f6cdd1d 147 0 ok false
 0x2545f4914f6cdd1d 147 1 ok false
-0x2545f4914f6cdd1d 147 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 147 2 ok false
 0x2545f4914f6cdd1d 148 0 ok true
 0x2545f4914f6cdd1d 148 1 ok true
 0x2545f4914f6cdd1d 148 2 ok true
@@ -2269,7 +2269,7 @@
 0x2545f4914f6cdd1d 156 0 ok false
 0x2545f4914f6cdd1d 156 1 ok false
 0x2545f4914f6cdd1d 156 2 ok true
-0x2545f4914f6cdd1d 157 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 157 0 ok true
 0x2545f4914f6cdd1d 157 1 ok false
 0x2545f4914f6cdd1d 157 2 ok false
 0x2545f4914f6cdd1d 158 0 ok false
@@ -2292,15 +2292,15 @@
 0x2545f4914f6cdd1d 163 2 ok true
 0x2545f4914f6cdd1d 164 0 ok false
 0x2545f4914f6cdd1d 164 1 ok true
-0x2545f4914f6cdd1d 164 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 164 2 ok false
 0x2545f4914f6cdd1d 165 0 ok true
 0x2545f4914f6cdd1d 165 1 ok true
 0x2545f4914f6cdd1d 165 2 ok false
 0x2545f4914f6cdd1d 166 0 ok true
 0x2545f4914f6cdd1d 166 1 ok false
 0x2545f4914f6cdd1d 166 2 ok false
-0x2545f4914f6cdd1d 167 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 167 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 167 0 ok true
+0x2545f4914f6cdd1d 167 1 ok true
 0x2545f4914f6cdd1d 167 2 ok false
 0x2545f4914f6cdd1d 168 0 ok false
 0x2545f4914f6cdd1d 168 1 ok false
@@ -2319,10 +2319,10 @@
 0x2545f4914f6cdd1d 172 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 173 0 ok true
 0x2545f4914f6cdd1d 173 1 ok false
-0x2545f4914f6cdd1d 173 2 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 174 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 173 2 ok false
+0x2545f4914f6cdd1d 174 0 ok true
 0x2545f4914f6cdd1d 174 1 ok true
-0x2545f4914f6cdd1d 174 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 174 2 ok true
 0x2545f4914f6cdd1d 175 0 ok true
 0x2545f4914f6cdd1d 175 1 ok true
 0x2545f4914f6cdd1d 175 2 ok true
@@ -2356,12 +2356,12 @@
 0x2545f4914f6cdd1d 185 0 ok false
 0x2545f4914f6cdd1d 185 1 ok false
 0x2545f4914f6cdd1d 185 2 ok false
-0x2545f4914f6cdd1d 186 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 186 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 186 0 ok false
+0x2545f4914f6cdd1d 186 1 ok false
 0x2545f4914f6cdd1d 186 2 ok false
-0x2545f4914f6cdd1d 187 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 187 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 187 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 187 0 ok true
+0x2545f4914f6cdd1d 187 1 ok true
+0x2545f4914f6cdd1d 187 2 ok true
 0x2545f4914f6cdd1d 188 0 ok false
 0x2545f4914f6cdd1d 188 1 ok false
 0x2545f4914f6cdd1d 188 2 ok false
@@ -2407,11 +2407,11 @@
 0x2545f4914f6cdd1d 202 0 ok false
 0x2545f4914f6cdd1d 202 1 ok true
 0x2545f4914f6cdd1d 202 2 ok true
-0x2545f4914f6cdd1d 203 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 203 0 ok true
 0x2545f4914f6cdd1d 203 1 ok false
 0x2545f4914f6cdd1d 203 2 ok true
-0x2545f4914f6cdd1d 204 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 204 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 204 0 ok true
+0x2545f4914f6cdd1d 204 1 ok true
 0x2545f4914f6cdd1d 204 2 ok true
 0x2545f4914f6cdd1d 205 0 ok false
 0x2545f4914f6cdd1d 205 1 ok false
@@ -2419,12 +2419,12 @@
 0x2545f4914f6cdd1d 206 0 ok false
 0x2545f4914f6cdd1d 206 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 206 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x2545f4914f6cdd1d 207 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 207 0 ok true
 0x2545f4914f6cdd1d 207 1 ok false
-0x2545f4914f6cdd1d 207 2 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 208 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 207 2 ok true
+0x2545f4914f6cdd1d 208 0 ok false
 0x2545f4914f6cdd1d 208 1 ok false
-0x2545f4914f6cdd1d 208 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 208 2 ok true
 0x2545f4914f6cdd1d 209 0 ok false
 0x2545f4914f6cdd1d 209 1 ok false
 0x2545f4914f6cdd1d 209 2 ok true
@@ -2439,7 +2439,7 @@
 0x2545f4914f6cdd1d 212 2 ok true
 0x2545f4914f6cdd1d 213 0 ok false
 0x2545f4914f6cdd1d 213 1 ok false
-0x2545f4914f6cdd1d 213 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 213 2 ok true
 0x2545f4914f6cdd1d 214 0 ok true
 0x2545f4914f6cdd1d 214 1 ok true
 0x2545f4914f6cdd1d 214 2 ok true
@@ -2451,13 +2451,13 @@
 0x2545f4914f6cdd1d 216 2 ok false
 0x2545f4914f6cdd1d 217 0 ok false
 0x2545f4914f6cdd1d 217 1 ok false
-0x2545f4914f6cdd1d 217 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 217 2 ok true
 0x2545f4914f6cdd1d 218 0 ok false
 0x2545f4914f6cdd1d 218 1 ok false
 0x2545f4914f6cdd1d 218 2 ok false
-0x2545f4914f6cdd1d 219 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 219 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 219 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 219 0 ok true
+0x2545f4914f6cdd1d 219 1 ok true
+0x2545f4914f6cdd1d 219 2 ok true
 0x2545f4914f6cdd1d 220 0 ok false
 0x2545f4914f6cdd1d 220 1 ok false
 0x2545f4914f6cdd1d 220 2 ok true
@@ -2494,7 +2494,7 @@
 0x2545f4914f6cdd1d 231 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 231 1 ok true
 0x2545f4914f6cdd1d 231 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
-0x2545f4914f6cdd1d 232 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 232 0 ok false
 0x2545f4914f6cdd1d 232 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 232 2 ok true
 0x2545f4914f6cdd1d 233 0 ok true
@@ -2512,9 +2512,9 @@
 0x2545f4914f6cdd1d 237 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 237 1 ok true
 0x2545f4914f6cdd1d 237 2 err could not be evaluated: Index out of bounds: Int(0)
-0x2545f4914f6cdd1d 238 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 238 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 238 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 238 0 ok false
+0x2545f4914f6cdd1d 238 1 ok false
+0x2545f4914f6cdd1d 238 2 ok false
 0x2545f4914f6cdd1d 239 0 ok true
 0x2545f4914f6cdd1d 239 1 ok true
 0x2545f4914f6cdd1d 239 2 ok false
@@ -2533,18 +2533,18 @@
 0x2545f4914f6cdd1d 244 0 ok false
 0x2545f4914f6cdd1d 244 1 ok false
 0x2545f4914f6cdd1d 244 2 ok false
-0x2545f4914f6cdd1d 245 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 245 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 245 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 245 0 ok true
+0x2545f4914f6cdd1d 245 1 ok false
+0x2545f4914f6cdd1d 245 2 ok true
 0x2545f4914f6cdd1d 246 0 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 246 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 246 2 ok false
 0x2545f4914f6cdd1d 247 0 ok false
 0x2545f4914f6cdd1d 247 1 ok false
 0x2545f4914f6cdd1d 247 2 ok false
-0x2545f4914f6cdd1d 248 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 248 1 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 248 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 248 0 ok false
+0x2545f4914f6cdd1d 248 1 ok false
+0x2545f4914f6cdd1d 248 2 ok false
 0x2545f4914f6cdd1d 249 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 249 1 ok false
 0x2545f4914f6cdd1d 249 2 ok true
@@ -2558,7 +2558,7 @@
 0x2545f4914f6cdd1d 252 1 ok true
 0x2545f4914f6cdd1d 252 2 ok true
 0x2545f4914f6cdd1d 253 0 ok true
-0x2545f4914f6cdd1d 253 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 253 1 ok true
 0x2545f4914f6cdd1d 253 2 ok true
 0x2545f4914f6cdd1d 254 0 ok false
 0x2545f4914f6cdd1d 254 1 ok false
@@ -2573,7 +2573,7 @@
 0x2545f4914f6cdd1d 257 1 ok false
 0x2545f4914f6cdd1d 257 2 ok false
 0x2545f4914f6cdd1d 258 0 ok false
-0x2545f4914f6cdd1d 258 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 258 1 ok true
 0x2545f4914f6cdd1d 258 2 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 259 0 ok false
 0x2545f4914f6cdd1d 259 1 ok false
@@ -2584,8 +2584,8 @@
 0x2545f4914f6cdd1d 261 0 ok true
 0x2545f4914f6cdd1d 261 1 ok true
 0x2545f4914f6cdd1d 261 2 ok false
-0x2545f4914f6cdd1d 262 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 262 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 262 0 ok false
+0x2545f4914f6cdd1d 262 1 ok false
 0x2545f4914f6cdd1d 262 2 ok true
 0x2545f4914f6cdd1d 263 0 ok true
 0x2545f4914f6cdd1d 263 1 ok true
@@ -2594,12 +2594,12 @@
 0x2545f4914f6cdd1d 264 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 264 2 ok true
 0x2545f4914f6cdd1d 265 0 ok false
-0x2545f4914f6cdd1d 265 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 265 1 ok false
 0x2545f4914f6cdd1d 265 2 ok false
 0x2545f4914f6cdd1d 266 0 ok false
 0x2545f4914f6cdd1d 266 1 ok true
 0x2545f4914f6cdd1d 266 2 ok false
-0x2545f4914f6cdd1d 267 0 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 267 0 ok false
 0x2545f4914f6cdd1d 267 1 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 267 2 err could not be evaluated: Error executing function 'tag': host\n  tag refused its argument
 0x2545f4914f6cdd1d 268 0 ok true
@@ -2647,8 +2647,8 @@
 0x2545f4914f6cdd1d 282 0 ok false
 0x2545f4914f6cdd1d 282 1 ok false
 0x2545f4914f6cdd1d 282 2 err could not be evaluated: Index out of bounds: Int(0)
-0x2545f4914f6cdd1d 283 0 err could not be evaluated: No such key: o
-0x2545f4914f6cdd1d 283 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 283 0 ok true
+0x2545f4914f6cdd1d 283 1 ok true
 0x2545f4914f6cdd1d 283 2 ok false
 0x2545f4914f6cdd1d 284 0 ok false
 0x2545f4914f6cdd1d 284 1 ok false
@@ -2658,7 +2658,7 @@
 0x2545f4914f6cdd1d 285 2 ok false
 0x2545f4914f6cdd1d 286 0 ok true
 0x2545f4914f6cdd1d 286 1 ok true
-0x2545f4914f6cdd1d 286 2 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 286 2 ok false
 0x2545f4914f6cdd1d 287 0 ok true
 0x2545f4914f6cdd1d 287 1 ok true
 0x2545f4914f6cdd1d 287 2 ok true
@@ -2669,7 +2669,7 @@
 0x2545f4914f6cdd1d 289 1 ok true
 0x2545f4914f6cdd1d 289 2 ok true
 0x2545f4914f6cdd1d 290 0 ok false
-0x2545f4914f6cdd1d 290 1 err could not be evaluated: No such key: o
+0x2545f4914f6cdd1d 290 1 ok false
 0x2545f4914f6cdd1d 290 2 ok false
 0x2545f4914f6cdd1d 291 0 err could not be evaluated: Index out of bounds: Int(0)
 0x2545f4914f6cdd1d 291 1 ok false

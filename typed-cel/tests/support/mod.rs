@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use typed_cel::fork;
+use typed_cel::CompileOpts;
 use typed_cel::{CelEnvironment, CelError, CelTy, CelValue, ExecutionError, FastProgram, Record};
 
 /// Comparing the VM with the evaluator (and generating what to
@@ -112,7 +113,8 @@ pub fn env() -> CelEnvironment {
     e.declare("b", CelTy::list(doc()));
     e.declare("c", CelTy::list(doc()));
 
-    // The system half.
+    // The system half. Its keyed roots are `unsafe_map`, as the broker's system environment
+    // declares them: filled from the program's own demand, so every key a program names is there.
     e.declare("uptime", CelTy::Duration);
     e.declare(
         "signals",
@@ -120,14 +122,14 @@ pub fn env() -> CelEnvironment {
     );
     e.declare(
         "listeners",
-        CelTy::map(
+        CelTy::unsafe_map(
             CelTy::Str,
             record("listener", &[("listen", event()), ("accept", event())]),
         ),
     );
     e.declare(
         "files",
-        CelTy::map(
+        CelTy::unsafe_map(
             CelTy::Str,
             record("file", &[("opened", event()), ("closed", event())]),
         ),
@@ -143,7 +145,7 @@ pub fn env() -> CelEnvironment {
                         "metrics.cpu",
                         &[
                             ("now", CelTy::Num),
-                            ("max", CelTy::map(CelTy::Str, CelTy::Num)),
+                            ("max", CelTy::unsafe_map(CelTy::Str, CelTy::Num)),
                         ],
                     ),
                 ),
@@ -163,14 +165,14 @@ pub fn env() -> CelEnvironment {
 
 /// Assert `expr` compiles against the shared environment.
 pub fn ok(expr: &str) {
-    if let Err(e) = env().compile(expr) {
+    if let Err(e) = env().compile(expr, &CompileOpts::default()) {
         panic!("expected `{expr}` to check, got:\n{e}");
     }
 }
 
 /// Assert `expr` does NOT compile, and hand back the rendered diagnostic.
 pub fn err(expr: &str) -> String {
-    match env().compile(expr) {
+    match env().compile(expr, &CompileOpts::default()) {
         Ok(_) => panic!("expected `{expr}` to fail the checker, but it compiled"),
         Err(e) => e.to_string(),
     }
@@ -178,7 +180,7 @@ pub fn err(expr: &str) -> String {
 
 /// The structured error, for tests that inspect more than the rendering.
 pub fn err_raw(expr: &str) -> CelError {
-    match env().compile(expr) {
+    match env().compile(expr, &CompileOpts::default()) {
         Ok(_) => panic!("expected `{expr}` to fail the checker, but it compiled"),
         Err(e) => e,
     }
@@ -236,6 +238,29 @@ pub fn run(
         act.bind_fact(name, v.clone());
     }
     fork::fast_value(&code, &act)
+}
+
+/// [`run`] for a program the presence rules REFUSE — a test pinning what the backend answers when
+/// a value breaks its type's promise of presence.
+pub fn run_unchecked_presence(
+    env: &CelEnvironment,
+    src: &str,
+    binds: &[(&str, CelValue)],
+) -> Result<CelValue, ExecutionError> {
+    let program = fork::compile_any_unchecked_presence(env, src)
+        .unwrap_or_else(|e| panic!("`{src}` does not check:\n{e}"));
+    let code =
+        FastProgram::new(&program).unwrap_or_else(|e| panic!("`{src}` does not lower:\n{e}"));
+    let mut act = env.runtime().activation();
+    for (name, v) in binds {
+        act.bind_fact(name, v.clone());
+    }
+    fork::fast_value(&code, &act)
+}
+
+/// [`run_closed`] for a program the presence rules refuse.
+pub fn run_closed_unchecked_presence(src: &str) -> Result<CelValue, ExecutionError> {
+    run_unchecked_presence(&CelEnvironment::new(), src, &[])
 }
 
 /// A closed program (no roots) on the backend.

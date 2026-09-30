@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! column 1   P.evaluate(K ∪ U)                          the original, over bound values
-//! column 2   env.specialize(P, K)?.evaluate(U)          the residual, over bound values
+//! column 2   env.compile(P.source(), &CompileOpts { known: Some(K), ..Default::default() })?.evaluate(U)          the residual, over bound values
 //! column 3   residual.decide(JsonFacts(U))              the residual, read by field
 //! column 4   P.decide(JsonFacts(K ∪ U))                 a GUARD: the original, read by field
 //! ```
@@ -24,6 +24,7 @@
 
 use serde_json::{json, Value as J};
 use typed_cel::fork::ast::{EntryExpr, Expr, IdedExpr};
+use typed_cel::CompileOpts;
 use typed_cel::{
     CelActivation, CelEnvironment, CelError, CelLimits, CelProgram, CelTy, FastProgram, FastScratch,
 };
@@ -192,7 +193,7 @@ pub fn row(
     completion: Vec<(&'static str, J)>,
 ) -> Row {
     let original = env
-        .compile(source)
+        .compile(source, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("GENERATOR BUG: `{source}` does not compile:\n{e}"));
     let full: Vec<(&str, J)> = known.iter().chain(completion.iter()).cloned().collect();
     let k = bind_all(env, &known);
@@ -216,7 +217,15 @@ pub fn row(
         typed_cel::fork::unparse(original_tree).expect("a compiled tree renders");
     let original_loops = comprehensions(original_tree);
 
-    let residual = env.specialize(&original, &k).map_err(|e| e.to_string());
+    let residual = env
+        .compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&k),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string());
     let (c2, c3, residual_loops) = match &residual {
         Ok(res) => {
             // A residual the backend cannot lower is a defect in its own right; it is reported as
@@ -430,7 +439,7 @@ impl MixGen<'_> {
             20 => format!("(d {} duration(\"1s\"))", self.pick(&CMP)),
             21 => format!("(size({}) > {})", self.list(d, scope), self.num(d, scope)),
             22 => self.pick(&["(1 / 0 == 1)", "(ln[3] > 0.0)"]).to_string(),
-            23 => format!("(r.o == {})", self.string(d, scope)),
+            23 => format!("(has(r.o) && r.o == {})", self.string(d, scope)),
             24 | 25 => {
                 let q = self.pick(&["exists", "all", "exists_one"]);
                 let range = self.list(d, scope);
@@ -461,7 +470,10 @@ impl MixGen<'_> {
                 scope.pop();
                 // An integer division by zero for the empty element only.
                 let erring = self
-                    .pick(&["(1 / ({v} == \"\" ? 0 : 1) == 1)", "({v} == r.o)"])
+                    .pick(&[
+                        "(1 / ({v} == \"\" ? 0 : 1) == 1)",
+                        "(has(r.o) && {v} == r.o)",
+                    ])
                     .replace("{v}", v);
                 if self.below(2) == 0 {
                     format!("{range}.{q}({v}, {erring} {op} {other})")
@@ -470,8 +482,8 @@ impl MixGen<'_> {
                 }
             }
             // A loop whose elements the fold DECIDES with the identity value, except the empty
-            // one, which reads `r.o` — undecided when `r` is unknown, an error when `o` is
-            // absent. Over a known range the decided copies must drop out of the unrolled chain
+            // one, which reads `r.o` (guarded, so it is proven present) — undecided when `r` is
+            // unknown. Over a known range the decided copies must drop out of the unrolled chain
             // and never end it: only the absorbing value may.
             30..=33 => {
                 let range = self.pick(&["ls", "r.l"]);
@@ -481,15 +493,15 @@ impl MixGen<'_> {
                 } else {
                     ("exists", format!("{v} == \"#\""))
                 };
-                format!("{range}.{q}({v}, {v} == \"\" ? (r.o == {v}) : {decided})")
+                format!("{range}.{q}({v}, {v} == \"\" ? (has(r.o) && r.o == {v}) : {decided})")
             }
             // An erroring operand beside a (possibly known) absorbing one, outside any loop.
             _ => {
                 let erring = self.pick(&[
-                    "(r.o == s)",
+                    "(has(r.o) && r.o == s)",
                     "(1 / 0 == 1)",
                     "(ln[3] > 0.0)",
-                    "(m[\"a\"] > 0.0)",
+                    "(\"a\" in m && m[\"a\"] > 0.0)",
                 ]);
                 let other = self.boolean(d, scope);
                 let op = self.pick(&["&&", "||"]);
@@ -563,7 +575,15 @@ impl MixGen<'_> {
             }
             return self
                 .pick(&[
-                    "a", "b", "r.n", "ln[0]", "m[\"a\"]", "0.0", "1.0", "2.5", "-1.0",
+                    "a",
+                    "b",
+                    "r.n",
+                    "ln[0]",
+                    "(\"a\" in m ? m[\"a\"] : 0.0)",
+                    "0.0",
+                    "1.0",
+                    "2.5",
+                    "-1.0",
                 ])
                 .to_string();
         }

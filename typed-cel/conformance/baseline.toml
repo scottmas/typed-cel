@@ -52,9 +52,9 @@ excluded = 85
 fail = 0
 
 [fields]
-pass = 18
-static_pass = 0
-excluded = 42
+pass = 15
+static_pass = 2
+excluded = 43
 fail = 0
 
 [fp_math]

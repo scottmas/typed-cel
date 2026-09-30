@@ -51,8 +51,9 @@ $B --combine ablation.1.txt ablation.2.txt ablation.3.txt \
 - **allocs/eval** (in parentheses): a counting `GlobalAlloc` over 10 000 warmed evaluations, divided.
 - **compile**: median of 50 compiles from source — upstream `Program::compile`; checked compile
   `env.compile`;
-  (3) `env.compile` + `emit`; (4) reported split as compile / specialize (a fresh activation, bind the
-  policy, `specialize`) / lower (`FastProgram::new` on the residual).
+  (3) `env.compile` + `emit`; (4) reported split as parse / compile with known (a fresh activation, bind the
+  policy, `compile` with it known; the text is parsed once, outside the timing) / lower
+  (`FastProgram::new` on the residual).
 - **retained bytes**: bytes allocated and not freed by building and keeping the program — the upstream
   `Program`; the checked `CelProgram`; the `CelProgram` + `CelBytecode`; the residual + its `FastProgram`
   (the policy activation and the original program dropped). Each build runs once unmeasured first so
@@ -122,7 +123,7 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 
 ### Compile and memory
 
-| workload | (1) compile | checked compile | (3) compile + emit | (4) compile / specialize / lower | (1) `Program` | `CelProgram` | (3) + `CelBytecode` | (4) residual + `FastProgram` |
+| workload | (1) compile | checked compile | (3) compile + emit | (4) parse / compile with known / lower | (1) `Program` | `CelProgram` | (3) + `CelBytecode` | (4) residual + `FastProgram` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `prefix_1` | 45.1 µs | 50.3 µs | 82.4 µs | 50.3 µs / 17.1 µs / 2.6 µs | 1788 B | 2588 B | 4857 B | 2444 B |
 | `prefix_13` | 46.3 µs | 53.4 µs | 68.7 µs | 53.4 µs / 132.0 µs / 19.3 µs | 1788 B | 2588 B | 4857 B | 16.6 KiB |

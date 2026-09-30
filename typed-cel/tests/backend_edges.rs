@@ -9,6 +9,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -29,8 +30,11 @@ fn env_of(vars: &[(&str, CelTy)]) -> CelEnvironment {
 }
 
 /// `src` on the backend over `binds`, whose variables `vars` declares.
+/// Through the unchecked-presence door: this suite pins what the BACKEND answers, and many of its
+/// programs read a missing key on purpose — the absorption tables, the error pins. The checker
+/// refuses those reads (proven presence); every other check still applies.
 fn run_in(src: &str, binds: &[(&str, Value)], vars: &[(&str, CelTy)]) -> Outcome {
-    support::run(&env_of(vars), src, binds)
+    support::run_unchecked_presence(&env_of(vars), src, binds)
 }
 
 fn run(src: &str) -> Outcome {
@@ -411,7 +415,9 @@ fn observe(
 /// What `src` observes through the PUBLIC API (`CelProgram::evaluate`), on a fresh activation.
 fn observe_one(src: &str) -> Observed {
     let env = lazy_env();
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = env
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     observe(&env, &|act| program.evaluate(act))
 }
 
@@ -517,7 +523,7 @@ fn logic(or: bool, l: Operand, r: Operand) -> Operand {
 /// in value position (no fusion there).
 fn missing_message(env: &CelEnvironment, field: &str) -> String {
     let p = env
-        .compile(&format!("req.{field} == 'x'"))
+        .compile(&format!("req.{field} == 'x'"), &CompileOpts::default())
         .expect("compiles");
     let fast = typed_cel::FastProgram::new(&p).expect("lowers");
     let fields: Vec<String> = fast
@@ -564,7 +570,9 @@ fn fused_equality_keeps_and_absorption() {
                 (format!("{ab} {join} {ck}"), true),
                 (format!("{ck} {join} {ab}"), false),
             ] {
-                let p = env.compile(&src).expect("compiles");
+                let p = env
+                    .compile(&src, &CompileOpts::default())
+                    .expect("compiles");
                 let fast = typed_cel::FastProgram::new(&p).expect("lowers");
                 fused_seen.extend(
                     fast.op_names()
@@ -642,7 +650,8 @@ fn a_concatenation_tested_unbuilt_answers_as_built() {
         env.declare(root, CelTy::Str);
     }
     let lower = |src: &str| {
-        let p = fork::compile_any(&env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let p = fork::compile_any_unchecked_presence(&env, src)
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
         FastProgram::new(&p).unwrap_or_else(|e| panic!("{src}: {e}"))
     };
     let answer = |p: &FastProgram, binds: &[(&str, &str)]| {
@@ -742,7 +751,8 @@ fn a_literal_collection_searched_unbuilt_answers_as_built() {
         env.declare(root, CelTy::Str);
     }
     let lower = |src: &str| {
-        let p = fork::compile_any(&env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let p = fork::compile_any_unchecked_presence(&env, src)
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
         FastProgram::new(&p).unwrap_or_else(|e| panic!("{src}: {e}"))
     };
     let answer = |p: &FastProgram, binds: &[(&str, &str)]| {
@@ -833,7 +843,8 @@ fn a_known_set_answers_as_searching_it() {
     env.declare("x", CelTy::Num);
     env.declare("s", CelTy::Str);
     let lower = |src: &str| {
-        let p = fork::compile_any(&env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let p = fork::compile_any_unchecked_presence(&env, src)
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
         FastProgram::new(&p).unwrap_or_else(|e| panic!("{src}: {e}"))
     };
     let answer = |p: &FastProgram, x: Option<f64>, s: Option<&str>| {
@@ -938,7 +949,12 @@ fn a_selected_member_answers_as_before() {
     ];
     let mut wrong = Vec::new();
     for (src, want) in PINNED {
-        let got = format!("{:?}", run_in(src, &binds, &vars));
+        // Unchecked presence: several rows read an absent member on purpose — what the backend
+        // answers when a value breaks its type's promise (the checker refuses these programs).
+        let got = format!(
+            "{:?}",
+            support::run_unchecked_presence(&env_of(&vars), src, &binds)
+        );
         if got != *want {
             wrong.push(format!("        ({src:?}, {got:?}),"));
         }

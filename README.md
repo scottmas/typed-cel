@@ -33,7 +33,7 @@ to an index at compile time. Your own struct answers those indices, with no conv
 to CEL values.
 
 ```rust
-use typed_cel::{CelEnvironment, CelTy, Facts, FastProgram, FastScratch, FieldId, Record};
+use typed_cel::{CelEnvironment, CelTy, CompileOpts, Facts, FastProgram, FastScratch, FieldId, Record};
 
 // Your own request type. typed-cel never copies it into CEL values.
 struct Req {
@@ -70,11 +70,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env.declare("req", Record::new("req", [("user", CelTy::Str), ("body", body.into())]));
 
     // Mistakes are compile errors, not runtime surprises.
-    assert!(env.compile("req.usr == 'a'").is_err()); // no such field
-    assert!(env.compile("req.user == 1").is_err()); // string vs number
+    let cond = CompileOpts::default(); // a condition: `bool`, nothing known yet
+    assert!(env.compile("req.usr == 'a'", &cond).is_err()); // no such field
+    assert!(env.compile("req.user == 1", &cond).is_err()); // string vs number
 
     let program = env.compile(
         r#"req.body.account.owner_id == req.user && req.body.account.tier == "gold""#,
+        &cond,
     )?;
     let fast = FastProgram::new(&program)?;
 
@@ -104,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Most rules take two kinds of input: things fixed when you load them (the policy, the allowlist, the
 tenant's config) and things that arrive with each request. Declare both, bind the static half once,
-and `specialize`. typed-cel evaluates everything that depends only on the static half,
+and compile with the static half known. typed-cel evaluates everything that depends only on the static half,
 unrolls loops over static lists, and turns large lists of string prefixes into a sorted matcher.
 What runs per request is a residual program that reads only the request.
 
@@ -128,7 +130,7 @@ The crossover comes where the static data gets big.)
 
 ```rust
 use serde_json::json;
-use typed_cel::{CelEnvironment, CelTy, Facts, FastProgram, FastScratch, FieldId, Record};
+use typed_cel::{CelEnvironment, CelTy, CompileOpts, Facts, FastProgram, FastScratch, FieldId, Record};
 
 struct Path<'a>(&'a str);
 
@@ -151,13 +153,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut env = CelEnvironment::new();
     env.declare("policy", Record::new("policy", [("roots", CelTy::list(CelTy::Str))]));
     env.declare("req", Record::new("req", [("path", CelTy::Str)]));
-    let program =
-        env.compile(r#"policy.roots.exists(r, req.path == r || req.path.startsWith(r + "/"))"#)?;
+    let source = r#"policy.roots.exists(r, req.path == r || req.path.startsWith(r + "/"))"#;
 
-    // Static: bind the policy once, when it loads.
+    // Static: bind the policy once, when it loads, and compile with it known.
     let mut known = env.activation();
     known.bind("policy", &json!({ "roots": ["/srv/app", "/var/cache/app", "/tmp"] }))?;
-    let residual = env.specialize(&program, &known)?;
+    let residual = env.compile(source, &CompileOpts { known: Some(&known), ..Default::default() })?;
 
     // The residual no longer reads `policy` at all.
     assert_eq!(residual.demand().roots().into_iter().collect::<Vec<_>>(), ["req"]);
@@ -222,7 +223,10 @@ The dialect removes whatever would force a type check at run time:
 - **No dynamic values.** Lists are homogeneous, both branches of a conditional have the same type,
   and `dyn()` is gone.
 - **Homogeneous equality.** `1 == "1"` is a compile error, not `false`.
-- **No protobuf, timestamps or optionals.** Durations stay (`30s`), with no wall clock.
+- **No protobuf or timestamps.** Durations stay (`30s`), with no wall clock.
+- **No optionals: a read that may be absent is proven present at compile time** (`has`, `in`), so
+  a missing field is an authoring error, never a silent deny. `body.discount < 10` against
+  `{"discount?": "number"}` does not compile; `!has(body.discount) || body.discount < 10` does.
 - **Undeclared names are compile errors,** even behind a short circuit. `true || typo` doesn't
   compile.
 

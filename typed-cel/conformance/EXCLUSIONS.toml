@@ -2941,3 +2941,15 @@ file = "parse"
 section = "repeat"
 case = "not"
 reason = "diverges: nesting is bounded"
+
+# ---------------------------------------------------------------------------------------------
+# diverges: absence must be proven
+#
+# A read that may be absent compiles only where something proves it present. The case reads a
+# bound `map` at a key with nothing guarding it and expects the value.
+# ---------------------------------------------------------------------------------------------
+[[exclude]]
+file = "fields"
+section = "map_fields"
+case = "map_field_access"
+reason = "diverges: absence must be proven"

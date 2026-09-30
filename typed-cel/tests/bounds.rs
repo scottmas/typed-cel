@@ -5,6 +5,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use support::{env, err};
 use typed_cel::CelLimits;
 
@@ -32,7 +33,10 @@ fn a_quadratic_comprehension_is_refused_at_build() {
     );
     // Two levels is legal, so the line is where the plan puts it and not wherever it fell.
     env()
-        .compile("a.all(x, b.exists(y, x.id == y.id))")
+        .compile(
+            "a.all(x, b.exists(y, x.id == y.id))",
+            &CompileOpts::default(),
+        )
         .expect("two nested comprehensions must still compile");
 }
 
@@ -124,7 +128,9 @@ fn bounds_are_configurable_with_documented_defaults() {
         ..CelLimits::default()
     };
     let env = typed_cel::CelEnvironment::with_limits(strict);
-    assert!(env.compile("1 == 1 && 1 == 1 && 1 == 1").is_err());
+    assert!(env
+        .compile("1 == 1 && 1 == 1 && 1 == 1", &CompileOpts::default())
+        .is_err());
 }
 
 #[test]
@@ -134,7 +140,10 @@ fn a_system_expression_is_bounded_too_but_differently() {
     // assertion runs once per request, a system expression runs on every tick, forever.
     let env = env();
     let program = env
-        .compile("listeners.exists(p, listeners[p].listen.elapsed > 10s)")
+        .compile(
+            "listeners.exists(p, listeners[p].listen.elapsed > 10s)",
+            &CompileOpts::default(),
+        )
         .expect("the listen(*) shape must compile");
 
     // 10 000 listeners, evaluated inside a tick budget.

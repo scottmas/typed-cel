@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! column 1   P.evaluate(K ∪ U)                          the original, over bound values
-//! column 2   env.specialize(P, K)?.evaluate(U)          the residual, over bound values
+//! column 2   env.compile(P, {known: K})?.evaluate(U)      the residual, over bound values
 //! column 3   residual.decide(JsonFacts(U))              the residual, read by field
 //! ```
 //!

@@ -11,6 +11,7 @@ mod harness;
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -31,9 +32,11 @@ fn fail_on(what: &str, mismatches: &[String]) {
 }
 
 fn compile_typed(src: &str, whence: &str) -> typed_cel::CelProgram {
-    roster().compile(src).unwrap_or_else(|e| {
-        panic!("{whence}: the typed generator produced `{src}`, which does not compile:\n{e}")
-    })
+    roster()
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| {
+            panic!("{whence}: the typed generator produced `{src}`, which does not compile:\n{e}")
+        })
 }
 
 /// Every op the backend has, reached by the typed generator or the conformance corpus — an op
@@ -129,7 +132,9 @@ fn the_generators_reach_every_op() {
     let mut g = Gen::new(SEEDS[0] ^ 0x4057);
     for _ in 0..100 {
         let src = g.host_bool(4);
-        let program = hosts.compile(&src).expect("the host generator compiles");
+        let program = hosts
+            .compile(&src, &CompileOpts::default())
+            .expect("the host generator compiles");
         reached.extend(FastProgram::new(&program).expect("lowers").op_names());
     }
     // Tag tests over a closed string set, in value and branch position: the shapes
@@ -141,7 +146,9 @@ fn the_generators_reach_every_op() {
         r#"e == "a""#,
         r#"(e == "a" || e == "b") ? e == "b" : false"#,
     ] {
-        let program = tags.compile(src).expect("compiles");
+        let program = tags
+            .compile(src, &CompileOpts::default())
+            .expect("compiles");
         reached.extend(FastProgram::new(&program).expect("lowers").op_names());
     }
     let want: BTreeSet<&str> = EVERY_OP.iter().copied().collect();
@@ -332,10 +339,18 @@ fn under_any_matches_the_exists_shape() {
         let roots_json = serde_json::json!(roots);
         for (shape, max_unroll) in [("unrolled", 256usize), ("loop", 0usize)] {
             let env = under_env(max_unroll);
-            let original = env.compile(SRC).expect("compiles");
+            let original = env.compile(SRC, &CompileOpts::default()).expect("compiles");
             let mut known = env.activation();
             known.bind("roots", &roots_json).expect("binds");
-            let residual = env.specialize(&original, &known).expect("specializes");
+            let residual = env
+                .compile(
+                    original.source(),
+                    &CompileOpts {
+                        known: Some(&known),
+                        ..Default::default()
+                    },
+                )
+                .expect("specializes");
             let code = FastProgram::new(&residual).expect("lowers");
             if !roots.is_empty() {
                 assert!(
@@ -412,10 +427,18 @@ fn under_any_with_a_host_prefix_trims_every_trailing_slash() {
         let roots_json = serde_json::json!(roots);
         for (shape, max_unroll) in [("unrolled", 256usize), ("loop", 0usize)] {
             let env = under_env_with_dir_prefix(max_unroll);
-            let original = env.compile(SRC).expect("compiles");
+            let original = env.compile(SRC, &CompileOpts::default()).expect("compiles");
             let mut known = env.activation();
             known.bind("roots", &roots_json).expect("binds");
-            let residual = env.specialize(&original, &known).expect("specializes");
+            let residual = env
+                .compile(
+                    original.source(),
+                    &CompileOpts {
+                        known: Some(&known),
+                        ..Default::default()
+                    },
+                )
+                .expect("specializes");
             let code = FastProgram::new(&residual).expect("lowers");
             if !roots.is_empty() {
                 assert!(
@@ -455,13 +478,22 @@ fn under_any_with_a_host_prefix_trims_every_trailing_slash() {
 
     // The boundary row the `r + "/"` spelling gets wrong.
     let env = under_env_with_dir_prefix(0);
-    let original = env.compile(SRC).expect("compiles");
+    let original = env.compile(SRC, &CompileOpts::default()).expect("compiles");
     let mut known = env.activation();
     known
         .bind("roots", &serde_json::json!(["/ws/"]))
         .expect("binds");
-    let code =
-        FastProgram::new(&env.specialize(&original, &known).expect("specializes")).expect("lowers");
+    let code = FastProgram::new(
+        &env.compile(
+            original.source(),
+            &CompileOpts {
+                known: Some(&known),
+                ..Default::default()
+            },
+        )
+        .expect("specializes"),
+    )
+    .expect("lowers");
     let mut act = env.runtime().activation();
     act.bind_fact("p", CelValue::Str("/ws/x".into()));
     assert_eq!(code.eval(&act).map_err(|e| e.to_string()), Ok(true));
@@ -491,7 +523,13 @@ fn specialized_generated_programs_answer_as_unspecialized() {
                 };
                 let mut known = env.activation();
                 known.bind(known_name, known_value).expect("binds");
-                let residual = match env.specialize(&original, &known) {
+                let residual = match env.compile(
+                    original.source(),
+                    &CompileOpts {
+                        known: Some(&known),
+                        ..Default::default()
+                    },
+                ) {
                     Ok(r) => r,
                     Err(e) => {
                         mismatches.push(format!("{src}\n  specialize over `{known_name}`: {e}"));
@@ -552,13 +590,21 @@ fn the_rewritten_shapes_answer_as_written() {
     let mut compared = 0usize;
     let mut mismatches = Vec::new();
     for src in shapes {
-        let original = env.compile(src).expect("compiles");
+        let original = env.compile(src, &CompileOpts::default()).expect("compiles");
         for k in ["a", "b", "z"] {
             for t in [true, false] {
                 let mut known = env.activation();
                 known.bind("k", &serde_json::json!(k)).expect("binds");
                 known.bind("t", &serde_json::json!(t)).expect("binds");
-                let residual = env.specialize(&original, &known).expect("specializes");
+                let residual = env
+                    .compile(
+                        original.source(),
+                        &CompileOpts {
+                            known: Some(&known),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("specializes");
                 for x in [Some(true), Some(false), None] {
                     for y in [Some(true), Some(false), None] {
                         let mut full = env.activation();

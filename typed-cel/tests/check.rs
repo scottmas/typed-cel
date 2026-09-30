@@ -7,6 +7,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use support::{err, err_mentions, ok};
 
 #[test]
@@ -104,7 +105,7 @@ fn field_access_on_a_scalar_is_an_error() {
 #[test]
 fn field_access_on_a_map_yields_the_value_type() {
     // Maps have no declared field set; records do. `m` is `map(string, double)`.
-    ok("m.anything > 1");
+    ok("has(m.anything) && m.anything > 1");
     err("m.anything == 'x'");
 }
 
@@ -121,7 +122,7 @@ fn a_dyn_must_be_narrowed() {
         "body.blob == null",
         "body.blob != null",
         "'k' in body.blob",
-        "body.open['k'] == null",
+        "'k' in body.open && body.open['k'] == null",
         "body.open == {}",
         "{} == body.open",
         "body.open.exists(k, k == 'a')",
@@ -132,7 +133,7 @@ fn a_dyn_must_be_narrowed() {
     // so does its size, which asks nothing of the values.
     ok("has(body.open.k)");
     ok("size(body.open) > 0");
-    err_mentions("body.open['k'] > 1", ["dyn"].as_ref());
+    err_mentions("'k' in body.open && body.open['k'] > 1", ["dyn"].as_ref());
 }
 
 #[test]
@@ -217,7 +218,10 @@ fn every_check_error_is_available() {
     // boundary meant it could never have them.
     let env = support::env();
     let err = env
-        .compile("body.no_such_a == 'x' && session.no_such_b == 'y'")
+        .compile(
+            "body.no_such_a == 'x' && session.no_such_b == 'y'",
+            &CompileOpts::default(),
+        )
         .expect_err("two unknown fields must not compile");
 
     let all = err.all();
@@ -237,7 +241,11 @@ fn every_check_error_is_available() {
     );
 
     // Empty for anything that is not a check failure, so a caller can call it unconditionally.
-    assert!(env.compile("body.user_id ==").unwrap_err().all().is_empty());
+    assert!(env
+        .compile("body.user_id ==", &CompileOpts::default())
+        .unwrap_err()
+        .all()
+        .is_empty());
 }
 
 #[test]
@@ -252,7 +260,7 @@ fn a_removal_message_names_the_dialect_not_the_product() {
         ("body.user_id.orValue('x') == 'y'", "optional"),
     ] {
         let rendered = env
-            .compile(expr)
+            .compile(expr, &CompileOpts::default())
             .expect_err(&format!("`{expr}` must not compile"))
             .to_string();
         assert!(rendered.contains(must_say), "{expr}: {rendered}");
@@ -294,13 +302,34 @@ fn a_record_is_built_without_naming_rc() {
             .with_index(typed_cel::CelTy::Str, typed_cel::CelTy::Str),
     );
 
-    assert!(env.compile("sess.user_id == 'u'").is_ok());
-    // The optional field type-checks; it is the RUNTIME that treats a missing one as an error.
-    assert!(env.compile("opt.a == opt.b").is_ok());
-    // The index signature keeps an undeclared key nameable.
-    assert!(env.compile("hdrs['x-trace-id'] == 'abc'").is_ok());
+    assert!(env
+        .compile("sess.user_id == 'u'", &CompileOpts::default())
+        .is_ok());
+    // An optional field is nameable, but a read of it must be PROVEN present (proven presence):
+    // unguarded it is refused, guarded it compiles.
+    assert!(env
+        .compile("opt.a == opt.b", &CompileOpts::default())
+        .is_err());
+    assert!(env
+        .compile(
+            "has(opt.a) && has(opt.b) && opt.a == opt.b",
+            &CompileOpts::default()
+        )
+        .is_ok());
+    // The index signature keeps an undeclared key nameable — and, like an optional field, a read
+    // of one is proven present first.
+    assert!(env
+        .compile("hdrs['x-trace-id'] == 'abc'", &CompileOpts::default())
+        .is_err());
+    assert!(env
+        .compile(
+            "'x-trace-id' in hdrs && hdrs['x-trace-id'] == 'abc'",
+            &CompileOpts::default()
+        )
+        .is_ok());
     assert!(
-        env.compile("sess.nope == 'u'").is_err(),
+        env.compile("sess.nope == 'u'", &CompileOpts::default())
+            .is_err(),
         "a builder-made record must still catch an unknown field"
     );
 }
@@ -359,8 +388,97 @@ fn a_dyn_is_refused_wherever_it_is_used() {
 #[test]
 fn a_fold_over_an_empty_range_still_demands_what_its_body_names() {
     let p = support::env()
-        .compile("[].exists(x, body.name.startsWith(x))")
+        .compile(
+            "[].exists(x, body.name.startsWith(x))",
+            &CompileOpts::default(),
+        )
         .expect("checks");
     let rendered = p.demand().to_string();
     assert!(rendered.contains("body ▸ \"name\""), "{rendered}");
+}
+
+/// `unsafe_map` (`added: unsafe_map`) differs from `map` ONLY in the presence rules. To every
+/// operator it is a map: whatever compiles against a `map` compiles against it, to the same answer.
+#[test]
+fn an_unsafe_map_is_a_map_to_every_operator() {
+    use typed_cel::{CelEnvironment, CelTy};
+    let mut env = CelEnvironment::new();
+    env.declare("u", CelTy::unsafe_map(CelTy::Str, CelTy::Num));
+    env.declare("m", CelTy::map(CelTy::Str, CelTy::Num));
+    let binding = serde_json::json!({"a": 2});
+    let answer = |src: &str| {
+        let program = env
+            .compile(src, &CompileOpts::default())
+            .unwrap_or_else(|e| panic!("`{src}`: {e}"));
+        let mut act = env.activation();
+        act.bind("u", &binding).unwrap();
+        act.bind("m", &binding).unwrap();
+        program
+            .evaluate(&act)
+            .unwrap_or_else(|e| panic!("`{src}`: {e}"))
+    };
+    // A READ is where the two differ — `m['a']` must be proven present, `u['a']` need not be
+    // (`tests/presence.rs`) — so each read form carries the guard a `map` needs; on `u` it is
+    // redundant and changes nothing.
+    for form in [
+        "'a' in X && X['a'] > 1",
+        "'a' in X",
+        "size(X) > 0",
+        "X.all(k, X[k] > 0)",
+        "X.exists(k, k == 'a')",
+        "has(X.a) && X.a > 1",
+        "X == m",
+        "X == u",
+        "[X, m].size() == 2",
+        "(true ? X : m) == m",
+    ] {
+        let over_u = form.replace('X', "u");
+        let over_m = form.replace('X', "m");
+        assert_eq!(
+            answer(&over_u),
+            answer(&over_m),
+            "`{over_u}` and `{over_m}` disagree"
+        );
+    }
+}
+
+#[test]
+fn unsafe_map_prints_its_name() {
+    use typed_cel::{CelEnvironment, CelTy};
+    assert_eq!(
+        CelTy::unsafe_map(CelTy::Str, CelTy::Num).name(),
+        "unsafe_map(string, double)"
+    );
+    // A diagnostic quoting the type spells it the way the declarer wrote it.
+    let mut env = CelEnvironment::new();
+    env.declare("u", CelTy::unsafe_map(CelTy::Str, CelTy::Num));
+    let e = env
+        .compile("u + 1 > 0", &CompileOpts::default())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("unsafe_map(string, double)"), "{e}");
+}
+
+/// The optional-syntax refusals say what is TRUE: absence is real, and it is proven away with
+/// `has()` / `in` — not that every declared path is present, which stopped being the design.
+#[test]
+fn the_optional_syntax_message_tells_the_truth() {
+    use typed_cel::{CelEnvironment, CelTy, Record};
+    let mut env = CelEnvironment::new();
+    env.declare(
+        "body",
+        Record::new("body", [("x", CelTy::Num), ("y", CelTy::Num)]).with_optional(["x"]),
+    );
+    for src in ["optional(1) == 1", "body.y.orValue(0) == 1", "body.?x == 1"] {
+        let e = env
+            .compile(src, &CompileOpts::default())
+            .expect_err("optional syntax is removed")
+            .to_string();
+        assert!(e.contains("has("), "`{src}`: {e}");
+        assert!(e.contains("in m"), "`{src}`: {e}");
+        assert!(
+            !e.contains("every declared path is present"),
+            "`{src}`: {e}"
+        );
+    }
 }

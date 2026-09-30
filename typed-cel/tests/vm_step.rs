@@ -12,6 +12,7 @@ mod support;
 #[path = "support/scripted.rs"]
 mod scripted;
 
+use typed_cel::CompileOpts;
 use std::sync::Arc;
 
 use scripted::{Scripted, Slot};
@@ -84,9 +85,13 @@ fn activation(env: &CelEnvironment, lazies: &[(&str, &Arc<Scripted>)]) -> CelAct
 }
 
 /// Compile, emit, and start a run with the given lazies bound.
+///
+/// Through the unchecked-presence door: a member a view fails to supply (`v.missing`) is what the
+/// error-absorption cases here measure, and the checker refuses that read (proven presence).
 fn start(src: &str, lazies: &[(&str, &Arc<Scripted>)]) -> (VmRun, CelBindings) {
     let env = env();
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = typed_cel::fork::compile_unchecked_presence(&env, src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     let bc = typed_cel::emit(&program).expect("emits");
     (
         VmRun::new(Arc::new(bc)),
@@ -97,7 +102,8 @@ fn start(src: &str, lazies: &[(&str, &Arc<Scripted>)]) -> (VmRun, CelBindings) {
 /// `CelProgram::evaluate` of `src` over the given lazies.
 fn evaluate(src: &str, lazies: &[(&str, &Arc<Scripted>)]) -> Result<bool, CelError> {
     let env = env();
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = typed_cel::fork::compile_unchecked_presence(&env, src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     program.evaluate(&activation(&env, lazies))
 }
 
@@ -179,7 +185,7 @@ fn resume_equals_evaluate_when_everything_is_ready() {
         let mut g = Gen::new(seed);
         let src = g.typed_bool(4);
         let program = env
-            .compile(&src)
+            .compile(&src, &CompileOpts::default())
             .unwrap_or_else(|e| panic!("seed {seed}: `{src}` does not compile: {e}"));
         let bc = Arc::new(typed_cel::emit(&program).expect("emits"));
         let json = typed_json(&mut g);
@@ -373,7 +379,7 @@ fn eval_reads_pending_as_the_tree_walker_does() {
         ("v.x == 1.0", None),
         ("false || v.x == 1.0", None),
     ] {
-        let program = env.compile(src).unwrap();
+        let program = env.compile(src, &CompileOpts::default()).unwrap();
         let bc = typed_cel::emit(&program).unwrap();
         let act = activation(&env, &[("v", &v)]);
         let walked = program.evaluate(&act);
@@ -439,7 +445,7 @@ fn a_waiting_run_crosses_threads() {
 #[test]
 fn a_template_instantiates_fresh_bindings() {
     let env = env();
-    let program = env.compile("v.x == n").unwrap();
+    let program = env.compile("v.x == n", &CompileOpts::default()).unwrap();
     let bc = Arc::new(typed_cel::emit(&program).unwrap());
     let template = || {
         let mut act = env.activation();
@@ -524,7 +530,7 @@ fn a_paused_run_outlives_its_bindings_clone() {
             .expect("binds");
         act.into_bindings()
     };
-    let program = env.compile(src).expect("compiles");
+    let program = env.compile(src, &CompileOpts::default()).expect("compiles");
     let mut run = VmRun::new(Arc::new(typed_cel::emit(&program).expect("emits")));
     let vm = Vm::new();
     let first = bind();

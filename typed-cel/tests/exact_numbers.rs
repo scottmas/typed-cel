@@ -6,6 +6,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::Arc;
 
 use typed_cel::{
@@ -29,16 +30,20 @@ fn body_env(fields: &[(&str, CelTy)]) -> CelEnvironment {
 /// `src` over `body`, bound from `doc`.
 fn eval_body(fields: &[(&str, CelTy)], src: &str, doc: Value) -> Result<bool, String> {
     let env = body_env(fields);
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = env
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     let mut act = env.activation();
     act.bind("body", &doc).map_err(|e| e.to_string())?;
     program.evaluate(&act).map_err(|e| e.to_string())
 }
 
-/// `src` over no bindings at all.
+/// `src` over no bindings at all — through the unchecked-presence door: some cases read a map
+/// literal at a key it may lack, to pin how numbers name keys at run time.
 fn eval(src: &str) -> Result<bool, String> {
     let env = CelEnvironment::new();
-    let program = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let program = typed_cel::fork::compile_unchecked_presence(&env, src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     program
         .evaluate(&env.activation())
         .map_err(|e| e.to_string())
@@ -47,7 +52,9 @@ fn eval(src: &str) -> Result<bool, String> {
 /// `src` over `body`, streamed from `text` one byte-fragment at a time; the run's final verdict.
 fn streamed(fields: &[(&str, CelTy)], src: &str, text: &str) -> Result<bool, String> {
     let env = body_env(fields);
-    let compiled = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let compiled = env
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     let code = Arc::new(emit(&compiled).expect("the program emits"));
     let p = StreamedProgram::new(
         Arc::new(Vm::new()),
@@ -97,7 +104,7 @@ fn u64_max_is_exact() {
     let f = [("n", CelTy::Num)];
     let src = "body.n == 18446744073709551615";
     let env = body_env(&f);
-    env.compile(src)
+    env.compile(src, &CompileOpts::default())
         .expect("an integer literal up to u64::MAX is the one number type, held exactly");
     assert_eq!(eval_body(&f, src, json!({"n": u64::MAX})), Ok(true));
     assert_eq!(
@@ -152,7 +159,9 @@ fn req_program(src: &str) -> FastProgram {
         "req",
         record("req", &[("id", CelTy::Num), ("n", CelTy::Num)]),
     );
-    let p = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let p = env
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     FastProgram::new(&p).expect("lowers")
 }
 
@@ -216,7 +225,9 @@ fn one_numeric_type_still_mixes_freely() {
         "2.0 in [1, 2, 3]",
         "x in [1.0, 2.0]",
     ] {
-        let p = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let p = env
+            .compile(src, &CompileOpts::default())
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
         let mut act = env.activation();
         act.bind("x", &json!(2)).unwrap();
         assert_eq!(
@@ -274,12 +285,14 @@ fn a_uint_literal_with_a_suffix_is_still_refused() {
     // Refused (as `removed: uint` or, where the duration shorthand reads `1u` first, as an
     // unknown unit): the unsuffixed spelling is the one number type, the suffixed one is not.
     for src in ["1u == 1", "18446744073709551615u == 1", "0xFFu == 255"] {
-        env.compile(src).expect_err(src);
+        env.compile(src, &CompileOpts::default()).expect_err(src);
     }
-    assert!(env.compile("18446744073709551615 == 1").is_ok());
+    assert!(env
+        .compile("18446744073709551615 == 1", &CompileOpts::default())
+        .is_ok());
     // Past `u64::MAX` there is no exact integer to hold, so the literal is refused.
     let err = env
-        .compile("18446744073709551616 == 1")
+        .compile("18446744073709551616 == 1", &CompileOpts::default())
         .expect_err("past u64::MAX")
         .to_string();
     assert!(err.contains("invalid int literal"), "{err}");
@@ -290,19 +303,29 @@ fn residuals_print_integers_exactly() {
     let mut env = CelEnvironment::new();
     env.declare("policy", record("policy", &[("id", CelTy::Num)]));
     env.declare("req", record("req", &[("id", CelTy::Num)]));
-    let p = env.compile("policy.id == req.id").unwrap();
+    let p = env
+        .compile("policy.id == req.id", &CompileOpts::default())
+        .unwrap();
     let mut known = env.activation();
     known
         .bind("policy", &json!({"id": 9007199254740993u64}))
         .unwrap();
-    let residual = env.specialize(&p, &known).expect("specializes");
+    let residual = env
+        .compile(
+            p.source(),
+            &CompileOpts {
+                known: Some(&known),
+                ..Default::default()
+            },
+        )
+        .expect("specializes");
     assert!(
         residual.source().contains("9007199254740993"),
         "{}",
         residual.source()
     );
     let again = env
-        .compile(residual.source())
+        .compile(residual.source(), &CompileOpts::default())
         .expect("the residual compiles");
     let mut act = env.activation();
     act.bind("req", &json!({"id": NEIGHBOUR})).unwrap();
@@ -384,7 +407,9 @@ fn a_scanned_loop_is_exact() {
         ),
     ];
     for (src, list, want) in cases {
-        let p = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let p = env
+            .compile(src, &CompileOpts::default())
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
         let fast = FastProgram::new(&p).expect("lowers");
         assert!(
             fast.scanned_loops() >= 1,

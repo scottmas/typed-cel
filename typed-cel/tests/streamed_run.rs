@@ -8,6 +8,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::Arc;
 
 use serde_json::json;
@@ -51,7 +52,9 @@ fn program(ty: Option<CelTy>, src: &str) -> StreamedProgram {
     let mut env = CelEnvironment::new();
     env.declare("n", CelTy::Num);
     env.declare("body", ty.expect("declare `body`"));
-    let compiled = env.compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let compiled = env
+        .compile(src, &CompileOpts::default())
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     let code = Arc::new(emit(&compiled).expect("the program emits"));
     let mut act = env.activation();
     act.bind("n", &json!(3)).expect("n binds");
@@ -389,7 +392,9 @@ fn an_unstreamable_program_is_refused_when_built() {
         "body",
         record_opt("body", &[("tags", CelTy::list(CelTy::Str))], &[]),
     );
-    let compiled = env.compile(r#"body.tags.size() > 1.0"#).unwrap();
+    let compiled = env
+        .compile(r#"body.tags.size() > 1.0"#, &CompileOpts::default())
+        .unwrap();
     let code = Arc::new(emit(&compiled).unwrap());
     let got = StreamedProgram::new(
         Arc::new(Vm::new()),

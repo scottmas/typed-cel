@@ -74,8 +74,16 @@ impl P {
     fn unify(&self, actual: &CelTy, binds: &mut Vec<(char, CelTy)>) -> bool {
         match self {
             P::Prim(p) => *actual == p.ty(),
-            P::Var(c) => match binds.iter().find(|(n, _)| n == c) {
-                Some((_, bound)) => bound == actual,
+            // A `map` and an `unsafe_map` of the same parts bind one variable; the binding becomes
+            // their join (a plain `map` where either side is one).
+            P::Var(c) => match binds.iter_mut().find(|(n, _)| n == c) {
+                Some((_, bound)) => match bound.join_shape(actual) {
+                    Some(joined) => {
+                        *bound = joined;
+                        true
+                    }
+                    None => false,
+                },
                 None => {
                     binds.push((*c, actual.clone()));
                     true
@@ -85,9 +93,9 @@ impl P {
                 CelTy::List(el) => e.unify(el, binds),
                 _ => false,
             },
-            P::Map(k, v) => match actual {
-                CelTy::Map(ak, av) => k.unify(ak, binds) && v.unify(av, binds),
-                _ => false,
+            P::Map(k, v) => match actual.map_parts() {
+                Some((ak, av)) => k.unify(ak, binds) && v.unify(av, binds),
+                None => false,
             },
         }
     }

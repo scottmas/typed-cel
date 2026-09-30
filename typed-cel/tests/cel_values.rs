@@ -5,6 +5,7 @@
 //! fails here rather than in a caller.
 
 use typed_cel::fork;
+use typed_cel::CompileOpts;
 use typed_cel::{
     emit, CelActivation, CelBytecode, CelEnvironment, CelKey, CelProgram, CelRuntime, CelTy,
     CelValue, Record, Vm,
@@ -50,7 +51,9 @@ fn same(a: &CelValue, b: &CelValue) -> bool {
 fn a_bytes_value_binds_and_compares() {
     let mut env = CelEnvironment::new();
     env.declare("x", CelTy::Bytes);
-    let p = env.compile(r#"x == b"/ws/\xff""#).expect("compiles");
+    let p = env
+        .compile(r#"x == b"/ws/\xff""#, &CompileOpts::default())
+        .expect("compiles");
     let mut act = env.runtime().activation();
     act.bind_fact("x", CelValue::Bytes(b"/ws/\xff"[..].into()));
     is_true(&p, &act);
@@ -72,7 +75,7 @@ fn a_record_value_is_selectable() {
         ),
     );
     let p = env
-        .compile(r#"r.a == "x" && r.n == 3 && r.b"#)
+        .compile(r#"r.a == "x" && r.n == 3 && r.b"#, &CompileOpts::default())
         .expect("compiles");
     let mut act = env.runtime().activation();
     act.bind_fact(
@@ -96,7 +99,7 @@ fn a_list_value_is_iterable() {
         CelValue::list([CelValue::Str("a".into()), CelValue::Str("b".into())]),
     );
     for src in [r#"l.exists(s, s == "b")"#, "size(l) == 2"] {
-        let p = env.compile(src).expect("compiles");
+        let p = env.compile(src, &CompileOpts::default()).expect("compiles");
         is_true(&p, &act);
     }
 }
@@ -105,15 +108,19 @@ fn a_list_value_is_iterable() {
 fn null_binds_as_null() {
     let mut env = CelEnvironment::new();
     env.declare("z", CelTy::Null);
-    let p = env.compile("z == null").expect("compiles");
+    let p = env
+        .compile("z == null", &CompileOpts::default())
+        .expect("compiles");
     let mut act = env.runtime().activation();
     act.bind_fact("z", CelValue::Null);
     is_true(&p, &act);
 }
 
-/// Bytecode for an expression of any result type, checked against an empty roster.
+/// Bytecode for an expression of any result type, checked against an empty roster — presence
+/// observed, not applied: `{}.a` pins the error a missing key renders.
 fn any_result(src: &str) -> CelBytecode {
-    let p = fork::compile_any(&CelEnvironment::new(), src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let p = fork::compile_any_unchecked_presence(&CelEnvironment::new(), src)
+        .unwrap_or_else(|e| panic!("{src}: {e}"));
     emit(&p).expect("emits")
 }
 
@@ -160,7 +167,9 @@ fn bind_fact_does_not_consult_the_roster() {
 
     let mut declaring = CelEnvironment::new();
     declaring.declare("anything", CelTy::Num);
-    let p = declaring.compile("anything == 1").expect("compiles");
+    let p = declaring
+        .compile("anything == 1", &CompileOpts::default())
+        .expect("compiles");
     is_true(&p, &act);
 }
 
@@ -170,7 +179,9 @@ fn a_runtime_outlives_its_environment() {
         let mut env = CelEnvironment::new();
         env.declare("x", CelTy::Num);
         // `1.0`, not `1`: `Num + int literal` is an evaluation error in this dialect.
-        let p = env.compile("x + 1.0 == 1000.0").expect("compiles");
+        let p = env
+            .compile("x + 1.0 == 1000.0", &CompileOpts::default())
+            .expect("compiles");
         (env.runtime(), p)
         // `env` drops here.
     };
@@ -210,7 +221,7 @@ fn a_record_binds_and_reads_back() {
         ]),
     );
     let p = env
-        .compile(r#"r.a == 1.0 && r.b == "x""#)
+        .compile(r#"r.a == 1.0 && r.b == "x""#, &CompileOpts::default())
         .expect("compiles");
     is_true(&p, &act);
     let read = fork::compile_any(&env, "r.b").expect("compiles");
@@ -225,9 +236,12 @@ fn a_record_binds_and_reads_back() {
 fn a_duration_keeps_nanoseconds() {
     let env = CelEnvironment::new();
     let p = env
-        .compile_returning(
+        .compile(
             "[duration('1ns')][0] + duration('1ns') > duration('1ns')",
-            &CelTy::Bool,
+            &CompileOpts {
+                returning: Some(&CelTy::Bool),
+                ..Default::default()
+            },
         )
         .expect("compiles");
     is_true(&p, &env.runtime().activation());
@@ -243,8 +257,12 @@ fn a_duration_keeps_nanoseconds() {
         }),
     )
     .expect("registers");
-    let p = env.compile("tick() < duration('2ns')").expect("compiles");
+    let p = env
+        .compile("tick() < duration('2ns')", &CompileOpts::default())
+        .expect("compiles");
     is_true(&p, &env.runtime().activation());
-    let p = env.compile("tick() > duration('0ns')").expect("compiles");
+    let p = env
+        .compile("tick() > duration('0ns')", &CompileOpts::default())
+        .expect("compiles");
     is_true(&p, &env.runtime().activation());
 }

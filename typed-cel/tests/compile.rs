@@ -6,6 +6,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use support::{env, err, err_raw};
 use typed_cel::{CelEnvironment, CelError, CelProgram, CelTy};
 
@@ -118,7 +119,8 @@ fn one_environment_serves_many_expressions() {
         "body.amount > 100",
         "body.documents.all(d, d.owner_id == session.user_id)",
     ] {
-        env.compile(expr).unwrap_or_else(|e| panic!("{expr}: {e}"));
+        env.compile(expr, &CompileOpts::default())
+            .unwrap_or_else(|e| panic!("{expr}: {e}"));
     }
 }
 
@@ -129,7 +131,9 @@ fn no_custom_functions_are_registered() {
     // And the runtime `Context` this crate builds has none either: an activation over an empty
     // environment resolves nothing but the standard library.
     let env = CelEnvironment::new();
-    assert!(env.compile("is_owner('x')").is_err());
+    assert!(env
+        .compile("is_owner('x')", &CompileOpts::default())
+        .is_err());
 }
 
 #[test]
@@ -149,7 +153,7 @@ fn a_schema_translation_failure_is_its_own_error() {
 }
 
 fn err_raw_in(env: &CelEnvironment, expr: &str) -> CelError {
-    match env.compile(expr) {
+    match env.compile(expr, &CompileOpts::default()) {
         Ok(_) => panic!("expected `{expr}` to fail"),
         Err(e) => e,
     }
@@ -177,7 +181,7 @@ fn shape_env() -> CelEnvironment {
 
 fn shapes(expr: &str) -> Vec<(String, Option<String>, Option<String>)> {
     let program = shape_env()
-        .compile(expr)
+        .compile(expr, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("{expr}: {e}"));
     program
         .conjuncts()
@@ -281,7 +285,9 @@ fn disjunction_is_not_flattened() {
 fn the_query_does_not_expose_the_ast() {
     // The returned type is OWNED and names no absorbed type, so making the fork private did not
     // have to revisit this API. Compiling this at all is the assertion.
-    let program: CelProgram = shape_env().compile("up > 40s && flag").unwrap();
+    let program: CelProgram = shape_env()
+        .compile("up > 40s && flag", &CompileOpts::default())
+        .unwrap();
     let conjuncts: Vec<typed_cel::Conjunct> = program.conjuncts();
     let _: &[typed_cel::Segment] = &conjuncts[0].path;
     let _: &Option<String> = &conjuncts[0].operator;
@@ -299,7 +305,9 @@ fn a_comprehension_is_one_opaque_conjunct() {
         "m",
         CelTy::map(CelTy::Str, support::record("entry", &[("n", CelTy::Num)])),
     );
-    let program = e.compile("flag && m.exists(k, m[k].n > 0.0)").unwrap();
+    let program = e
+        .compile("flag && m.exists(k, m[k].n > 0.0)", &CompileOpts::default())
+        .unwrap();
     let conjuncts = program.conjuncts();
     assert_eq!(conjuncts.len(), 2, "{conjuncts:?}");
     assert_eq!(conjuncts[1].operator, None);

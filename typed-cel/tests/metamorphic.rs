@@ -17,6 +17,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use typed_cel::CompileOpts;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -49,7 +50,7 @@ fn render(json: &[(&str, J)]) -> String {
 }
 
 fn compile(env: &CelEnvironment, src: &str, whence: &str) -> typed_cel::CelProgram {
-    env.compile(src)
+    env.compile(src, &CompileOpts::default())
         .unwrap_or_else(|e| panic!("{whence}: `{src}` does not compile:\n{e}"))
 }
 
