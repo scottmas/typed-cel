@@ -67,12 +67,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut env = CelEnvironment::new();
     let account = Record::new("account", [("owner_id", CelTy::Str), ("tier", CelTy::Str)]);
     let body = Record::new("body", [("account", account.into())]);
-    env.declare("req", Record::new("req", [("user", CelTy::Str), ("body", body.into())]));
+    let req = Record::new(
+        "req",
+        [("user", CelTy::Str), ("nick", CelTy::Str), ("body", body.into())],
+    );
+    env.declare("req", req.with_optional(["nick"]));
 
     // Mistakes are compile errors, not runtime surprises.
     let cond = CompileOpts::default(); // a condition: `bool`, nothing known yet
     assert!(env.compile("req.usr == 'a'", &cond).is_err()); // no such field
     assert!(env.compile("req.user == 1", &cond).is_err()); // string vs number
+    assert!(env.compile("req.nick == 'a'", &cond).is_err()); // `nick` may be absent
+    assert!(env.compile("has(req.nick) && req.nick == 'a'", &cond).is_ok()); // proven present
 
     let program = env.compile(
         r#"req.body.account.owner_id == req.user && req.body.account.tier == "gold""#,
@@ -158,7 +164,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Static: bind the policy once, when it loads, and compile with it known.
     let mut known = env.activation();
     known.bind("policy", &json!({ "roots": ["/srv/app", "/var/cache/app", "/tmp"] }))?;
-    let residual = env.compile(source, &CompileOpts { known: Some(&known), ..Default::default() })?;
+    let opts = CompileOpts { known: Some(&known), ..Default::default() };
+    let residual = env.compile(source, &opts)?;
 
     // The residual no longer reads `policy` at all.
     assert_eq!(residual.demand().roots().into_iter().collect::<Vec<_>>(), ["req"]);
@@ -183,8 +190,9 @@ types before it runs, typed-cel can answer questions about a program ahead of ti
 lean on those answers:
 
 - **Mistakes fail at compile time.** A misspelled field, a function that doesn't exist, a string
-  compared with a number, or a result that isn't a bool is an error when the expression is
-  compiled, pointing at the mistake. A typo can't hide behind a short circuit (`true || typo`
+  compared with a number, a result that isn't a bool, or a read of a field that may be absent
+  with nothing proving it present is an error when the expression is compiled, pointing at the
+  mistake. A typo can't hide behind a short circuit (`true || typo`
   doesn't compile), so a rule that loads is a rule that type-checks.
 - **Know what a program reads before it runs.** `program.demand()` lists every root and field path
   the program can touch, including literal map keys:
@@ -232,8 +240,8 @@ The dialect removes whatever would force a type check at run time:
 
 Every removal has a reason and a rejection test; the full table is in
 [`typed-cel/README.md`](./typed-cel/README.md#relationship-to-spec-cel). What remains still passes
-the [cel-spec](https://github.com/google/cel-spec) conformance corpus: 443 + 26 cases pass, 0 fail,
-and 1,875 cases that use the removed features are excluded, each with its reason.
+the [cel-spec](https://github.com/google/cel-spec) conformance corpus: 521 + 29 cases pass, 0 fail,
+and 1,794 cases that use the removed or changed features are excluded, each with its reason.
 
 ## Status
 
