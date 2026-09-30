@@ -77,8 +77,8 @@ $B --combine ablation.1.txt ablation.2.txt ablation.3.txt \
 
 Each cell: median ns/eval (allocations/eval).
 
-Measured after the fast-path work, the cost-model cliff fixes, the loop floor and the
-precomputed-head string-set matchers (see the fast-path ledger below).
+Measured after the fast-path work, the cost-model cliff fixes, the loop floor, the precomputed-head
+string-set matchers and numbers held exactly (see the fast-path ledger below).
 
 The headline puts the historical column (2) beside this run's columns. Every ratio below is read
 within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else from this one.
@@ -86,13 +86,13 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 <!-- ablation:begin -->
 | workload | Rust | (1) upstream | (2) typed tree † | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
 |---|---:|---:|---:|---:|---:|---:|
-| `fs_open_allow_all` | 8.0 ns (0) | 4812 ns (92) | 4612 ns (92) | 449 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 31.5 ns (0) |
-| `fs_open_13` | 34.6 ns (0) | 11.4 µs (248.8) | 11.0 µs (248.8) | 622 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 75.8 ns (0) |
-| `fs_open_1000` | 1390 ns (0) | 865.1 µs (17064.4) | 829.6 µs (17064.4) | 10.8 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 171 ns (0) |
-| `prefix_13` | 41.0 ns (0) | 12.4 µs† (247.8) | 11.7 µs (247.8) | 429 ns (0) | n/a (composite root: `policy.roots`) | 48.8 ns (0) |
-| `nested_fields` | 8.7 ns (0) | 9330 ns (193) | 8460 ns (193) | 243 ns (0) | 36.7 ns (0) | — (reads no policy) |
-| `all_items` | 18.0 ns (0) | 22.4 µs (455.4) | 20.7 µs (481.8) | 773 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `policy_residual` | 26.8 ns (0) | 6944 ns (143.1) | 6223 ns (143.1) | 558 ns (0) | n/a (composite root: `policy.methods`) | 60.2 ns (0) |
+| `fs_open_allow_all` | 8.1 ns (0) | 4810 ns (92) | 4612 ns (92) | 455 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 32.4 ns (0) |
+| `fs_open_13` | 33.2 ns (0) | 11.1 µs (248.8) | 11.0 µs (248.8) | 627 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 73.4 ns (0) |
+| `fs_open_1000` | 1386 ns (0) | 865.2 µs (17064.4) | 829.6 µs (17064.4) | 11.0 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 161 ns (0) |
+| `prefix_13` | 36.3 ns† (0) | 11.8 µs (247.8) | 11.7 µs (247.8) | 447 ns† (0) | n/a (composite root: `policy.roots`) | 48.0 ns† (0) |
+| `nested_fields` | 8.7 ns (0) | 8878 ns (193) | 8460 ns (193) | 239 ns (0) | 35.9 ns (0) | — (reads no policy) |
+| `all_items` | 18.0 ns (0) | 21.5 µs (455.4) | 20.7 µs (481.8) | 782 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `policy_residual` | 25.1 ns (0) | 6357 ns (143.1) | 6223 ns (143.1) | 548 ns (0) | n/a (composite root: `policy.methods`) | 63.2 ns (0) |
 
 † Column (2) is historical: measured on the typed dialect's first engine, since deleted (docs/PERFORMANCE.md, "Historical"). Every other column is this run.
 <!-- ablation:end -->
@@ -101,47 +101,47 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 
 | workload | Rust | (1) upstream | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
 |---|---:|---:|---:|---:|---:|
-| `prefix_1` | 11.3 ns (0) | 1529 ns (28.2) | 247 ns (0) | n/a (composite root: `policy.roots`) | 40.2 ns (0) |
-| `prefix_13` | 41.0 ns (0) | 12.4 µs† (247.8) | 429 ns (0) | n/a (composite root: `policy.roots`) | 48.8 ns (0) |
-| `prefix_1000` | 2479 ns (0) | 914.9 µs (18256.8) | 14.4 µs (0) | n/a (composite root: `policy.roots`) | 110 ns (0) |
-| `fs_open_allow_all` | 8.0 ns (0) | 4812 ns (92) | 449 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 31.5 ns (0) |
-| `fs_open_13` | 34.6 ns (0) | 11.4 µs (248.8) | 622 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 75.8 ns (0) |
-| `fs_open_1000` | 1390 ns (0) | 865.1 µs (17064.4) | 10.8 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 171 ns (0) |
-| `method_in_literal` | 7.2 ns (0) | 540 ns (13) | 125 ns (0) | 41.9 ns (0) | — (reads no policy) |
-| `method_in_policy` | 9.1 ns (0) | 561 ns† (13) | 166 ns (0) | n/a (composite root: `policy.methods`) | 40.9 ns (0) |
-| `user_eq` | 7.8 ns (0) | 341 ns (6.9) | 152 ns (0) | 41.1 ns (0) | 38.1 ns (0) |
-| `nested_fields` | 8.7 ns (0) | 9330 ns (193) | 243 ns (0) | 36.7 ns (0) | — (reads no policy) |
-| `short_circuit_first` | 7.2 ns (0) | 5068 ns (99.5) | 422 ns (0) | 32.6 ns (0) | — (reads no policy) |
-| `short_circuit_last` | 7.3 ns (0) | 8772 ns (175) | 739 ns (0) | 40.8 ns (0) | — (reads no policy) |
-| `all_items` | 18.0 ns (0) | 22.4 µs (455.4) | 773 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `exists_items` | 15.7 ns (0) | 19.2 µs (416.2) | 531 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `durations` | 7.1 ns (0) | 722 ns (10) | 150 ns† (0) | 37.0 ns (0) | — (reads no policy) |
-| `streamed_body_early` | — (streamed row) | 49.9 µs (579.2) | 39.4 µs (538) | 3139 ns (22.2) | — (streamed row) |
-| `streamed_body_late` | — (streamed row) | 49.7 µs (579.2) | 40.4 µs† (538) | 15.8 µs (63.2) | — (streamed row) |
-| `policy_residual` | 26.8 ns (0) | 6944 ns (143.1) | 558 ns (0) | n/a (composite root: `policy.methods`) | 60.2 ns (0) |
+| `prefix_1` | 10.4 ns (0) | 1455 ns (28.2) | 243 ns (0) | n/a (composite root: `policy.roots`) | 39.6 ns (0) |
+| `prefix_13` | 36.3 ns† (0) | 11.8 µs (247.8) | 447 ns† (0) | n/a (composite root: `policy.roots`) | 48.0 ns† (0) |
+| `prefix_1000` | 2343 ns† (0) | 881.3 µs (18256.8) | 14.7 µs (0) | n/a (composite root: `policy.roots`) | 110 ns (0) |
+| `fs_open_allow_all` | 8.1 ns (0) | 4810 ns (92) | 455 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 32.4 ns (0) |
+| `fs_open_13` | 33.2 ns (0) | 11.1 µs (248.8) | 627 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 73.4 ns (0) |
+| `fs_open_1000` | 1386 ns (0) | 865.2 µs (17064.4) | 11.0 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 161 ns (0) |
+| `method_in_literal` | 7.1 ns (0) | 546 ns (13) | 131 ns (0) | 38.7 ns (0) | — (reads no policy) |
+| `method_in_policy` | 9.0 ns (0) | 540 ns (13) | 179 ns (0) | n/a (composite root: `policy.methods`) | 37.9 ns (0) |
+| `user_eq` | 7.7 ns (0) | 322 ns (6.9) | 163 ns (0) | 39.8 ns (0) | 37.5 ns (0) |
+| `nested_fields` | 8.7 ns (0) | 8878 ns (193) | 239 ns (0) | 35.9 ns (0) | — (reads no policy) |
+| `short_circuit_first` | 7.2 ns (0) | 4718 ns (99.5) | 435 ns (0) | 32.5 ns (0) | — (reads no policy) |
+| `short_circuit_last` | 7.2 ns (0) | 8200 ns (175) | 723 ns (0) | 40.4 ns (0) | — (reads no policy) |
+| `all_items` | 18.0 ns (0) | 21.5 µs (455.4) | 782 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `exists_items` | 15.6 ns (0) | 19.9 µs (416.2) | 538 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `durations` | 7.1 ns (0) | 721 ns (10) | 149 ns (0) | 39.7 ns (0) | — (reads no policy) |
+| `streamed_body_early` | — (streamed row) | 50.1 µs (579.2) | 38.6 µs (538) | 3107 ns (22.2) | — (streamed row) |
+| `streamed_body_late` | — (streamed row) | 48.4 µs (579.2) | 38.4 µs (538) | 15.7 µs (63.2) | — (streamed row) |
+| `policy_residual` | 25.1 ns (0) | 6357 ns (143.1) | 548 ns (0) | n/a (composite root: `policy.methods`) | 63.2 ns (0) |
 
 ### Compile and memory
 
 | workload | (1) compile | checked compile | (3) compile + emit | (4) compile / specialize / lower | (1) `Program` | `CelProgram` | (3) + `CelBytecode` | (4) residual + `FastProgram` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `prefix_1` | 46.6 µs | 51.2 µs | 83.0 µs | 51.2 µs / 18.4 µs / 2.8 µs | 1788 B | 2588 B | 4857 B | 2444 B |
-| `prefix_13` | 46.5 µs | 53.4 µs | 75.2 µs | 53.4 µs / 132.9 µs / 21.6 µs | 1788 B | 2588 B | 4857 B | 16.6 KiB |
-| `prefix_1000` | 45.1 µs | 50.7 µs | 62.9 µs | 50.7 µs / 561.0 µs / 350.5 µs | 1788 B | 2588 B | 4857 B | 170.1 KiB |
-| `fs_open_allow_all` | 582.7 µs | 632.5 µs | 728.1 µs | 632.5 µs / 87.4 µs / 0.9 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 887 B |
-| `fs_open_13` | 629.4 µs | 661.4 µs | 818.2 µs | 661.4 µs / 264.4 µs / 42.6 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 27.3 KiB |
-| `fs_open_1000` | 584.5 µs | 631.2 µs | 693.4 µs | 631.2 µs / 905.4 µs / 615.7 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 235.3 KiB |
-| `method_in_literal` | 30.2 µs | 33.1 µs | 36.0 µs | — | 482 B | 1037 B | 2503 B | — |
-| `method_in_policy` | 13.6 µs | 15.8 µs | 18.4 µs | 15.8 µs / 11.6 µs / 1.9 µs | 284 B | 914 B | 2137 B | 2353 B |
-| `user_eq` | 13.6 µs | 15.8 µs | 18.3 µs | 15.8 µs / 9.5 µs / 1.6 µs | 285 B | 903 B | 2122 B | 1391 B |
-| `nested_fields` | 32.2 µs | 37.2 µs | 45.9 µs | — | 915 B | 1936 B | 4160 B | — |
-| `short_circuit_first` | 66.8 µs | 106.8 µs | 129.2 µs | — | 2100 B | 4476 B | 8844 B | — |
-| `short_circuit_last` | 66.0 µs | 103.4 µs | 123.6 µs | — | 2100 B | 4476 B | 8844 B | — |
-| `all_items` | 40.0 µs | 44.6 µs | 68.7 µs | — | 1451 B | 2199 B | 4870 B | — |
-| `exists_items` | 36.6 µs | 48.8 µs | 62.5 µs | — | 1181 B | 1913 B | 3816 B | — |
-| `durations` | 34.3 µs | 39.0 µs | 48.6 µs | — | 1081 B | 1845 B | 3995 B | — |
-| `streamed_body_early` | 26.0 µs | 32.4 µs | 38.4 µs | — | 625 B | 1440 B | 3629 B | — |
-| `streamed_body_late` | 25.8 µs | 29.3 µs | 35.7 µs | — | 625 B | 1440 B | 3629 B | — |
-| `policy_residual` | 98.2 µs | 161.2 µs | 180.9 µs | 161.2 µs / 96.2 µs / 18.7 µs | 3038 B | 5198 B | 8700 B | 11.7 KiB |
+| `prefix_1` | 45.1 µs | 50.3 µs | 82.4 µs | 50.3 µs / 17.1 µs / 2.6 µs | 1788 B | 2588 B | 4857 B | 2444 B |
+| `prefix_13` | 46.3 µs | 53.4 µs | 68.7 µs | 53.4 µs / 132.0 µs / 19.3 µs | 1788 B | 2588 B | 4857 B | 16.6 KiB |
+| `prefix_1000` | 44.9 µs | 50.9 µs | 66.7 µs | 50.9 µs / 575.8 µs / 358.3 µs | 1788 B | 2588 B | 4857 B | 170.1 KiB |
+| `fs_open_allow_all` | 609.9 µs | 634.8 µs | 700.9 µs | 634.8 µs / 73.5 µs / 0.9 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 887 B |
+| `fs_open_13` | 596.4 µs | 674.0 µs | 699.0 µs | 674.0 µs / 260.4 µs / 42.2 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 27.3 KiB |
+| `fs_open_1000` | 537.4 µs | 649.9 µs | 642.0 µs | 649.9 µs / 819.9 µs / 582.4 µs | 12.8 KiB | 19.1 KiB | 28.5 KiB | 235.3 KiB |
+| `method_in_literal` | 29.6 µs | 32.9 µs | 35.6 µs | — | 482 B | 1037 B | 2503 B | — |
+| `method_in_policy` | 13.6 µs | 15.8 µs | 18.5 µs | 15.8 µs / 11.6 µs / 1.8 µs | 284 B | 914 B | 2137 B | 2353 B |
+| `user_eq` | 13.5 µs | 19.7 µs | 18.1 µs | 19.7 µs / 9.4 µs / 1.5 µs | 285 B | 903 B | 2122 B | 1391 B |
+| `nested_fields` | 32.3 µs | 37.2 µs | 46.2 µs | — | 915 B | 1936 B | 4160 B | — |
+| `short_circuit_first` | 69.7 µs | 106.9 µs | 132.5 µs | — | 2100 B | 4476 B | 8844 B | — |
+| `short_circuit_last` | 66.3 µs | 106.3 µs | 120.9 µs | — | 2100 B | 4476 B | 8844 B | — |
+| `all_items` | 47.4 µs | 49.1 µs | 54.1 µs | — | 1451 B | 2199 B | 4870 B | — |
+| `exists_items` | 28.5 µs | 31.3 µs | 38.1 µs | — | 1181 B | 1913 B | 3816 B | — |
+| `durations` | 40.2 µs | 45.9 µs | 48.8 µs | — | 1081 B | 1845 B | 3995 B | — |
+| `streamed_body_early` | 27.1 µs | 31.7 µs | 37.8 µs | — | 625 B | 1440 B | 3629 B | — |
+| `streamed_body_late` | 26.6 µs | 31.4 µs | 36.5 µs | — | 625 B | 1440 B | 3629 B | — |
+| `policy_residual` | 108.9 µs | 161.9 µs | 178.5 µs | 161.9 µs / 107.6 µs / 18.3 µs | 3038 B | 5198 B | 8700 B | 11.7 KiB |
 
 ### Streamed body: document and run state
 
@@ -150,7 +150,7 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 | `streamed_body_early` | 4026 B | 383 B |
 | `streamed_body_late` | 4026 B | 383 B |
 
-† the runs' medians spread more than 10%: prefix_13 / upstream: 11%; method_in_policy / upstream: 16%; durations / bytecode_act: 12%; streamed_body_late / bytecode_act: 13%
+† the runs' medians spread more than 10%: prefix_13 / rust: 36%; prefix_13 / bytecode_act: 16%; prefix_13 / specialized: 10%; prefix_1000 / rust: 13%
 
 ### Fast-path ledger
 
@@ -159,30 +159,39 @@ three runs (`ablation/cycles-baseline.txt` is the baseline column). One column p
 fast-path step (S2 the common ops inline, S3 the stack register path, S4 verified unchecked
 fetches, S5 fused read-compare-branch ops, S6 the specializer's folds), then `cliffs`: after the
 cost-model cliff fixes (below), then `loops`: after the loop floor, then `sets`: string-set
-matchers comparing precomputed heads instead of calling `memcmp` (the current
-`ablation/cycles-baseline.txt`); the floor rows are the spikes in `ablation/benches/floor.rs`, and
+matchers comparing precomputed heads instead of calling `memcmp`, then `exact`: numbers held
+exactly (an `Int` arm first on every fast path, the cross-representation compare out of line —
+the current `ablation/cycles-baseline.txt`); the floor rows are the spikes in
+`ablation/benches/floor.rs`, and
 `constant_true` is the program `true`, which costs only the fixed per-call path.
 
-| workload | column | baseline | S2 | S3 | S4 | S5 | S6 | cliffs | loops | sets |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `constant_true` | (3b) | 97 (30.4) | 109 (30.7) | 81 (25.8) | 80 (25.9) | 77 (24.1) | 73 (23.1) | 82 (23.5) | 75 (24.2) | 79 (24.8) |
-| `durations` | (3b) | 286 (90.5) | 272 (85.4) | 242 (71.8) | 216 (64.6) | 224 (70.8) | 224 (69.2) | 130 (39.8) | 122 (37.0) | 128 (39.6) |
-| `fs_open_1000` | (4) | 1267 (396.2) | 1338 (405.1) | 1244 (383.7) | 1235 (373.5) | 1202 (365.3) | 1227 (381.0) | 1205 (368.0) | 1182 (375.5) | 537 (168.4) |
-| `fs_open_13` | (4) | 463 (139.7) | 457 (135.7) | 425 (129.3) | 396 (116.2) | 374 (115.7) | 364 (116.6) | 392 (115.7) | 372 (116.3) | 242 (76.4) |
-| `fs_open_allow_all` | (4) | 186 (57.7) | 194 (57.8) | 163 (49.3) | 156 (47.3) | 134 (42.9) | 110 (34.0) | 109 (33.7) | 104 (33.0) | 109 (34.3) |
-| `method_in_literal` | (3b) | 188 (57.7) | 174 (55.1) | 145 (45.6) | 141 (45.3) | 140 (45.2) | 138 (42.6) | 138 (43.7) | 138 (41.4) | 128 (40.5) |
-| `method_in_policy` | (4) | 188 (58.3) | 169 (52.4) | 151 (44.8) | 148 (42.4) | 142 (44.0) | 144 (42.5) | 140 (42.5) | 134 (42.0) | 130 (41.8) |
-| `nested_fields` | (3b) | 276 (83.5) | 240 (75.3) | 209 (64.3) | 201 (61.6) | 142 (42.5) | 136 (44.0) | 125 (39.1) | 122 (36.6) | 124 (38.0) |
-| `policy_residual` | (4) | 485 (147.2) | 388 (117.9) | 347 (108.4) | 322 (97.7) | 273 (85.7) | 276 (83.4) | 238 (72.5) | 246 (77.5) | 199 (67.5) |
-| `prefix_1` | (4) | 211 (62.0) | 180 (55.5) | 153 (47.4) | 151 (47.5) | 144 (44.9) | 141 (43.6) | 142 (43.6) | 137 (44.6) | 129 (39.9) |
-| `prefix_1000` | (4) | 714 (214.7) | 705 (214.5) | 619 (196.8) | 636 (198.7) | 626 (192.6) | 653 (201.2) | 648 (202.5) | 680 (209.9) | 358 (113.0) |
-| `prefix_13` | (4) | 257 (78.8) | 234 (71.6) | 210 (65.7) | 209 (63.7) | 200 (58.9) | 197 (58.4) | 204 (60.0) | 210 (63.8) | 178 (51.6) |
-| `short_circuit_first` | (3b) | 517 (151.6) | 344 (102.1) | 319 (99.9) | 284 (83.9) | 248 (79.1) | 250 (76.5) | 149 (47.2) | 110 (33.0) | 107 (33.3) |
-| `short_circuit_last` | (3b) | 768 (234.2) | 441 (141.8) | 404 (122.3) | 353 (106.6) | 312 (96.7) | 320 (93.3) | 188 (59.4) | 133 (41.0) | 135 (42.8) |
-| `user_eq` | (3b) | 214 (65.8) | 206 (62.7) | 170 (54.1) | 165 (51.2) | 166 (52.0) | 162 (48.8) | 161 (50.6) | 132 (42.0) | 136 (41.9) |
-| `user_eq` | (4) | 186 (56.2) | 184 (57.8) | 154 (47.7) | 148 (47.6) | 154 (48.2) | 158 (46.5) | 155 (46.8) | 131 (39.9) | 126 (40.3) |
-| `nested_fields` | floor: lean / fused / closures | 100 / 56 / 78 | 105 / 57 / 82 | 101 / 53 / 81 | 102 / 55 / 83 | 106 / 54 / 76 | 104 / 53 / 75 | 103 / 56 / 84 | 101 / 53 / 86 | 105 / 55 / 83 |
-| `nested_fields` | Rust | 26 (8.1) | 29 (8.3) | 26 (8.4) | 26 (8.1) | 26 (8.1) | 26 (8.0) | 27 (8.2) | 29 (8.4) | 26 (9.0) |
+`exact` costs no row more than noise, with one measured exception: `durations` (3b) runs 352
+instructions where `sets` ran 339. Every numeric compare now tests an `Int` arm before the
+`Duration` one in `ordering`, and a two-compare program pays that test twice. The first cut cost
+far more — the exact cross-representation compare inlined into `exec` spilled its op pointer to
+the stack, +20% on `fs_open_13`, a program with no number in it — until that compare moved out of
+line and took its operands by value (`mixed_order`, `src/fast/mod.rs`).
+
+| workload | column | baseline | S2 | S3 | S4 | S5 | S6 | cliffs | loops | sets | exact |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `constant_true` | (3b) | 97 (30.4) | 109 (30.7) | 81 (25.8) | 80 (25.9) | 77 (24.1) | 73 (23.1) | 82 (23.5) | 75 (24.2) | 79 (24.8) | 76 (22.6) |
+| `durations` | (3b) | 286 (90.5) | 272 (85.4) | 242 (71.8) | 216 (64.6) | 224 (70.8) | 224 (69.2) | 130 (39.8) | 122 (37.0) | 128 (39.6) | 128 (38.6) |
+| `fs_open_1000` | (4) | 1267 (396.2) | 1338 (405.1) | 1244 (383.7) | 1235 (373.5) | 1202 (365.3) | 1227 (381.0) | 1205 (368.0) | 1182 (375.5) | 537 (168.4) | 530 (163.6) |
+| `fs_open_13` | (4) | 463 (139.7) | 457 (135.7) | 425 (129.3) | 396 (116.2) | 374 (115.7) | 364 (116.6) | 392 (115.7) | 372 (116.3) | 242 (76.4) | 242 (73.2) |
+| `fs_open_allow_all` | (4) | 186 (57.7) | 194 (57.8) | 163 (49.3) | 156 (47.3) | 134 (42.9) | 110 (34.0) | 109 (33.7) | 104 (33.0) | 109 (34.3) | 105 (33.8) |
+| `method_in_literal` | (3b) | 188 (57.7) | 174 (55.1) | 145 (45.6) | 141 (45.3) | 140 (45.2) | 138 (42.6) | 138 (43.7) | 138 (41.4) | 128 (40.5) | 123 (39.0) |
+| `method_in_policy` | (4) | 188 (58.3) | 169 (52.4) | 151 (44.8) | 148 (42.4) | 142 (44.0) | 144 (42.5) | 140 (42.5) | 134 (42.0) | 130 (41.8) | 129 (37.9) |
+| `nested_fields` | (3b) | 276 (83.5) | 240 (75.3) | 209 (64.3) | 201 (61.6) | 142 (42.5) | 136 (44.0) | 125 (39.1) | 122 (36.6) | 124 (38.0) | 109 (34.7) |
+| `policy_residual` | (4) | 485 (147.2) | 388 (117.9) | 347 (108.4) | 322 (97.7) | 273 (85.7) | 276 (83.4) | 238 (72.5) | 246 (77.5) | 199 (67.5) | 195 (59.6) |
+| `prefix_1` | (4) | 211 (62.0) | 180 (55.5) | 153 (47.4) | 151 (47.5) | 144 (44.9) | 141 (43.6) | 142 (43.6) | 137 (44.6) | 129 (39.9) | 123 (38.2) |
+| `prefix_1000` | (4) | 714 (214.7) | 705 (214.5) | 619 (196.8) | 636 (198.7) | 626 (192.6) | 653 (201.2) | 648 (202.5) | 680 (209.9) | 358 (113.0) | 354 (111.9) |
+| `prefix_13` | (4) | 257 (78.8) | 234 (71.6) | 210 (65.7) | 209 (63.7) | 200 (58.9) | 197 (58.4) | 204 (60.0) | 210 (63.8) | 178 (51.6) | 155 (47.6) |
+| `short_circuit_first` | (3b) | 517 (151.6) | 344 (102.1) | 319 (99.9) | 284 (83.9) | 248 (79.1) | 250 (76.5) | 149 (47.2) | 110 (33.0) | 107 (33.3) | 112 (32.3) |
+| `short_circuit_last` | (3b) | 768 (234.2) | 441 (141.8) | 404 (122.3) | 353 (106.6) | 312 (96.7) | 320 (93.3) | 188 (59.4) | 133 (41.0) | 135 (42.8) | 129 (39.5) |
+| `user_eq` | (3b) | 214 (65.8) | 206 (62.7) | 170 (54.1) | 165 (51.2) | 166 (52.0) | 162 (48.8) | 161 (50.6) | 132 (42.0) | 136 (41.9) | 133 (40.0) |
+| `user_eq` | (4) | 186 (56.2) | 184 (57.8) | 154 (47.7) | 148 (47.6) | 154 (48.2) | 158 (46.5) | 155 (46.8) | 131 (39.9) | 126 (40.3) | 128 (39.0) |
+| `nested_fields` | floor: lean / fused / closures | 100 / 56 / 78 | 105 / 57 / 82 | 101 / 53 / 81 | 102 / 55 / 83 | 106 / 54 / 76 | 104 / 53 / 75 | 103 / 56 / 84 | 101 / 53 / 86 | 105 / 55 / 83 | 100 / 54 / 83 |
+| `nested_fields` | Rust | 26 (8.1) | 29 (8.3) | 26 (8.4) | 26 (8.1) | 26 (8.1) | 26 (8.0) | 27 (8.2) | 29 (8.4) | 26 (9.0) | 25 (8.0) |
 
 Reproduce, on a Linux x86_64 host with the PMU exposed (the bench binary is `target/release/deps/ablation-*`):
 
@@ -202,23 +211,19 @@ Each figure is a quotient of two cells of one run, to one decimal.
 - **(2)/(3a), what the compile step and the register interpreter bought on top** (historical run):
   4.0 `fs_open_allow_all`, 3.1 `fs_open_13`, 3.1 `fs_open_1000`, 2.3 `prefix_13`, 17.6
   `nested_fields`, 4.4 `all_items`, 2.3 `policy_residual`.
-- **(1)/(3a), over the same bound activation** (this run): 10.7 `fs_open_allow_all`, 18.3
-  `fs_open_13`, 80.1 `fs_open_1000`, 28.9 `prefix_13`, 38.4 `nested_fields`, 29.0 `all_items`, 12.4
-  `policy_residual`.
-- **(1)/(3b), the typed bytecode backend reading the request by field** (this run): 254.2
-  `nested_fields`, 8.3 `user_eq`; 193 and 6.9 allocations per decision against 0.
+- **(1)/(3a), over the same bound activation** (this run): 10.6 `fs_open_allow_all`, 17.7 `fs_open_13`, 78.7 `fs_open_1000`, 26.4 `prefix_13`, 37.1 `nested_fields`, 27.5 `all_items`, 11.6 `policy_residual`.
+- **(1)/(3b), the typed bytecode backend reading the request by field** (this run): 247.3
+  `nested_fields`, 8.1 `user_eq`; 193 and 6.9 allocations per decision against 0.
 - **(3b)/(4), what binding the policy at compile time bought** (this run): 1.1 `user_eq`, the one
-  workload with both cells. Where (3b) is `n/a`, (3a)/(4): 14.3 `fs_open_allow_all`, 8.2
-  `fs_open_13`, 63.2 `fs_open_1000`, 8.8 `prefix_13`, 9.3 `policy_residual`.
-- **(1)/(4)** (this run): 152.8 `fs_open_allow_all`, 150.4 `fs_open_13`, 5059.1 `fs_open_1000`, 254.1
-  `prefix_13`, 115.3 `policy_residual`, 8317.3 `prefix_1000`. **Rust/(4)**: 8.1 on `fs_open_1000`
-  (1390 ns / 171 ns) and 22.5 on `prefix_1000` (2479 ns / 110 ns), where the hand-written Rust scans
-  the 1000 roots linearly and (4) runs a matcher; 0.3 to 0.8 on the other headline rows.
-- **Streamed**: buffered (1) over the streamed run, 15.9 with the demanded fields early (49.9 µs /
-  3139 ns) and 3.1 with them late (49.7 µs / 15.8 µs); the streamed run holds 383 B of state for a
+  workload with both cells. Where (3b) is `n/a`, (3a)/(4): 14.0 `fs_open_allow_all`, 8.5 `fs_open_13`, 68.3 `fs_open_1000`, 9.3 `prefix_13`, 8.7 `policy_residual`.
+- **(1)/(4)** (this run): 148.5 `fs_open_allow_all`, 151.2 `fs_open_13`, 5373.9 `fs_open_1000`, 245.8 `prefix_13`, 100.6 `policy_residual`, 8011.8 `prefix_1000`. **Rust/(4)**: 8.6 on `fs_open_1000`
+  (1386 ns / 161 ns) and 21.3 on `prefix_1000` (2343 ns / 110 ns), where the hand-written Rust scans
+  the 1000 roots linearly and (4) runs a matcher; 0.2 to 0.8 on the other headline rows.
+- **Streamed**: buffered (1) over the streamed run, 16.1 with the demanded fields early (50.1 µs /
+  3107 ns) and 3.1 with them late (48.4 µs / 15.7 µs); the streamed run holds 383 B of state for a
   4026 B document.
-- **Compile**: (3) compile + emit over (1) compile, 1.3 on `fs_open_13` (818.2 µs / 629.4 µs) and 1.8
-  on `policy_residual` (180.9 µs / 98.2 µs).
+- **Compile**: (3) compile + emit over (1) compile, 1.2 on `fs_open_13` (699.0 µs / 596.4 µs) and 1.6
+  on `policy_residual` (178.5 µs / 108.9 µs).
 
 ### Historical: the tree evaluator, column (2)
 
@@ -311,6 +316,16 @@ from `ablation/benches/cliffs.rs` (AMD EPYC-Rome, `taskset -c 1`, no `profile` f
 
 Row 13's time did not move with its allocations (270 µs → 254 µs): each element still raises and
 catches an index error through `slow`. Row 20 below pins it.
+
+**Measured, not fixed: an integer against a fractional bound.** Numbers are held exactly, so the
+rig's `nums` (`1.0`, `2.0`, …) bind as integers while `req.n` is `0.5`: every element of
+`policy.nums.all(x, x > req.n)` compares an `Int` with a `Float`. That compare is exact — through
+`f64` when the integer is within 2^53, which every `f64`-representable integer is, and through
+`i128` otherwise (`cmp_i64_f64`, `src/num.rs`) — and it costs instructions the old all-double
+compare did not. `loops --check`, instructions per element before → after numbers were exact:
+`list/num/all` 26 → 35 (over its budget of 27 now), `record/all` 108 → 122, `build/filter-size`
+175 → 193, `record/absorbed-error` 651 → 670, `build/map-size` 131 → 143. The first cut, which
+compared every mixed pair through the general exact path, cost `list/num/all` 126.
 
 ### Fixed: the unspecialized loop floor
 

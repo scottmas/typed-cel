@@ -75,25 +75,26 @@ fn fast_arithmetic() {
 fn every_operator_answers_as_pinned() {
     let pins = [
         // Add
-        ("1 + 2", "Ok(Float(3.0))"),
+        ("1 + 2", "Ok(Int(3))"),
         ("1.5 + 2.25", "Ok(Float(3.75))"),
         ("'a' + 'b'", "Ok(String(\"ab\"))"),
-        ("[1] + [2]", "Ok(List([Float(1.0), Float(2.0)]))"),
-        ("1 + 1.0", "Ok(Float(2.0))"),
-        ("9223372036854775807 + 1", "Ok(Float(9.223372036854776e18))"),
+        ("[1] + [2]", "Ok(List([Int(1), Int(2)]))"),
+        ("1 + 1.0", "Ok(Int(2))"),
+        ("9223372036854775807 + 1", "Ok(UInt(9223372036854775808))"),
         // Sub
-        ("5 - 7", "Ok(Float(-2.0))"),
-        ("5.5 - 0.5", "Ok(Float(5.0))"),
+        ("5 - 7", "Ok(Int(-2))"),
+        ("5.5 - 0.5", "Ok(Int(5))"),
         (
             "-9223372036854775807 - 2",
-            "Ok(Float(-9.223372036854776e18))",
+            "Err(Overflow(\"sub\", Int(-9223372036854775807), Int(2)))",
         ),
         // Mul
-        ("6 * 7", "Ok(Float(42.0))"),
-        ("1.5 * 2.0", "Ok(Float(3.0))"),
+        ("6 * 7", "Ok(Int(42))"),
+        ("1.5 * 2.0", "Ok(Int(3))"),
+        ("9223372036854775807 * 2", "Ok(UInt(18446744073709551614))"),
         (
-            "9223372036854775807 * 2",
-            "Ok(Float(1.8446744073709552e19))",
+            "9223372036854775807 * 3",
+            "Err(Overflow(\"mul\", Int(9223372036854775807), Int(3)))",
         ),
         // Div
         ("7 / 2", "Ok(Float(3.5))"),
@@ -124,11 +125,11 @@ fn every_operator_answers_as_pinned() {
         ("3 in [1, 2]", "Ok(Bool(false))"),
         ("'a' in {'a': 1}", "Ok(Bool(true))"),
         // Unary
-        ("-1", "Ok(Float(-1.0))"),
+        ("-1", "Ok(Int(-1))"),
         ("-1.5", "Ok(Float(-1.5))"),
         (
             "-(-9223372036854775807 - 1)",
-            "Ok(Float(9.223372036854776e18))",
+            "Ok(UInt(9223372036854775808))",
         ),
         ("!true", "Ok(Bool(false))"),
         ("!false", "Ok(Bool(true))"),
@@ -171,8 +172,8 @@ fn a_type_error_never_reaches_the_backend() {
 fn errors_are_pinned() {
     pin("{}.a", "Err(NoSuchKey(\"a\"))");
     pin("{'a': 1}.b", "Err(NoSuchKey(\"b\"))");
-    pin("[1][5]", "Err(IndexOutOfBounds(Float(5.0)))");
-    pin("[1][-1]", "Err(IndexOutOfBounds(Float(-1.0)))");
+    pin("[1][5]", "Err(IndexOutOfBounds(Int(5)))");
+    pin("[1][-1]", "Err(IndexOutOfBounds(Int(-1)))");
     pin("{null: true}", "Err(UnsupportedKeyType(Null))");
     assert_err("{}.a", ExecutionError::NoSuchKey(Arc::new("a".to_string())));
     assert_err(
@@ -261,7 +262,7 @@ fn comprehension_errors_are_absorbed_only_by_a_deciding_value() {
         "[1, 2, 3].filter(x, {1: 1, 3: 3}[x] > 0)",
         "Err(NoSuchKey(\"2\"))",
     );
-    pin("[1, 2].map(x, x > 1, x * 2)", "Ok(List([Float(4.0)]))");
+    pin("[1, 2].map(x, x > 1, x * 2)", "Ok(List([Int(4)]))");
     pin("[].all(x, {}.a == 1)", "Ok(Bool(true))");
     pin("[1, 2, 3].exists(e, e == 2)", "Ok(Bool(true))");
 }
@@ -288,7 +289,7 @@ fn has_on_maps_and_non_maps() {
 
 #[test]
 fn duplicate_map_keys_keep_the_last() {
-    pin("{'a': 1, 'a': 2}['a']", "Ok(Float(2.0))");
+    pin("{'a': 1, 'a': 2}['a']", "Ok(Int(2))");
 }
 
 #[test]
@@ -299,7 +300,7 @@ fn comprehension_variables_shadow_and_restore() {
         &ctx,
         &[("x", CelTy::Num)],
     );
-    assert!(matches!(got, Ok(Value::Num(24.0))), "{got:?}");
+    assert!(matches!(got, Ok(Value::Int(24))), "{got:?}");
 }
 
 // ---- the public API, over lazy values ----

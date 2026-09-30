@@ -82,6 +82,12 @@ impl FieldPath {
 pub trait Facts {
     fn bool(&self, f: FieldId) -> Option<bool>;
     fn num(&self, f: FieldId) -> Option<f64>;
+    /// A number field, exactly. The default reads [`num`](Facts::num) — enough for a provider whose
+    /// numbers are all doubles. A provider holding integers (ids, ports, counts, sizes) overrides
+    /// it, or an integer above 2^53 reaches the program rounded.
+    fn number(&self, f: FieldId) -> Option<crate::CelNum> {
+        self.num(f).map(crate::CelNum::from_f64)
+    }
     fn str(&self, f: FieldId) -> Option<&str>;
     fn bytes(&self, f: FieldId) -> Option<&[u8]> {
         let _ = f;
@@ -242,7 +248,7 @@ impl<'a, F: Facts + ?Sized> FactsHost<'a, F> {
     fn read_rest(&self, f: u32, want: Want) -> Result<Option<Reg<'a>>, Miss> {
         let id = FieldId(f);
         Ok(match want {
-            Want::Num => self.facts.num(id).map(Reg::Num),
+            Want::Num => self.facts.number(id).map(Reg::from),
             Want::Bytes => self.facts.bytes(id).map(Reg::Bytes),
             Want::Dur => self
                 .facts

@@ -28,7 +28,8 @@ pub struct Conjunct {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
     Bool(bool),
-    Num(f64),
+    /// A number literal, exactly as written (`9007199254740993` is not its neighbour).
+    Num(crate::CelNum),
     Str(String),
     /// The duration SPELLING, as the author wrote it — `40s`, not `duration('40s')`.
     Duration(String),
@@ -126,8 +127,11 @@ fn path(e: &IdedExpr) -> Option<Vec<Segment>> {
 fn literal(e: &IdedExpr) -> Option<Literal> {
     match &e.expr {
         Expr::Literal(LiteralValue::Boolean(b)) => Some(Literal::Bool(*b.inner())),
-        Expr::Literal(LiteralValue::Double(d)) => Some(Literal::Num(*d.inner())),
-        Expr::Literal(LiteralValue::Int(i)) => Some(Literal::Num(*i as f64)),
+        Expr::Literal(LiteralValue::Double(d)) => {
+            Some(Literal::Num(crate::CelNum::from_f64(*d.inner())))
+        }
+        Expr::Literal(LiteralValue::Int(i)) => Some(Literal::Num(crate::CelNum::Int(*i))),
+        Expr::Literal(LiteralValue::UInt(u)) => Some(Literal::Num(crate::CelNum::from(*u))),
         Expr::Literal(LiteralValue::String(s)) => Some(Literal::Str(s.inner().to_string())),
         // `40s` reaches the parser as `duration('40s')`, because the alias expands BEFORE parsing.
         // Report the spelling the AUTHOR wrote: a lint matching window keys against guard

@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use crate::lazy::{self, LazyValue};
+use crate::num::CelNum;
 use crate::value::integral_key;
 use crate::ExecutionError;
 use crate::{CelKey, CelMap, CelMapKey, CelValue};
@@ -21,7 +22,11 @@ use crate::{CelKey, CelMap, CelMapKey, CelValue};
 pub(crate) enum Reg<'a> {
     Unset,
     Bool(bool),
+    /// A number held as a double. `Num`, `Int` and `UInt` are three representations of the
+    /// dialect's one number type ([`CelNum`]); read any of them with [`Reg::num`].
     Num(f64),
+    Int(i64),
+    UInt(u64),
     Null,
     Dur(chrono::Duration),
     Str(&'a str),
@@ -32,10 +37,34 @@ pub(crate) enum Reg<'a> {
     Val(&'a CelValue),
     /// A list the program built.
     List(&'a [Reg<'a>]),
-    /// A map the program built: keys are `Str`, integral `Num` or `Bool`, each at most once.
+    /// A map the program built: keys are `Str`, integral numbers or `Bool`, each at most once.
     Map(&'a [(Reg<'a>, Reg<'a>)]),
     /// A caught error, by index into the run's error list.
     Err(u32),
+}
+
+impl Reg<'_> {
+    /// The number this register holds, in whichever representation; `None` for a non-number.
+    #[inline(always)]
+    pub(crate) fn num(&self) -> Option<CelNum> {
+        match *self {
+            Reg::Int(i) => Some(CelNum::Int(i)),
+            Reg::Num(f) => Some(CelNum::Float(f)),
+            Reg::UInt(u) => Some(CelNum::UInt(u)),
+            _ => None,
+        }
+    }
+}
+
+impl From<CelNum> for Reg<'_> {
+    #[inline(always)]
+    fn from(n: CelNum) -> Self {
+        match n {
+            CelNum::Int(i) => Reg::Int(i),
+            CelNum::UInt(u) => Reg::UInt(u),
+            CelNum::Float(f) => Reg::Num(f),
+        }
+    }
 }
 
 /// What a run builds and hands out references into: strings, lists, maps, and the values a lazy
@@ -133,6 +162,8 @@ pub(crate) fn of_cel(v: &CelValue) -> Reg<'_> {
     match v {
         CelValue::Bool(b) => Reg::Bool(*b),
         CelValue::Num(n) => Reg::Num(*n),
+        CelValue::Int(i) => Reg::Int(*i),
+        CelValue::UInt(u) => Reg::UInt(*u),
         CelValue::Str(s) => Reg::Str(s),
         CelValue::Bytes(b) => Reg::Bytes(b),
         CelValue::Duration(d) => Reg::Dur(d.delta()),
@@ -147,6 +178,8 @@ pub(crate) fn of_owned<'a>(v: CelValue, st: &mut Store<'a>) -> Reg<'a> {
     match v {
         CelValue::Bool(b) => Reg::Bool(b),
         CelValue::Num(n) => Reg::Num(n),
+        CelValue::Int(i) => Reg::Int(i),
+        CelValue::UInt(u) => Reg::UInt(u),
         CelValue::Null => Reg::Null,
         CelValue::Duration(d) => Reg::Dur(d.delta()),
         other => of_cel(st.value(other)),
@@ -159,6 +192,8 @@ pub(crate) fn to_cel(r: Reg<'_>, errs: &[ExecutionError]) -> Result<CelValue, Ex
         Reg::Unset => CelValue::Null,
         Reg::Bool(b) => CelValue::Bool(b),
         Reg::Num(n) => CelValue::Num(n),
+        Reg::Int(i) => CelValue::Int(i),
+        Reg::UInt(u) => CelValue::UInt(u),
         Reg::Null => CelValue::Null,
         Reg::Dur(d) => CelValue::Duration(crate::CelDuration::of(d)),
         Reg::Str(s) => CelValue::Str(s.into()),
@@ -175,9 +210,12 @@ pub(crate) fn to_cel(r: Reg<'_>, errs: &[ExecutionError]) -> Result<CelValue, Ex
             for (k, v) in pairs {
                 let key = match k {
                     Reg::Str(s) => CelMapKey::Str(CelKey::new(s)),
-                    Reg::Num(n) => CelMapKey::Num(*n as i64),
                     Reg::Bool(b) => CelMapKey::Bool(*b),
-                    _ => return Err(ExecutionError::InternalError("a map key".into())),
+                    // `check_key` admitted only an integral number in `i64` range.
+                    k => match k.num().and_then(integral_key) {
+                        Some(n) => CelMapKey::Num(n),
+                        None => return Err(unsupported_key(*k)),
+                    },
                 };
                 m.push((key, to_cel(*v, errs)?));
             }
@@ -231,9 +269,8 @@ pub(crate) enum KeyRef<'k> {
 pub(crate) fn key_ref(k: Reg<'_>) -> Option<KeyRef<'_>> {
     match k {
         Reg::Str(s) => Some(KeyRef::Str(s)),
-        Reg::Num(n) => integral_key(n).map(KeyRef::Num),
         Reg::Bool(b) => Some(KeyRef::Bool(b)),
-        _ => None,
+        k => k.num().and_then(integral_key).map(KeyRef::Num),
     }
 }
 
@@ -241,7 +278,7 @@ pub(crate) fn key_ref(k: Reg<'_>) -> Option<KeyRef<'_>> {
 pub(crate) fn key_reg(k: &CelMapKey) -> Reg<'_> {
     match k {
         CelMapKey::Bool(b) => Reg::Bool(*b),
-        CelMapKey::Num(n) => Reg::Num(*n as f64),
+        CelMapKey::Num(n) => Reg::Int(*n),
         CelMapKey::Str(s) => Reg::Str(s.as_str()),
     }
 }
@@ -305,7 +342,12 @@ pub(crate) fn lazy_of(r: Reg<'_>) -> Option<&dyn LazyValue> {
 /// `a.equals(b)`, the absorbed model's equality, for every pair a checked program can compare.
 pub(crate) fn equals(a: Reg<'_>, b: Reg<'_>) -> bool {
     match (a, b) {
+        (Reg::Int(x), Reg::Int(y)) => x == y,
         (Reg::Num(x), Reg::Num(y)) => x == y,
+        (
+            Reg::Int(..) | Reg::UInt(..) | Reg::Num(..),
+            Reg::Int(..) | Reg::UInt(..) | Reg::Num(..),
+        ) => a.num().zip(b.num()).is_some_and(|(x, y)| x.eq_exact(y)),
         (Reg::Bool(x), Reg::Bool(y)) => x == y,
         (Reg::Str(x), Reg::Str(y)) => x == y,
         (Reg::Bytes(x), Reg::Bytes(y)) => x == y,
@@ -349,11 +391,18 @@ pub(crate) fn contains(needle: Reg<'_>, hay: Reg<'_>) -> Result<bool, ExecutionE
                 other => equals(of_cel(other), needle),
             }))
         }
-        (Reg::Val(CelValue::List(l)), Reg::Num(n)) => {
+        (Reg::Val(CelValue::List(l)), Reg::Int(n)) => {
             return Ok(l.iter().any(|v| match v {
-                CelValue::Num(x) => *x == n,
+                CelValue::Int(x) => *x == n,
                 other => equals(of_cel(other), needle),
             }))
+        }
+        (Reg::Val(CelValue::List(l)), Reg::Num(..) | Reg::UInt(..)) => {
+            let n = needle.num().expect("a number");
+            return Ok(l.iter().any(|v| match v.num() {
+                Some(x) => x.eq_exact(n),
+                None => equals(of_cel(v), needle),
+            }));
         }
         _ => {}
     }
@@ -363,7 +412,9 @@ pub(crate) fn contains(needle: Reg<'_>, hay: Reg<'_>) -> Result<bool, ExecutionE
     if let Some(m) = MapView::of(hay) {
         return match needle {
             Reg::Str(_) | Reg::Bool(_) => Ok(m.get(key_ref(needle).expect("a key")).is_some()),
-            Reg::Num(n) => Ok(integral_key(n).is_some_and(|k| m.get(KeyRef::Num(k)).is_some())),
+            Reg::Num(_) | Reg::Int(_) | Reg::UInt(_) => {
+                Ok(key_ref(needle).is_some_and(|k| m.get(k).is_some()))
+            }
             // Any other needle is no key.
             other => Err(unsupported_key(other)),
         };
@@ -432,32 +483,30 @@ pub(crate) fn index<'a>(
     st: &mut Store<'a>,
 ) -> Result<Reg<'a>, ExecutionError> {
     if let Some(l) = ListView::of(a) {
-        let Reg::Num(f) = b else {
+        let Some(n) = b.num() else {
             return Err(match b {
                 Reg::Str(_) => string_index(),
                 _ => ExecutionError::NoSuchOverload,
             });
         };
-        return if f.fract() == 0.0 && f >= 0.0 && f < l.len() as f64 {
-            Ok(l.get(f as usize))
-        } else {
-            Err(ExecutionError::IndexOutOfBounds(CelValue::Num(f)))
+        return match integral_key(n) {
+            Some(i) if i >= 0 && (i as u64) < l.len() as u64 => Ok(l.get(i as usize)),
+            _ => Err(ExecutionError::IndexOutOfBounds(n.into())),
         };
     }
     if let Some(m) = MapView::of(a) {
         let name = |k: Reg<'_>| match k {
             Reg::Str(s) => s.to_string(),
-            Reg::Num(n) => n.to_string(),
             Reg::Bool(b) => b.to_string(),
-            _ => String::new(),
+            k => k.num().map(|n| n.to_string()).unwrap_or_default(),
         };
         let key = match b {
             Reg::Str(_) | Reg::Bool(_) => key_ref(b).expect("a key"),
-            Reg::Num(n) => match integral_key(n) {
-                Some(k) => KeyRef::Num(k),
-                // A number that names no key is not in the map — the one answer, wherever
+            Reg::Num(_) | Reg::Int(_) | Reg::UInt(_) => match key_ref(b) {
+                Some(k) => k,
+                // a number that names no key is not in the map — the one answer, wherever
                 // the map lives.
-                None => return Err(ExecutionError::NoSuchKey(Arc::new(n.to_string()))),
+                None => return Err(ExecutionError::NoSuchKey(Arc::new(name(b)))),
             },
             // Unreachable from a checked program (`_[_]` is `(map(K, V), K) -> V`).
             _ => return Err(ExecutionError::NoSuchOverload),
@@ -474,12 +523,12 @@ pub(crate) fn index<'a>(
 }
 
 /// The size of a list or map.
-pub(crate) fn size(a: Reg<'_>) -> Result<f64, ExecutionError> {
+pub(crate) fn size(a: Reg<'_>) -> Result<CelNum, ExecutionError> {
     if let Some(l) = ListView::of(a) {
-        return Ok(l.len() as f64);
+        return Ok(CelNum::Int(l.len() as i64));
     }
     if let Some(m) = MapView::of(a) {
-        return Ok(m.len() as f64);
+        return Ok(CelNum::Int(m.len() as i64));
     }
     // A lazy view has no size.
     Err(ExecutionError::NoSuchOverload)
@@ -489,7 +538,7 @@ pub(crate) fn size(a: Reg<'_>) -> Result<f64, ExecutionError> {
 pub(crate) fn check_key(k: Reg<'_>) -> Result<(), ExecutionError> {
     match k {
         Reg::Str(_) | Reg::Bool(_) => Ok(()),
-        Reg::Num(n) if integral_key(n).is_some() => Ok(()),
+        k if k.num().and_then(integral_key).is_some() => Ok(()),
         other => Err(unsupported_key(other)),
     }
 }
@@ -498,7 +547,16 @@ pub(crate) fn check_key(k: Reg<'_>) -> Result<(), ExecutionError> {
 /// and nothing else (`removed: ordering beyond numbers and strings`).
 pub(crate) fn compare(a: Reg<'_>, b: Reg<'_>) -> Result<std::cmp::Ordering, ExecutionError> {
     match (a, b) {
+        (Reg::Int(x), Reg::Int(y)) => Ok(x.cmp(&y)),
         (Reg::Num(x), Reg::Num(y)) => x.partial_cmp(&y).ok_or(ExecutionError::NoSuchOverload),
+        (
+            Reg::Int(..) | Reg::UInt(..) | Reg::Num(..),
+            Reg::Int(..) | Reg::UInt(..) | Reg::Num(..),
+        ) => a
+            .num()
+            .zip(b.num())
+            .and_then(|(x, y)| x.cmp_exact(y))
+            .ok_or(ExecutionError::NoSuchOverload),
         (Reg::Str(x), Reg::Str(y)) => Ok(x.cmp(y)),
         (Reg::Dur(x), Reg::Dur(y)) => Ok(x.cmp(&y)),
         _ => Err(ExecutionError::NoSuchOverload),
@@ -515,8 +573,7 @@ pub(crate) fn elements<'a>(r: Reg<'a>) -> Option<Vec<Reg<'a>>> {
 pub(crate) fn map_key(k: &CelValue) -> Option<CelMapKey> {
     match k {
         CelValue::Str(s) => Some(CelMapKey::Str(CelKey::new(s))),
-        CelValue::Num(f) => integral_key(*f).map(CelMapKey::Num),
         CelValue::Bool(b) => Some(CelMapKey::Bool(*b)),
-        _ => None,
+        k => k.num().and_then(integral_key).map(CelMapKey::Num),
     }
 }

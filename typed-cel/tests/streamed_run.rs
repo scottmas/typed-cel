@@ -253,6 +253,38 @@ fn presence_decides_at_the_key() {
 }
 
 #[test]
+fn integer_text_beyond_u64_fails_the_read_not_rounds() {
+    let p = program(
+        json_body(&[("op", CelTy::Str), ("id", CelTy::Num)], &[]),
+        "body.id > 0",
+    );
+    let mut run = p.begin();
+    push_all(
+        &mut run,
+        &to_events(r#"{"op":"x","id":18446744073709551616}"#, 1),
+    );
+    let got = run.finish();
+    match &got {
+        Err(e) => assert!(e.to_string().contains("18446744073709551616"), "{e}"),
+        other => panic!("an integer past u64::MAX is refused, not rounded: {other:?}"),
+    }
+    let mut run = p.begin();
+    push_all(
+        &mut run,
+        &to_events(r#"{"op":"x","id":18446744073709551615}"#, 1),
+    );
+    assert!(matches!(run.finish(), Ok(true)));
+}
+
+#[test]
+fn a_streamed_minus_zero_is_zero() {
+    let p = program(json_body(&[("id", CelTy::Num)], &[]), "body.id == 0");
+    let mut run = p.begin();
+    push_all(&mut run, &to_events(r#"{"id":-0}"#, 1));
+    assert!(matches!(run.finish(), Ok(true)));
+}
+
+#[test]
 fn finish_settles_what_the_document_never_closed() {
     let p = program(
         json_body(&[("name", CelTy::Str)], &[]),

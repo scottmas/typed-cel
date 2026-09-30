@@ -435,10 +435,10 @@ fn bind_value(ty: &CelTy, json: &serde_json::Value, path: &str) -> Result<CelVal
     let str_key = |k: &str| CelMapKey::Str(CelKey::new(k));
     Ok(match (ty, json) {
         (CelTy::Bool, J::Bool(b)) => CelValue::Bool(*b),
-        // ONE numeric type, always a double. `removed: uint` deleted the trap where a
-        // serde-converted positive integer arrived as `UInt` and picked the arithmetic; binding
-        // through `CelValue::Num` is what makes sure that deletion reached the binder.
-        (CelTy::Num, J::Number(n)) => CelValue::Num(n.as_f64().ok_or_else(mismatch)?),
+        // ONE numeric type, and this is where an integer stays an integer: `i64`, then `u64`, then
+        // a double (a fraction, an exponent — or an integer past `u64::MAX`, which serde_json has
+        // already rounded). The integer arms come FIRST: `as_f64` answers for every integer too.
+        (CelTy::Num, J::Number(n)) => number(n).ok_or_else(mismatch)?,
         (CelTy::Str, J::String(s)) => CelValue::Str(s.as_str().into()),
         (CelTy::Null, J::Null) => CelValue::Null,
         // A duration has no JSON witness of its own, so a fixture spells it the way `duration()`
@@ -523,14 +523,23 @@ fn bind_value(ty: &CelTy, json: &serde_json::Value, path: &str) -> Result<CelVal
     })
 }
 
+/// A JSON number, exactly: an integer as an integer, anything else as its (canonical) double.
+fn number(n: &serde_json::Number) -> Option<CelValue> {
+    Some(match (n.as_i64(), n.as_u64()) {
+        (Some(i), _) => CelValue::Int(i),
+        (None, Some(u)) => CelValue::from(u),
+        _ => CelValue::from(crate::CelNum::from_f64(n.as_f64()?)),
+    })
+}
+
 /// A JSON value bound by its OWN shape. Reachable only under a `dyn`.
 fn json_value(v: &serde_json::Value) -> CelValue {
     use serde_json::Value as J;
     match v {
         J::Null => CelValue::Null,
         J::Bool(b) => CelValue::Bool(*b),
-        // Still a double: one numeric type holds under `dyn` too.
-        J::Number(n) => CelValue::Num(n.as_f64().unwrap_or(f64::NAN)),
+        // Exact, as under a declared type: one numeric type holds under `dyn` too.
+        J::Number(n) => number(n).unwrap_or(CelValue::Num(f64::NAN)),
         J::String(s) => CelValue::Str(s.as_str().into()),
         J::Array(items) => CelValue::list(items.iter().map(json_value)),
         J::Object(entries) => CelValue::Map(CelMap::new(
@@ -549,5 +558,30 @@ fn shape(v: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "a string",
         serde_json::Value::Array(_) => "a list",
         serde_json::Value::Object(_) => "an object",
+    }
+}
+
+#[cfg(test)]
+mod number_tests {
+    use super::*;
+
+    /// The `dyn` binding path holds an integer exactly, as a declared `double` does.
+    #[test]
+    fn dyn_json_binds_exactly() {
+        let exact = |j: serde_json::Value| json_value(&j);
+        assert_eq!(
+            format!("{:?}", exact(serde_json::json!(9007199254740993u64))),
+            "Int(9007199254740993)"
+        );
+        assert_eq!(
+            format!("{:?}", exact(serde_json::json!(u64::MAX))),
+            "UInt(18446744073709551615)"
+        );
+        assert_eq!(format!("{:?}", exact(serde_json::json!(2.5))), "Float(2.5)");
+        assert_eq!(format!("{:?}", exact(serde_json::json!(2.0))), "Int(2)");
+        assert_eq!(
+            format!("{:?}", exact(serde_json::json!({"a": [7]}))),
+            "Map(Map { map: {String(\"a\"): List([Int(7)])} })"
+        );
     }
 }

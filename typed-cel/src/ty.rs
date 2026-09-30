@@ -17,7 +17,7 @@ use std::rc::Rc;
 pub enum CelTy {
     Bool,
     /// The ONE numeric type. `number.integer` included — see `README.md`,
-    /// `diverges: one numeric type`.
+    /// `diverges: one numeric type`. Its values are exact integers or doubles (`CelNum`).
     Num,
     Str,
     Bytes,

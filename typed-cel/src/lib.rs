@@ -46,6 +46,7 @@ mod fast;
 mod governed;
 mod hostfn;
 mod lazy;
+mod num;
 mod prepared;
 mod shape;
 mod sigs;
@@ -74,6 +75,7 @@ pub use governed::{
 };
 pub use hostfn::{HostCall, HostDispatch, NoCallHosts, TAG_OTHER};
 pub use lazy::{Access, CelKey, DemandHandle, LazyValue, Presence};
+pub use num::{CelNum, Inexact};
 pub use prepared::CelRuntime;
 pub use shape::{Conjunct, Literal};
 pub use sync_facts::{FactFn, SyncFacts};

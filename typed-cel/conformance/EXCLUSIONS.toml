@@ -2291,455 +2291,185 @@ reason = "removed: modulo"
 
 
 # ---------------------------------------------------------------------------------------------
-# removed: integer values
+# removed: integer division
 #
-# Every number at run time is a double, so a case that EXPECTS an integer asks for a kind the
-# runtime no longer has (the harness compares by kind: `3` and `3.0` are different corpus
-# expectations), and a case that expects integer division, integer overflow or a division-by-zero
-# ERROR asks for arithmetic the dialect no longer does — `1 / 0` is `+inf`.
-#
-# `integer_math` is excluded WHOLE: its subject is int64 arithmetic (its other section,
-# `uint64_math`, and the uint stragglers inside `int64_math` are already `removed: uint` above,
-# and the `%` cases are `removed: modulo` just above; first match wins). A handful of its cases
-# still pass as doubles — `add_commutative`, `-false` — and keeping them would report int64
-# coverage the dialect does not have.
-#
-# Everywhere else it is case level: the sections below (`basic/self_eval_*`, `lists/size`,
-# `parse/selectors`, `macros/*`, `logic/*`, …) are about literals, sizes, keywords and
-# absorption, and only these cases happen to spell their answer as an integer or their error as a
-# division by zero.
+# One number type, held exactly: an integer is an integer, so a case that EXPECTS one now passes
+# (the harness compares numbers by exact value). What is still different is DIVISION: `/` is real
+# division, so `7 / 2` is `3.5`, and a zero divisor answers IEEE's `+inf`/`NaN` rather than an
+# error. These cases expect a division-by-zero ERROR; each is excluded case by case, because every
+# section here is about something else (absorption, short-circuiting, error results) and only its
+# error happens to be spelled as a division by zero.
 # ---------------------------------------------------------------------------------------------
 
 [[exclude]]
 file = "integer_math"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "functions"
-case = "binop"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "self_eval_nonzeroish"
-case = "self_eval_int_hex"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "self_eval_nonzeroish"
-case = "self_eval_int_hex_negative"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "self_eval_nonzeroish"
-case = "self_eval_int_negative_min"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "self_eval_nonzeroish"
-case = "self_eval_int_nonzero"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "self_eval_nonzeroish"
-case = "self_eval_list_singleitem"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "self_eval_zeroish"
-case = "self_eval_int_zero"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "basic"
-section = "variables"
-case = "self_eval_bound_lookup"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "fields"
-section = "map_fields"
-case = "map_field_access"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "fields"
-section = "map_fields"
-case = "map_key_bool"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "fields"
-section = "map_fields"
-case = "map_value_int64"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "concatenation"
-case = "left_unit"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "concatenation"
-case = "right_unit"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "concatenation"
-case = "list_repeat"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "index"
-case = "middle"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "index"
-case = "zero_based"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "size"
-case = "list"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "size"
-case = "list_empty"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "size"
-case = "map"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "lists"
-section = "size"
-case = "map_empty"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "logic"
-section = "AND"
-case = "error_left"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "logic"
-section = "AND"
-case = "error_right"
-reason = "removed: integer values"
+section = "int64_math"
+case = "divide_zero"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "logic"
 section = "conditional"
 case = "error_case"
-reason = "removed: integer values"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "logic"
-section = "conditional"
-case = "true_case"
-reason = "removed: integer values"
+section = "AND"
+case = "error_right"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "logic"
-section = "OR"
+section = "AND"
 case = "error_left"
-reason = "removed: integer values"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "logic"
 section = "OR"
 case = "error_right"
-reason = "removed: integer values"
+reason = "removed: integer division"
 
 [[exclude]]
-file = "macros"
-section = "all"
-case = "list_elem_error_exhaustive"
-reason = "removed: integer values"
+file = "logic"
+section = "OR"
+case = "error_left"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "macros"
 section = "exists"
 case = "list_elem_exists_error"
-reason = "removed: integer values"
+reason = "removed: integer division"
+
+[[exclude]]
+file = "macros"
+section = "all"
+case = "list_elem_error_exhaustive"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "macros"
 section = "exists_one"
 case = "list_no_shortcircuit"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "macros"
-section = "filter"
-case = "list_no_shortcircuit"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "macros"
-section = "filter"
-case = "list_all"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "macros"
-section = "filter"
-case = "list_one_true"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "macros"
-section = "map"
-case = "list_many"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "macros"
-section = "map"
-case = "list_one"
-reason = "removed: integer values"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "macros"
 section = "map"
 case = "list_error"
-reason = "removed: integer values"
+reason = "removed: integer division"
 
 [[exclude]]
-file = "parse"
-section = "nest"
-case = "list_index"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "nest"
-case = "list_literal"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "nest"
-case = "map_literal"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "nest"
-case = "parens"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "repeat"
-case = "add_sub"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "repeat"
-case = "list_literal"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "repeat"
-case = "mul_div"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "as"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "repeat"
-case = "unary_neg"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "continue"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "break"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "const"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "else"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "for"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "if"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "function"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "import"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "let"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "loop"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "return"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "namespace"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "package"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "var"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "void"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "parse"
-section = "selectors"
-case = "while"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "plumbing"
-section = "check_inputs"
-case = "skip_check"
-reason = "removed: integer values"
+file = "macros"
+section = "filter"
+case = "list_no_shortcircuit"
+reason = "removed: integer division"
 
 [[exclude]]
 file = "plumbing"
 section = "eval_results"
 case = "error_result"
-reason = "removed: integer values"
+reason = "removed: integer division"
+
+# ---------------------------------------------------------------------------------------------
+# diverges: exact integers span int64 and uint64
+#
+# An integer is exact across `[i64::MIN, u64::MAX]`: past `i64::MAX` it is a `u64`, not an int64
+# overflow. `9223372036854775807 + 1` is `9223372036854775808` here; spec CEL errors. Past `u64::MAX`
+# (or below `i64::MIN`) this dialect errors too — `int64_overflow_negative` and the `mul` overflows
+# pass.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "int64_overflow_positive"
+reason = "diverges: exact integers span int64 and uint64"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "int64_overflow_sub_positive"
+reason = "diverges: exact integers span int64 and uint64"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "int64_min_negate"
+reason = "diverges: exact integers span int64 and uint64"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "int64_min_negate_mul"
+reason = "diverges: exact integers span int64 and uint64"
+
+[[exclude]]
+file = "integer_math"
+section = "int64_math"
+case = "int64_min_negate_div"
+reason = "diverges: exact integers span int64 and uint64"
+
+# ---------------------------------------------------------------------------------------------
+# Cases that were excluded under integer values and fail for ANOTHER removal — the one their
+# refusal cites.
+# ---------------------------------------------------------------------------------------------
+
+[[exclude]]
+file = "parse"
+section = "repeat"
+case = "unary_neg"
+reason = "diverges: nesting is bounded"
 
 [[exclude]]
 file = "plumbing"
-section = "min"
-case = "min_program"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "string"
-section = "size"
-case = "bytes"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "string"
-section = "size"
-case = "ascii"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "string"
-section = "size"
-case = "bytes_empty"
-reason = "removed: integer values"
+section = "check_inputs"
+case = "skip_check"
+reason = "removed: dyn values"
 
 [[exclude]]
 file = "string"
 section = "size"
 case = "empty"
-reason = "removed: integer values"
+reason = "removed: size() on strings"
 
 [[exclude]]
 file = "string"
 section = "size"
 case = "one_ascii"
-reason = "removed: integer values"
+reason = "removed: size() on strings"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "ascii"
+reason = "removed: size() on strings"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "bytes_empty"
+reason = "removed: size() on strings"
+
+[[exclude]]
+file = "string"
+section = "size"
+case = "bytes"
+reason = "removed: size() on strings"
 
 [[exclude]]
 file = "timestamps"
 section = "duration_converters"
 case = "get_hours"
-reason = "removed: integer values"
+reason = "removed: timestamp"
 
 [[exclude]]
 file = "timestamps"
 section = "duration_converters"
 case = "get_minutes"
-reason = "removed: integer values"
-
-[[exclude]]
-file = "timestamps"
-section = "duration_converters"
-case = "get_seconds"
-reason = "removed: integer values"
-
+reason = "removed: timestamp"
 
 # ---------------------------------------------------------------------------------------------
 # removed: type conversion functions — `int()` left the evaluator with `removed: integer values`

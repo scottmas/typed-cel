@@ -239,7 +239,7 @@ fn filter_and_exists_one_keep_the_loop_over_a_constant_slot() {
         // A `map` over a MAP has no single order to reproduce, so it is not unrolled.
         (
             "p.m.map(k, k + u.s) == u.l",
-            "$k0.map(k, k + u.s) == u.l\n// $k0 = {\"a\": 2.0, \"b\": 1.0}",
+            "$k0.map(k, k + u.s) == u.l\n// $k0 = {\"a\": 2, \"b\": 1}",
         ),
     ]);
 }
@@ -271,7 +271,7 @@ fn over_the_budget_keeps_the_loop() {
 fn an_element_error_stays_in_its_copy() {
     folds(&[(
         "[0, 5].all(n, [1][n] > 0 || u.b)",
-        "($k0[5.0] > 0) || u.b\n// $k0 = [1.0]",
+        "($k0[5] > 0) || u.b\n// $k0 = [1]",
     )]);
 }
 

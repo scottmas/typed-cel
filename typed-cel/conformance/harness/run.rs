@@ -3,7 +3,7 @@
 use typed_cel::fork;
 // The dialect's value, beside the corpus's own `CelValue`.
 use typed_cel::CelValue as Value;
-use typed_cel::{CelKey, CelMap, CelMapKey, FastProgram};
+use typed_cel::{CelKey, CelMap, CelMapKey, CelNum, FastProgram};
 
 use super::case::{Binding, Case, CelValue, Expect};
 
@@ -141,12 +141,14 @@ pub fn to_runtime(v: &CelValue) -> Option<Value> {
     Some(match v {
         CelValue::Null => Value::Null,
         CelValue::Bool(b) => Value::Bool(*b),
-        // `removed: integer values` — a bound integer WIDENS, exactly as the dialect's own binders
-        // widen a host integer (`From<i64> for Value`) and as an integer literal does. What the
-        // harness keeps strict is the EXPECTATION (see `equal`): a case that wants an integer
-        // back asks for a kind the runtime no longer has.
-        CelValue::Int(i) => Value::Num(*i as f64),
+        // One number type, held exactly: a bound integer is an integer (`Value::Int`), a bound
+        // double a double — the same representations the dialect's own binders build.
+        CelValue::Int(i) => Value::Int(*i),
         CelValue::Double(d) => Value::Num(*d),
+        // A `uint64_value` BINDING is a number the dialect holds exactly (canonical: an `Int` when
+        // it fits). What `removed: uint` still removes is the `u` literal and the `uint` TYPE, which
+        // `names_uint` excludes by the expression's text.
+        CelValue::Uint(u) => Value::from(*u),
         CelValue::String(s) => Value::Str(s.as_str().into()),
         CelValue::Bytes(b) => Value::Bytes(b.as_slice().into()),
         CelValue::List(items) => Value::List(
@@ -163,11 +165,6 @@ pub fn to_runtime(v: &CelValue) -> Option<Value> {
             }
             Value::Map(CelMap::new(map))
         }
-        // `removed: uint` — there is no unsigned runtime type, so a uint binding or expectation
-        // has no representation at all. Mapping it onto `Int` would be a silent re-typing that
-        // makes the removal invisible to the corpus; returning `None` makes those cases FAIL
-        // until they are excluded, which is what makes the deletion auditable.
-        CelValue::Uint(_) => return None,
         CelValue::Object { .. } | CelValue::Enum { .. } | CelValue::Type(_) => return None,
         CelValue::Unsupported(_) => return None,
     })
@@ -178,25 +175,37 @@ fn key_of(v: &Value) -> Option<CelMapKey> {
     match v {
         Value::Str(s) => Some(CelMapKey::Str(CelKey::new(s))),
         Value::Bool(b) => Some(CelMapKey::Bool(*b)),
-        Value::Num(n) if n.fract() == 0.0 => Some(CelMapKey::Num(*n as i64)),
+        v => v.num()?.integral_key().map(CelMapKey::Num),
+    }
+}
+
+/// A corpus number as the dialect's one number: `int64_value`, `uint64_value` and `double_value`
+/// are three spellings of it.
+fn want_num(v: &CelValue) -> Option<CelNum> {
+    match v {
+        CelValue::Int(i) => Some(CelNum::Int(*i)),
+        CelValue::Uint(u) => Some(CelNum::UInt(*u)),
+        CelValue::Double(d) => Some(CelNum::Float(*d)),
         _ => None,
     }
 }
 
 /// Does the runtime value match what the corpus expects?
 ///
-/// Comparison is by KIND as well as content: `1` and `1.0` are different corpus expectations and
-/// must stay different here, or the one-numeric-type divergence would be untestable — the whole
-/// point of measuring against the corpus is that it can see the difference the dialect makes.
+/// Numbers compare by exact VALUE: the dialect has one numeric type, so `int64_value: 3` and
+/// `double_value: 3.0` expect the same number, and a representation (`Int(3)`, `Float(3.0)`) is not
+/// a kind. What stays visible is every place the VALUE differs — an integer division that
+/// truncates, an overflow the spec errors on. Everything else compares by kind and content.
 fn equal(want: &CelValue, got: &Value) -> bool {
+    if let (Some(w), Some(g)) = (want_num(want), got.num()) {
+        // NaN is not equal to itself, but "the expression produced NaN" is exactly what several
+        // fp_math cases assert, so it is compared structurally rather than by `==`.
+        let nan = |n: CelNum| matches!(n, CelNum::Float(f) if f.is_nan());
+        return w.eq_exact(g) || (nan(w) && nan(g));
+    }
     match (want, got) {
         (CelValue::Null, Value::Null) => true,
         (CelValue::Bool(a), Value::Bool(b)) => a == b,
-        // No arm for `CelValue::Int`: there is no runtime integer to match it (`removed: integer
-        // values`), so an integer expectation fails by kind and its case is EXCLUDED.
-        // NaN is not equal to itself, but "the expression produced NaN" is exactly what several
-        // fp_math cases assert, so the expectation is compared structurally rather than by `==`.
-        (CelValue::Double(a), Value::Num(b)) => a == b || (a.is_nan() && b.is_nan()),
         (CelValue::String(a), Value::Str(b)) => a.as_str() == &**b,
         (CelValue::Bytes(a), Value::Bytes(b)) => a.as_slice() == &**b,
         (CelValue::List(a), Value::List(b)) => {
@@ -240,7 +249,7 @@ pub fn type_of(v: &CelValue) -> Option<typed_cel::CelTy> {
     Some(match v {
         CelValue::Null => CelTy::Null,
         CelValue::Bool(_) => CelTy::Bool,
-        CelValue::Int(_) | CelValue::Double(_) => CelTy::Num,
+        CelValue::Int(_) | CelValue::Uint(_) | CelValue::Double(_) => CelTy::Num,
         CelValue::String(_) => CelTy::Str,
         CelValue::Bytes(_) => CelTy::Bytes,
         CelValue::List(items) => CelTy::list(one(items.iter().map(type_of))?),
@@ -248,8 +257,7 @@ pub fn type_of(v: &CelValue) -> Option<typed_cel::CelTy> {
             one(entries.iter().map(|(k, _)| type_of(k)))?,
             one(entries.iter().map(|(_, v)| type_of(v)))?,
         ),
-        CelValue::Uint(_)
-        | CelValue::Object { .. }
+        CelValue::Object { .. }
         | CelValue::Enum { .. }
         | CelValue::Type(_)
         | CelValue::Unsupported(_) => return None,

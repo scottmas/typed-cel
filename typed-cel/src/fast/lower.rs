@@ -13,6 +13,7 @@ use std::sync::Arc;
 use crate::common::ast::{
     operators, CallExpr, ComprehensionExpr, EntryExpr, Expr, IdedExpr, LiteralValue,
 };
+use crate::num::CelNum;
 use crate::CelKey;
 use crate::CelValue;
 use crate::ExecutionError;
@@ -688,7 +689,9 @@ impl Lower<'_> {
         let v = self.constant_value(e)?;
         Some(match v {
             CelValue::Bool(b) => CVal::Bool(b),
-            CelValue::Num(f) => CVal::Num(f),
+            CelValue::Num(_) | CelValue::Int(_) | CelValue::UInt(_) => {
+                CVal::Num(v.num().expect("a number"))
+            }
             CelValue::Null => CVal::Null,
             CelValue::Str(s) => CVal::Str(Box::from(&*s)),
             CelValue::Bytes(b) => CVal::Bytes(b.to_vec().into_boxed_slice()),
@@ -702,8 +705,10 @@ impl Lower<'_> {
         match &e.expr {
             Expr::Literal(l) => Some(match l {
                 LiteralValue::Boolean(b) => CelValue::Bool(*b.inner()),
-                LiteralValue::Int(i) => CelValue::Num(*i as f64),
-                LiteralValue::Double(d) => CelValue::Num(*d.inner()),
+                LiteralValue::Int(i) => CelValue::Int(*i),
+                LiteralValue::UInt(u) => CelValue::from(*u),
+                // Canonical: a literal `2.0` is the integer 2.
+                LiteralValue::Double(d) => CelValue::from(CelNum::from_f64(*d.inner())),
                 LiteralValue::String(s) => CelValue::Str(s.inner().into()),
                 LiteralValue::Bytes(b) => CelValue::Bytes(b.inner().into()),
                 LiteralValue::Null => CelValue::Null,
@@ -725,7 +730,12 @@ impl Lower<'_> {
             {
                 match (c.func_name.as_str(), self.constant_value(&c.args[0])?) {
                     (operators::LOGICAL_NOT, CelValue::Bool(b)) => Some(CelValue::Bool(!b)),
-                    (operators::NEGATE, CelValue::Num(f)) => Some(CelValue::Num(-f)),
+                    // An overflowing negation (`-18446744073709551615`) is not folded: it
+                    // fails when it runs, with the operator's error.
+                    (
+                        operators::NEGATE,
+                        v @ (CelValue::Num(_) | CelValue::Int(_) | CelValue::UInt(_)),
+                    ) => crate::num::neg(v.num()?).ok().map(CelValue::from),
                     _ => None,
                 }
             }
@@ -823,20 +833,14 @@ impl Lower<'_> {
     }
 
     /// The numbers a LIST known at compile time holds, when every element is one.
-    fn known_nums(&self, e: &IdedExpr) -> Option<Vec<f64>> {
+    fn known_nums(&self, e: &IdedExpr) -> Option<Vec<CelNum>> {
         let CelValue::List(items) = self.known(e)? else {
             return None;
         };
-        items
-            .iter()
-            .map(|v| match v {
-                CelValue::Num(n) => Some(*n),
-                _ => None,
-            })
-            .collect()
+        items.iter().map(CelValue::num).collect()
     }
 
-    fn numset(&mut self, nums: Vec<f64>) -> u32 {
+    fn numset(&mut self, nums: Vec<CelNum>) -> u32 {
         self.code.numsets.push(NumSet::new(nums));
         (self.code.numsets.len() - 1) as u32
     }
@@ -2486,7 +2490,7 @@ impl Lower<'_> {
             err: h,
         });
         if let Some(count) = count {
-            let zero = self.konst(CVal::Num(0.0));
+            let zero = self.konst(CVal::Num(CelNum::Int(0)));
             self.push(Op::Const {
                 dst: count,
                 k: zero,
@@ -2617,7 +2621,7 @@ impl Lower<'_> {
         let count = match shape {
             Shape::ExistsOne => {
                 let count = self.tmp()?;
-                let zero = self.konst(CVal::Num(0.0));
+                let zero = self.konst(CVal::Num(CelNum::Int(0)));
                 self.push(Op::Const {
                     dst: count,
                     k: zero,
@@ -2987,15 +2991,16 @@ fn string_literal(e: &IdedExpr) -> Option<&str> {
 /// A whole `||` tree of at least [`MIN_CHAIN`] leaves, each `N == <number>` or `<number> == N`
 /// over ONE pure needle `N`: the needle and the numbers. Every leaf's only failure is reading
 /// `N`, so the tree fails exactly when `N` does, with `N`'s error — and answers as a number set.
-fn num_chain(e: &IdedExpr) -> Option<(&IdedExpr, Vec<f64>)> {
+fn num_chain(e: &IdedExpr) -> Option<(&IdedExpr, Vec<CelNum>)> {
     let mut leaves = Vec::new();
     or_leaves(e, &mut leaves);
     if leaves.len() < MIN_CHAIN {
         return None;
     }
     let num = |x: &IdedExpr| match &x.expr {
-        Expr::Literal(LiteralValue::Double(d)) => Some(*d.inner()),
-        Expr::Literal(LiteralValue::Int(i)) => Some(*i as f64),
+        Expr::Literal(LiteralValue::Double(d)) => Some(CelNum::from_f64(*d.inner())),
+        Expr::Literal(LiteralValue::Int(i)) => Some(CelNum::Int(*i)),
+        Expr::Literal(LiteralValue::UInt(u)) => Some(CelNum::from(*u)),
         _ => None,
     };
     let mut needle: Option<&IdedExpr> = None;

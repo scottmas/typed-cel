@@ -188,9 +188,25 @@ fn the_activation_is_the_declared_variables_only() {
 }
 
 #[test]
-fn numbers_bind_as_doubles() {
-    // `removed: uint` deleted the trap where a serde-converted positive integer arrived as `UInt`
-    // and picked the arithmetic. This is what proves the deletion reached the BINDER.
+fn numbers_bind_exactly() {
+    // Every JSON number binds as the one number type, an integer held exactly; and whichever
+    // representation it lands in, it compares with the others by value.
+    assert_eq!(
+        assertion(
+            "body.amount == 9007199254740993",
+            body(json!({"amount": 9007199254740992i64}))
+        ),
+        Ok(false),
+        "a neighbour above 2^53 is a different number"
+    );
+    assert_eq!(
+        assertion("body.amount == 5.0", body(json!({"amount": 5}))),
+        Ok(true)
+    );
+    assert_eq!(
+        assertion("body.amount + 0.5 == 5.5", body(json!({"amount": 5u64}))),
+        Ok(true)
+    );
     for n in [
         json!(5),
         json!(5.0),

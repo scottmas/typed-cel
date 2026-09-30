@@ -901,16 +901,20 @@ impl gen::CELVisitorCompat<'_> for Parser {
     fn visit_Int(&mut self, ctx: &IntContext<'_>) -> Self::Return {
         let string = ctx.get_text();
         if let Some(token) = ctx.tok.as_ref() {
-            let parsed = match hex_digits(&string) {
-                Some(hex) => i64::from_str_radix(&hex, 16),
-                None => string.parse::<i64>(),
+            // An `i64`, else — unsigned, and past `i64::MAX` — a `u64`: one number type, held
+            // exactly either way. Past `u64::MAX` is refused rather than rounded.
+            let (digits, radix) = match hex_digits(&string) {
+                Some(hex) => (hex, 16),
+                None => (string.clone(), 10),
             };
-            let val = match parsed {
-                Ok(v) => v,
-                Err(e) => return self.report_error(token, Some(e), "invalid int literal"),
+            let lit = match i64::from_str_radix(&digits, radix) {
+                Ok(v) => LiteralValue::Int(v),
+                Err(e) => match u64::from_str_radix(&digits, radix) {
+                    Ok(v) if !digits.starts_with('-') => LiteralValue::UInt(v),
+                    _ => return self.report_error(token, Some(e), "invalid int literal"),
+                },
             };
-            self.helper
-                .next_expr(token, Expr::Literal(LiteralValue::Int(val)))
+            self.helper.next_expr(token, Expr::Literal(lit))
         } else {
             self.report_error::<ParseError, _>(&ctx.start(), None, "Incomplete Int!")
         }
@@ -2101,6 +2105,9 @@ ERROR: <input>:1:24: optional syntax is not in the typed-CEL dialect (removed: o
                     }
                     LiteralValue::Int(i) => {
                         &format!("{}^#{}:{}#", i, expr.id, "*expr.Constant_Int64Value")
+                    }
+                    LiteralValue::UInt(u) => {
+                        &format!("{}^#{}:{}#", u, expr.id, "*expr.Constant_Uint64Value")
                     }
                     LiteralValue::Double(f) => &format!(
                         "{}^#{}:{}#",

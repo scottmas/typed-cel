@@ -297,6 +297,6 @@ fn a_second_declaration_replaces_the_first() {
     let facts = SyncFacts::new()
         .with("first", Box::new(|| Ok(CelValue::Num(1.0))))
         .with("first", Box::new(|| Ok(CelValue::Num(2.0))));
-    assert!(matches!(facts.member("first"), Ok(CelValue::Num(n)) if n == 2.0));
+    assert!(matches!(facts.member("first"), Ok(v) if v == CelValue::Int(2)));
     assert_eq!(facts.keys().unwrap().count(), 1);
 }

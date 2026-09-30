@@ -4,9 +4,9 @@
 # compares a live run to this file and fails on ANY difference, in either direction.
 
 [basic]
-pass = 25
+pass = 33
 static_pass = 2
-excluded = 16
+excluded = 8
 fail = 0
 
 [bindings_ext]
@@ -52,9 +52,9 @@ excluded = 85
 fail = 0
 
 [fields]
-pass = 15
+pass = 18
 static_pass = 0
-excluded = 45
+excluded = 42
 fail = 0
 
 [fp_math]
@@ -64,27 +64,27 @@ excluded = 1
 fail = 0
 
 [integer_math]
-pass = 0
-static_pass = 0
-excluded = 64
+pass = 30
+static_pass = 1
+excluded = 33
 fail = 0
 
 [lists]
-pass = 10
+pass = 19
 static_pass = 0
-excluded = 29
+excluded = 20
 fail = 0
 
 [logic]
-pass = 15
+pass = 16
 static_pass = 4
-excluded = 11
+excluded = 10
 fail = 0
 
 [macros]
-pass = 24
+pass = 28
 static_pass = 0
-excluded = 20
+excluded = 16
 fail = 0
 
 [macros2]
@@ -112,15 +112,15 @@ excluded = 70
 fail = 0
 
 [parse]
-pass = 149
+pass = 173
 static_pass = 0
-excluded = 70
+excluded = 46
 fail = 0
 
 [plumbing]
-pass = 2
+pass = 3
 static_pass = 0
-excluded = 3
+excluded = 2
 fail = 0
 
 [proto2]
@@ -154,9 +154,9 @@ excluded = 209
 fail = 0
 
 [timestamps]
-pass = 18
+pass = 19
 static_pass = 0
-excluded = 58
+excluded = 57
 fail = 0
 
 [type_deduction]

@@ -418,7 +418,7 @@ fn the_corpus_rows_moved() {
         ("removed: timestamp", names_timestamp),
         ("removed: dyn()", names_dyn),
         ("removed: optional syntax", names_optional),
-        ("removed: integer values", names_integer_value),
+        ("removed: integer division", names_integer_division),
         ("removed: modulo", names_modulo),
     ];
 
@@ -526,24 +526,27 @@ fn uint_suffix(expr: &str) -> bool {
     false
 }
 
-/// Does the case EXPECT an integer value? There is no runtime integer, so a case whose answer is
-/// `int64_value: 3` asks for a kind the dialect cannot produce — `3.0` is a different corpus
-/// expectation, and the harness compares by kind. An integer LITERAL in the expression, or an
-/// integer BINDING, is not this: both widen, which is `diverges: one numeric type` rather than the
-/// removal.
-fn names_integer_value(case: &Case) -> bool {
-    fn value_is_int(v: &harness::case::CelValue) -> bool {
-        use harness::case::CelValue;
-        match v {
-            CelValue::Int(_) => true,
-            CelValue::List(items) => items.iter().any(value_is_int),
-            CelValue::Map(entries) => entries
-                .iter()
-                .any(|(k, v)| value_is_int(k) || value_is_int(v)),
-            _ => false,
+/// Does the case expect a division to FAIL? `/` is real division in this dialect — a zero divisor
+/// answers `+inf`/`NaN` — so a case that expects an evaluation error from an expression dividing
+/// asks for the integer division the dialect does not have.
+fn names_integer_division(case: &Case) -> bool {
+    let mut quote: Option<char> = None;
+    let mut prev = ' ';
+    let mut divides = false;
+    for c in case.expr.chars() {
+        match quote {
+            Some(q) => {
+                if c == q && prev != '\\' {
+                    quote = None;
+                }
+            }
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c == '/' => divides = true,
+            None => {}
         }
+        prev = c;
     }
-    matches!(&case.expect, harness::case::Expect::Value(v) if value_is_int(v))
+    divides && matches!(case.expect, harness::case::Expect::EvalError)
 }
 
 /// A `%` operator, outside a string literal.

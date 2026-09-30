@@ -72,16 +72,20 @@ Five things about that are worth knowing before writing any of it:
   evaluates to a string is a compile error rather than a condition that is always true. A program
   with more than two outcomes is compiled with `compile_returning`, which requires the declared
   type EXACTLY in the same way — `dyn` never qualifies.
-- **There is one numeric type.** Every number is a `double`, at check time AND at run time, and
-  integer literals widen. There is no `int`, no `uint`, and therefore no arithmetic that changes
-  meaning with the operand's provenance: `7 / 2` is `3.5`, `1 / 0` is `+inf`, and there is no `%`.
+- **There is one numeric type.** The checker knows one number type, `double`; there is no `int`
+  and no `uint` to reconcile. Its VALUES are held exactly: an integer (up to `u64::MAX`) is an
+  integer, so `9007199254740993 != 9007199254740992`; anything else is an `f64`. Comparison is by
+  exact value across the two, integer arithmetic is exact and errors on overflow, and division is
+  real division — `7 / 2` is `3.5`, `1 / 0` is `+inf` — so no operator changes meaning with the
+  operand's provenance. There is no `%`.
 - **Durations are the only temporal type.** `30s` is an alias for `duration('30s')`, and it is the
   whole of this dialect's syntactic deviation from spec CEL. There is no `timestamp` and no clock
   read — a condition that fires because NTP stepped is not a policy.
 - **There are no custom functions.** The [signature table](#signatures) is a closed enumeration, so
   `is_owner(body.user_id)` is an *unknown function* error rather than something a caller can enable.
   The DIALECT declares none; an embedding environment may register typed, PURE host functions
-  (`register_host`) that belong to that environment alone, and a host function never shadows a
+  (`register_host`) that belong to that environment alone — a numeric argument arrives as
+  `CelValue::Int`, `UInt` or `Num`, read with `CelValue::num` — and a host function never shadows a
   dialect name — a built-in, a removal, a macro or an operator spelling is refused at registration.
 - **There is no optional syntax**, because there is nothing absent to write it for: every path an
   expression names is present in the activation from load, zero-valued. See
@@ -116,20 +120,20 @@ decision (allocations per decision); the columns are defined in
 <!-- ablation:begin -->
 | workload | Rust | (1) upstream | (2) typed tree † | (3a) bytecode, activation | (3b) bytecode, facts | (4) + partial evaluation |
 |---|---:|---:|---:|---:|---:|---:|
-| `fs_open_allow_all` | 8.0 ns (0) | 4812 ns (92) | 4612 ns (92) | 449 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 31.5 ns (0) |
-| `fs_open_13` | 34.6 ns (0) | 11.4 µs (248.8) | 11.0 µs (248.8) | 622 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 75.8 ns (0) |
-| `fs_open_1000` | 1390 ns (0) | 865.1 µs (17064.4) | 829.6 µs (17064.4) | 10.8 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 171 ns (0) |
-| `prefix_13` | 41.0 ns (0) | 12.4 µs† (247.8) | 11.7 µs (247.8) | 429 ns (0) | n/a (composite root: `policy.roots`) | 48.8 ns (0) |
-| `nested_fields` | 8.7 ns (0) | 9330 ns (193) | 8460 ns (193) | 243 ns (0) | 36.7 ns (0) | — (reads no policy) |
-| `all_items` | 18.0 ns (0) | 22.4 µs (455.4) | 20.7 µs (481.8) | 773 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
-| `policy_residual` | 26.8 ns (0) | 6944 ns (143.1) | 6223 ns (143.1) | 558 ns (0) | n/a (composite root: `policy.methods`) | 60.2 ns (0) |
+| `fs_open_allow_all` | 8.1 ns (0) | 4810 ns (92) | 4612 ns (92) | 455 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 32.4 ns (0) |
+| `fs_open_13` | 33.2 ns (0) | 11.1 µs (248.8) | 11.0 µs (248.8) | 627 ns (0) | n/a (composite root: `policy.fs.readonly_roots`) | 73.4 ns (0) |
+| `fs_open_1000` | 1386 ns (0) | 865.2 µs (17064.4) | 829.6 µs (17064.4) | 11.0 µs (0) | n/a (composite root: `policy.fs.readonly_roots`) | 161 ns (0) |
+| `prefix_13` | 36.3 ns† (0) | 11.8 µs (247.8) | 11.7 µs (247.8) | 447 ns† (0) | n/a (composite root: `policy.roots`) | 48.0 ns† (0) |
+| `nested_fields` | 8.7 ns (0) | 8878 ns (193) | 8460 ns (193) | 239 ns (0) | 35.9 ns (0) | — (reads no policy) |
+| `all_items` | 18.0 ns (0) | 21.5 µs (455.4) | 20.7 µs (481.8) | 782 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
+| `policy_residual` | 25.1 ns (0) | 6357 ns (143.1) | 6223 ns (143.1) | 548 ns (0) | n/a (composite root: `policy.methods`) | 63.2 ns (0) |
 
 † Column (2) is historical: measured on the typed dialect's first engine, since deleted (docs/PERFORMANCE.md, "Historical"). Every other column is this run.
 <!-- ablation:end -->
 
 **What you give up.** Each is a row in [Relationship to spec CEL](#relationship-to-spec-cel):
 
-- integers and `uint` — one `f64` number kind, so `7 / 2` is `3.5` (`removed: integer values`, `removed: uint`)
+- integer and `uint` TYPES — one number type (integers inside it are still exact), so `7 / 2` is `3.5` and `1 / 0` is `+inf` (`removed: integer division`, `removed: uint`)
 - `%` (`removed: modulo`)
 - `dyn()` and every dyn value: heterogeneous lists and maps, branches of different types (`removed: dyn()`, `removed: dyn values`)
 - heterogeneous equality (`diverges: equality is homogeneous`)
@@ -155,9 +159,9 @@ Against cel-spec v0.25.1 that is 1875 of 2344 cases excluded (the block in
   `body.amount == session.user_id` and an unknown function are all build errors, never a runtime deny.
 - One engine. Every program — evaluated, specialized, streamed, paused and resumed — runs on the same
   register backend. There is no second implementation to disagree with.
-- Speed: `fs_open_1000` with its policy bound decides in 171 ns — 5059.1× faster than upstream
-  cel-rust 0.14.2 (865.1 µs) and 8.1× faster than the hand-written Rust reference (1390 ns), which
-  scans the 1000 roots linearly. `policy_residual` decides in 60.2 ns against upstream's 6944 ns, 115.3×.
+- Speed: `fs_open_1000` with its policy bound decides in 161 ns — 5373.9× faster than upstream
+  cel-rust 0.14.2 (865.2 µs) and 8.6× faster than the hand-written Rust reference (1386 ns), which
+  scans the 1000 roots linearly. `policy_residual` decides in 63.2 ns against upstream's 6357 ns, 100.6×.
 - Zero allocations per decision on the facts path: every (3b) and (4) cell reads `(0)`, and
   `tests/fast_alloc.rs` holds it at exactly 0 over 10 000 decisions.
 - Partial evaluation: bind the policy once, and the per-request program reads only the request (the
@@ -394,8 +398,8 @@ what a lazy value or a host function returns, and what a program's result is:
 
 ```rust
 pub enum CelValue {
-    Bool(bool), Num(f64), Str(Arc<str>), Duration(CelDuration), Bytes(Arc<[u8]>),
-    List(Arc<[CelValue]>), Map(CelMap), Null, Lazy(Arc<dyn LazyValue>),
+    Bool(bool), Num(f64), Int(i64), UInt(u64), Str(Arc<str>), Duration(CelDuration),
+    Bytes(Arc<[u8]>), List(Arc<[CelValue]>), Map(CelMap), Null, Lazy(Arc<dyn LazyValue>),
 }
 
 CelValue::record([(CelKey::from("user_id"), CelValue::from("u1"))]);   // a record is a string-keyed map
@@ -571,32 +575,33 @@ three outcomes:
 ```text
   google/cel-spec v0.25.1 — 2344 cases, each checked, then evaluated
 
-      443  pass
-       26  pass statically (the case expects an error; the checker refused it first)
-     1875  excluded by dialect
+      524  pass
+       27  pass statically (the case expects an error; the checker refused it first)
+     1793  excluded by dialect
         0  fail
 
   Excluded by dialect:
         1  diverges: duration() takes a string
         1  diverges: equality is homogeneous
-        1  diverges: nesting is bounded
+        5  diverges: exact integers span int64 and uint64
+        2  diverges: nesting is bounded
        19  diverges: undeclared names are compile errors
         6  not implemented: backtick-quoted field selection
        13  not implemented: container name resolution
        47  not implemented: the cel-spec checker
        46  not implemented: two-variable comprehension macros
         4  removed: bytes concatenation
-       16  removed: dyn values
+       17  removed: dyn values
        88  removed: dyn()
       454  removed: extension libraries
-      108  removed: integer values
+       12  removed: integer division
         4  removed: logic on non-bools
        12  removed: modulo
        70  removed: optional syntax
        25  removed: ordering beyond numbers and strings
       648  removed: protobuf
-        2  removed: size() on strings
-       53  removed: timestamp
+        7  removed: size() on strings
+       55  removed: timestamp
        54  removed: type conversion functions
        25  removed: type values
       178  removed: uint
@@ -618,12 +623,12 @@ keeps working, nobody notices, and a policy gets written against something this 
 | `removed: dyn()` | `dyn()` | `dyn_is_gone` | one numeric type and a real checker make it unnecessary; it exists to defeat type checking |
 | `removed: optional syntax` | `[?k]`, `.?f`, `optional.*`, `orValue` | `optional_syntax_is_gone` | unused — absence is handled by a total activation — and `.?field` is measurably wrong on maps |
 | `removed: timestamp` | `timestamp`, and every wall-clock reading | `timestamp_is_gone` | **a clock read in a sandbox decision is a bug.** `CLOCK_MONOTONIC` is a repo rule; a revocation that fires because NTP stepped is not a policy |
-| `removed: uint` | `uint` | `uint_is_gone` | one numeric type. Also deletes the trap where a serde-converted positive integer arrives as `UInt` and picks the arithmetic |
+| `removed: uint` | the `u` literal suffix, `uint()` and the `uint` type | `uint_is_gone` | one numeric type: a large integer is written without a `u` and held exactly. The trap where a serde-converted positive integer arrives as a `u64` and picks a different arithmetic stays closed because arithmetic and comparison are defined across every representation of a number |
 | `removed: size() on strings` | `size()` over a string | `size_on_a_string_is_gone` | it returns **bytes**, not code points: `size('πέντε')` is 10. A length predicate that means something different on non-ASCII input is worse than none |
 | `removed: extension libraries` | `math`, `strings`, `encoders`, `bindings`, `block` | `extension_libraries_are_gone` | none shipped upstream; none added. 454 corpus cases, the largest single exclusion |
 | `removed: type values` | `type()` and the type denotations (`int`, `string`, `list`, `map`, `bool`, `double`, `bytes`, `null_type`, `type`) | `type_values_are_gone` | the dialect has a STATIC checker, so a runtime type value has no job: every question `type(x) == type(y)` answers is either already decided at build time or a comparison the signature table refuses. 24 corpus cases exist for a feature no expression can reach |
 | `removed: type conversion functions` | `bool()`, `int()`, `string()`, `double()`, `bytes()` | `type_conversion_functions_are_gone` | one numeric type leaves nothing for `int()` to convert to, `bool('true')` is string-typed truthiness that the checker exists to prevent, and `string()` on a bytes value is lossy in a way the caller would not notice (`conversions/string/bytes_invalid` turns invalid UTF-8 into U+FFFD). `double()` converts to the number every value already is, `bytes('…')` is the literal `b'…'`, and `uint()` rides `removed: uint` |
-| `removed: integer values` | an integer at RUN time — `int64` arithmetic, integer division, integer overflow, division-by-zero errors | `integer_values_are_gone` | the checker already had one numeric type, and a runtime that kept a second one broke checked programs: `x + 1` with `x: double` type-checked and then failed as `Float + Int`. An integer LITERAL still parses as written and widens to a double the moment a value is built from it |
+| `removed: integer division` | integer (truncating) division and division-by-zero errors | `integer_division_is_gone` | the dialect has one number type, so `/` cannot mean two things by the operands' spelling: it is real division, `7 / 2` is `3.5`, and a zero divisor answers IEEE's `+inf`/`NaN` as spec CEL's doubles do. Integers are otherwise exact — `+`, `-`, `*` and comparison never round |
 | `removed: dyn values` | a value of no static type: a heterogeneous list or map literal, a conditional whose branches differ, and any use of a `dyn`-typed expression except `has()` (and `size()` of a list or map holding them) | `dyn_values_are_gone` | a typed backend holds every value unboxed at a known type, and a `dyn` is what would force it to keep a boxed escape hatch. No program cynch generates needs one. Refused by the CHECKER |
 | `removed: ordering beyond numbers and strings` | `<`, `<=`, `>`, `>=` on anything but numbers, strings and durations — bools, bytes, lists, maps, `null` | `ordering_beyond_numbers_and_strings_is_gone` | no generated program orders a bool or a byte string, and each extra ordering is a comparison a typed backend carries for nobody. Refused by the checker, and the backend has no op for it |
 | `removed: logic on non-bools` | the logical operators (and, or, `!`) with an operand that is not a `bool` — including spec CEL's `false && 32`, which short-circuits past the number | `logic_on_non_bools_is_gone` | a number where a truth value goes is a bug the checker exists to report, whether or not a short circuit would have hidden it. Refused by the CHECKER; at run time a non-bool operand is an error like any other |
@@ -658,7 +663,8 @@ Spec CEL says one thing and this dialect does another, on purpose.
 
 | id | divergence | note |
 |---|---|---|
-| `diverges: one numeric type` | every number is a `double` — to the checker AND at run time, where `Value` has no integer variant (`removed: integer values`); integer literals widen | JSON's number model (as JavaScript reads it) *is* f64, and an integer type would be unsound: a schema's `number.integer` admits `1e300`, and `1e300 as i64` saturates rather than failing |
+| `diverges: one numeric type` | one number TYPE, `double`, to the checker; at run time its values are held exactly — an `i64`, a `u64` above `i64::MAX`, or an `f64` (`CelNum`) — and compare by value across those | ergonomic: no `1` vs `1.0` type errors, no operator whose meaning depends on how an operand was spelled. The values are exact because a rounded one is a bypass: `9007199254740993` and `9007199254740992` are different account ids and one double |
+| `diverges: exact integers span int64 and uint64` | an integer is exact across `[i64::MIN, u64::MAX]`: `9223372036854775807 + 1` is `9223372036854775808`, where spec CEL's `int` overflows. Past that range it is an error here too | the one number type has no `int64` to overflow; stopping at `i64::MAX` would refuse a `u64` id or `RLIM_INFINITY` a document legitimately carries. Pinned by `one_numeric_type_many_representations` |
 | `diverges: literal-key record index` | a string-literal index into a record is checked field access | `headers['content-type']` must keep unknown-key detection |
 | `diverges: dyn must be narrowed` | a `dyn` value must be narrowed before it is used; spec CEL checks one against everything | a schema's `unknown` is a statement about DATA; CEL's `dyn` is a statement about VERIFICATION. This dialect DELETED `dyn()` because it exists to defeat type checking, so a schema must not be able to manufacture what an author may not write |
 | `diverges: undeclared names are compile errors` | an unbound variable or an unknown function is a CHECK error; spec CEL defers both to evaluation, where a short circuit can absorb the error (spec CEL answers `true` for an unbound `x` or-ed with `true`) | a typo in a generated program must never be silently absorbed by a short circuit. Every name a program may read is declared in its environment |

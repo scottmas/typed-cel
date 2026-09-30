@@ -150,18 +150,15 @@ fn timestamp_is_gone() {
         eval("duration('500ms') < duration('1s')"),
         Ok("Bool(true)".into())
     );
-    assert_eq!(
-        eval("duration('90s').getSeconds()"),
-        Ok("Float(90.0)".into())
-    );
+    assert_eq!(eval("duration('90s').getSeconds()"), Ok("Int(90)".into()));
 }
 
 /// `removed: uint`
 ///
-/// One numeric type. The payoff is a trap disappearing: cel-rust's serde conversion types a
-/// positive JSON integer as `UInt`, so a binder handing a raw `serde_json::Value` to
-/// `add_variable` gets a VALUE-directed numeric type rather than a schema-directed one. With no
-/// `UInt` variant, that trap cannot be reintroduced by a later binder.
+/// One numeric type. The `u` literal and the `uint` type are gone: a large integer written without
+/// a `u` is the one number type, held exactly. The trap this closed — cel-rust's serde conversion
+/// typing a positive JSON integer as `UInt`, which then picked a different ARITHMETIC — stays
+/// closed because arithmetic and comparison are defined across every representation of a number.
 #[test]
 fn uint_is_gone() {
     all_refused(&[
@@ -215,8 +212,8 @@ fn size_on_a_string_is_gone() {
     checks("m.size() == 1");
 
     // And the evaluator still answers for them.
-    assert_eq!(eval("size([1, 2, 3])"), Ok("Float(3.0)".into()));
-    assert_eq!(eval("size({'a': 1})"), Ok("Float(1.0)".into()));
+    assert_eq!(eval("size([1, 2, 3])"), Ok("Int(3)".into()));
+    assert_eq!(eval("size({'a': 1})"), Ok("Int(1)".into()));
 }
 
 /// An environment holding one value of each shape, for the removals that bite at CHECK.
@@ -428,15 +425,15 @@ fn gives(src: &str, want: &str) {
     assert_eq!(eval(src), Ok(want.to_string()), "`{src}`");
 }
 
-/// `removed: integer values`
+/// `diverges: one numeric type`
 ///
-/// The checker has had ONE numeric type (`double`) all along; the runtime kept a second one, and
-/// the two disagreed exactly where a checked program met a bound number: `x + 1` with `x: double`
-/// type-checked and then failed at evaluation as `Float + Int`. Now every number at run time is an
-/// f64. An integer LITERAL still parses as written — `1` stays `1` in a rendering — and widens the
-/// moment a value is built from it.
+/// The checker has ONE numeric type (`double`). A VALUE of it is held exactly, in one of three
+/// representations — an `i64`, a `u64` above `i64::MAX`, or an `f64` — and the engine builds the
+/// canonical one (an integral double in range is an integer). Every comparison is by exact value
+/// across representations, so a checked program that mixes a bound number and a literal answers
+/// as the arithmetic says: `x + 1` with `x: double` bound to `2` is `3`, which equals `3.0`.
 #[test]
-fn integer_values_are_gone() {
+fn one_numeric_type_many_representations() {
     // The checked program that used to type-check and then fail: a bound double beside a literal.
     let mut env = CelEnvironment::new();
     env.declare("x", CelTy::Num);
@@ -448,43 +445,61 @@ fn integer_values_are_gone() {
         Ok(true)
     );
 
-    // Every number an expression produces is a double, whichever way it was spelled.
-    gives("1 + 2", "Float(3.0)");
-    gives("-7", "Float(-7.0)");
-    gives("size([1, 2])", "Float(2.0)");
-    gives("duration('90s').getSeconds()", "Float(90.0)");
-    gives("[1, 2][0]", "Float(1.0)");
+    // An integral number is held as an integer, whichever way it was spelled.
+    gives("1 + 2", "Int(3)");
+    gives("1.5 + 1.5", "Int(3)");
+    gives("-7", "Int(-7)");
+    gives("size([1, 2])", "Int(2)");
+    gives("duration('90s').getSeconds()", "Int(90)");
+    gives("[1, 2][0]", "Int(1)");
+    gives("0.5 + 1", "Float(1.5)");
 
-    // Division is IEEE division: no truncation, and no division-by-zero error — spec CEL's
-    // doubles answer `+inf`, and so does this dialect's only number.
+    // Division is real division: no truncation, and no division-by-zero error — spec CEL's
+    // doubles answer `+inf`, and so does this dialect's one number type.
     gives("7 / 2 == 3.5", "Bool(true)");
     gives("7 / 2", "Float(3.5)");
     gives("1 / 0", "Float(inf)");
     gives("-1 / 0", "Float(-inf)");
 
-    // A literal beyond 2^53 is read as the nearest double, not as an exact integer: the
-    // negation of 9007199254740993 is -9007199254740992.
-    gives("-(9007199254740993)", "Float(-9007199254740992.0)");
-    gives("-(9007199254740993) == -9007199254740992.0", "Bool(true)");
+    // A literal beyond 2^53 is held exactly, not as its nearest double.
+    gives("-(9007199254740993)", "Int(-9007199254740993)");
+    gives("-(9007199254740993) == -9007199254740992.0", "Bool(false)");
 
-    // No overflow either: what was an i64 overflow is ordinary double arithmetic now.
+    // `diverges: exact integers span int64 and uint64`: past `i64::MAX` an integer is still
+    // exact, where spec CEL's `int` overflows. Both sides here are exactly 2^63.
     gives(
         "9223372036854775807 + 1 == 9223372036854775808.0",
         "Bool(true)",
     );
+    gives("9223372036854775807 + 1", "UInt(9223372036854775808)");
 
-    // A map key spelled as an integer is a double key, and an integral double finds it.
+    // A map key spelled as an integer is an integer key, and an integral double finds it.
     gives("{1: 'a'}[1.0]", "String(\"a\")");
     gives("{1.0: 'a'}[1]", "String(\"a\")");
+}
+
+/// `removed: integer division`
+///
+/// One number type, so `/` cannot mean two things by how its operands were spelled: it is real
+/// division. An integer quotient is exact when it divides and a double when it does not, and a
+/// zero divisor is IEEE's answer rather than an error.
+#[test]
+fn integer_division_is_gone() {
+    gives("7 / 2 == 3.5", "Bool(true)");
+    gives("-7 / 2 == -3.5", "Bool(true)");
+    gives("6 / 3", "Int(2)");
+    gives("1 / 0 > 1e308", "Bool(true)");
+    gives("-1 / 0 < -1e308", "Bool(true)");
+    gives("0 / 0 == 0 / 0", "Bool(false)");
 }
 
 /// A list index is a double. An integral one indexes; a fraction is refused with the evaluator's
 /// index error rather than rounded, because rounding would make `l[0.5]` silently mean `l[0]`.
 #[test]
 fn index_by_an_integral_double() {
-    gives("[10, 20, 30][1.0]", "Float(20.0)");
-    gives("[10, 20, 30][size([1])]", "Float(20.0)");
-    gives("[10, 20, 30][4 / 2]", "Float(30.0)");
+    gives("[10, 20, 30][1.0]", "Int(20)");
+    gives("[10, 20, 30][size([1])]", "Int(20)");
+    gives("[10, 20, 30][4 / 2]", "Int(30)");
 }
 
 #[test]

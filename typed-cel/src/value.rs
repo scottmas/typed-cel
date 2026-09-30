@@ -5,13 +5,21 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::lazy::{CelKey, LazyValue};
+use crate::num::CelNum;
 
 /// A CEL value. Cheap to clone: every composite and every string is shared.
 #[derive(Clone)]
 pub enum CelValue {
     Bool(bool),
-    /// The dialect's one number kind.
+    /// A number held as a double: a fraction, ±inf, NaN, `-0.0`, or an embedder's float. The
+    /// dialect has ONE number type; `Num`, [`Int`](CelValue::Int) and [`UInt`](CelValue::UInt) are
+    /// three representations of it, and every comparison is by exact value (`Int(3) == Num(3.0)`).
+    /// Read any of them with [`CelValue::num`].
     Num(f64),
+    /// A number held exactly as an integer, in `i64` range.
+    Int(i64),
+    /// A number held exactly as an integer above `i64::MAX`.
+    UInt(u64),
     Str(Arc<str>),
     Duration(CelDuration),
     /// A byte string, which need not be UTF-8.
@@ -88,7 +96,7 @@ impl CelMapKey {
     /// The key as the value a comprehension over the map binds.
     pub(crate) fn to_value(&self) -> CelValue {
         match self {
-            CelMapKey::Num(n) => CelValue::Num(*n as f64),
+            CelMapKey::Num(n) => CelValue::Int(*n),
             CelMapKey::Bool(b) => CelValue::Bool(*b),
             CelMapKey::Str(k) => CelValue::Str(k.as_str().into()),
         }
@@ -206,6 +214,40 @@ impl CelValue {
     pub fn list(items: impl IntoIterator<Item = CelValue>) -> CelValue {
         CelValue::List(items.into_iter().collect())
     }
+
+    /// The number this value holds, in whichever representation; `None` for a non-number.
+    pub fn num(&self) -> Option<CelNum> {
+        match *self {
+            CelValue::Num(f) => Some(CelNum::Float(f)),
+            CelValue::Int(i) => Some(CelNum::Int(i)),
+            CelValue::UInt(u) => Some(CelNum::UInt(u)),
+            _ => None,
+        }
+    }
+}
+
+/// The representation `n` has — no canonicalization (`CelNum::Float(3.0)` stays `Num(3.0)`).
+impl From<CelNum> for CelValue {
+    fn from(n: CelNum) -> CelValue {
+        match n {
+            CelNum::Int(i) => CelValue::Int(i),
+            CelNum::UInt(u) => CelValue::UInt(u),
+            CelNum::Float(f) => CelValue::Num(f),
+        }
+    }
+}
+
+impl From<i64> for CelValue {
+    fn from(i: i64) -> CelValue {
+        CelValue::Int(i)
+    }
+}
+
+/// Canonical: a `u64` inside `i64` range is an [`Int`](CelValue::Int).
+impl From<u64> for CelValue {
+    fn from(u: u64) -> CelValue {
+        CelNum::from(u).into()
+    }
 }
 
 impl From<bool> for CelValue {
@@ -232,19 +274,21 @@ impl From<String> for CelValue {
     }
 }
 
-/// The key an integral double names; `None` for a double that names no key.
-pub(crate) fn integral_key(f: f64) -> Option<i64> {
-    (f.fract() == 0.0 && f >= i64::MIN as f64 && f < i64::MAX as f64).then_some(f as i64)
+/// The key an integral number names; `None` for a number that names no key.
+pub(crate) fn integral_key(n: CelNum) -> Option<i64> {
+    n.integral_key()
 }
 
 /// `Debug` is part of the error contract: error messages embed values with `{:?}`
-/// (`Index out of bounds: Float(5.0)`), and `tests/generated_golden.rs` and
+/// (`Index out of bounds: Int(5)`), and `tests/generated_golden.rs` and
 /// `tests/backend_edges.rs` pin that text.
 impl fmt::Debug for CelValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CelValue::Bool(b) => write!(f, "Bool({b:?})"),
             CelValue::Num(n) => write!(f, "Float({n:?})"),
+            CelValue::Int(i) => write!(f, "Int({i})"),
+            CelValue::UInt(u) => write!(f, "UInt({u})"),
             CelValue::Str(s) => write!(f, "String({:?})", &**s),
             CelValue::Duration(d) => write!(f, "Duration({d:?})"),
             CelValue::Bytes(b) => write!(f, "Bytes({:?})", &**b),
@@ -265,12 +309,15 @@ impl fmt::Debug for CelValue {
     }
 }
 
-/// Structural equality: a `NaN` is not equal to itself, and a lazy view equals only itself.
+/// Structural equality: numbers by exact value across representations (`Int(3) == Num(3.0)`,
+/// `NaN` equal to nothing), and a lazy view equals only itself.
 impl PartialEq for CelValue {
     fn eq(&self, other: &CelValue) -> bool {
+        if let (Some(a), Some(b)) = (self.num(), other.num()) {
+            return a.eq_exact(b);
+        }
         match (self, other) {
             (CelValue::Bool(a), CelValue::Bool(b)) => a == b,
-            (CelValue::Num(a), CelValue::Num(b)) => a == b,
             (CelValue::Str(a), CelValue::Str(b)) => a == b,
             (CelValue::Duration(a), CelValue::Duration(b)) => a == b,
             (CelValue::Bytes(a), CelValue::Bytes(b)) => a == b,

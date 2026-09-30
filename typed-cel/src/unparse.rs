@@ -83,6 +83,7 @@ fn is_operator(name: &str) -> bool {
 fn is_primary(e: &IdedExpr) -> bool {
     match &e.expr {
         Expr::Literal(LiteralValue::Int(i)) => *i >= 0,
+        Expr::Literal(LiteralValue::UInt(_)) => true,
         Expr::Literal(LiteralValue::Double(d)) => !d.inner().is_sign_negative(),
         Expr::Literal(_) => true,
         Expr::Ident(_) | Expr::Select(_) | Expr::List(_) | Expr::Map(_) => true,
@@ -310,6 +311,7 @@ fn write_literal(out: &mut String, v: &LiteralValue) -> Result<(), UnparseError>
         LiteralValue::Boolean(b) => out.push_str(if *b.inner() { "true" } else { "false" }),
         LiteralValue::Null => out.push_str("null"),
         LiteralValue::Int(i) => out.push_str(&i.to_string()),
+        LiteralValue::UInt(u) => out.push_str(&u.to_string()),
         LiteralValue::Double(d) => {
             let f = *d.inner();
             if !f.is_finite() {

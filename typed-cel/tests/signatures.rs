@@ -163,7 +163,7 @@ fn an_undocumented_function_is_rejected() {
 
 #[test]
 fn heterogeneous_equality_is_allowed() {
-    // Every number is a double, so an integer literal and a `Num` field are one type.
+    // One number type, so an integer literal and a `Num` field are one type.
     ok("body.amount == 100");
     ok("body.amount == 100.5");
     ok("100 == body.amount");

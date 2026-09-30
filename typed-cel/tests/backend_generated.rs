@@ -149,8 +149,7 @@ fn the_generators_reach_every_op() {
     assert!(unknown.is_empty(), "not in EVERY_OP: {unknown:?}");
     // The ops neither generator lowers to yet — each is a gap in the typed generator, recorded
     // exactly so it can only shrink: a map literal with a computed value (`MakeMap`, `CheckKey`),
-    // `-x` on a non-constant, `duration(x)` / `getSeconds()` on a computed duration, a select on a
-    // computed record, and a matcher in branch position (reached by `under_any_matches_the_exists_
+    // `-x` on a non-constant, `duration(x)` on a computed string, and a matcher in branch position (reached by `under_any_matches_the_exists_
     // shape`, not by a generator). `Nsf`, `BrPending` and `Step` are the literal comprehension
     // loop's condition and step bookkeeping, and `MakeList` its `[e]` step: every macro's
     // expansion now lowers past them (`try_predicate_loop`, `try_build_loop`), and only a
@@ -166,14 +165,12 @@ fn the_generators_reach_every_op() {
         "CheckKey",
         "CondMatch",
         "CondMatches",
-        "DurPart",
         "Duration",
         "IndexIter",
         "MakeList",
         "MakeMap",
         "Neg",
         "Nsf",
-        "Select",
         "Step",
     ];
     let missing: Vec<&str> = want.difference(&reached).copied().collect();

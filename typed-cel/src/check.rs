@@ -160,11 +160,12 @@ const DELETED_FUNCTIONS: &[(&str, &str)] = &[
     ("getFullYear", "`timestamp` is removed, and with it every wall-clock accessor"),
     ("getDayOfYear", "`timestamp` is removed, and with it every wall-clock accessor"),
     ("getHours", "`timestamp` is removed, and with it every wall-clock accessor"),
-    ("uint", "`uint` is removed: every number in this dialect is a double"),
-    ("int", "`int()` is removed: every number in this dialect is a double. See `removed: type conversion functions` in README.md"),
+    ("getMinutes", "`timestamp` is removed, and with it every wall-clock accessor"),
+    ("uint", "`uint` is removed: this dialect has one number type, and a large integer is written without a `u`"),
+    ("int", "`int()` is removed: this dialect has one number type, which holds integers exactly. See `removed: type conversion functions` in README.md"),
     ("bool", "`bool()` is removed: a string is not a truth value in this dialect. See `removed: type conversion functions` in README.md"),
     ("string", "`string()` is removed: it is lossy on bytes and redundant elsewhere. See `removed: type conversion functions` in README.md"),
-    ("double", "`double()` is removed: every number in this dialect is already a double. See `removed: type conversion functions` in README.md"),
+    ("double", "`double()` is removed: every number in this dialect is already of its one number type. See `removed: type conversion functions` in README.md"),
     ("type", "there are no type values in this dialect. See `removed: type values` in README.md"),
     ("list", "there are no type values in this dialect. See `removed: type values` in README.md"),
     ("map", "there are no type values in this dialect. See `removed: type values` in README.md"),
@@ -172,7 +173,7 @@ const DELETED_FUNCTIONS: &[(&str, &str)] = &[
     ("null_type", "there are no type values in this dialect. See `removed: type values` in README.md"),
     ("optional", "optional syntax is removed: every declared path is present in the activation. See `removed: optional syntax` in README.md"),
     ("orValue", "optional syntax is removed: every declared path is present in the activation. See `removed: optional syntax` in README.md"),
-    ("_%_", "`%` is removed: every number in this dialect is a double, and no program needs a floating-point remainder. See `removed: modulo` in README.md"),
+    ("_%_", "`%` is removed: this dialect has one number type, and no program needs its remainder. See `removed: modulo` in README.md"),
 ];
 
 /// The type DENOTATIONS, which are bare identifiers rather than calls.
@@ -1055,9 +1056,9 @@ fn literal_ty(v: &LiteralValue) -> CelTy {
     match v {
         LiteralValue::Boolean(_) => CelTy::Bool,
         LiteralValue::Bytes(_) => CelTy::Bytes,
-        // ONE numeric type. An integer literal is a double, which is what makes `body.amount > 100`
-        // and `100 < body.amount` both compile against a `Num` field.
-        LiteralValue::Double(_) | LiteralValue::Int(_) => CelTy::Num,
+        // ONE numeric type. An integer literal is a `Num` (held exactly as an integer), which is
+        // what makes `body.amount > 100` and `100 < body.amount` both compile against a `Num` field.
+        LiteralValue::Double(_) | LiteralValue::Int(_) | LiteralValue::UInt(_) => CelTy::Num,
         LiteralValue::Null => CelTy::Null,
         LiteralValue::String(_) => CelTy::Str,
     }

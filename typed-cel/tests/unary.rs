@@ -34,18 +34,18 @@ fn evaluates_to(src: &str, expected: &str) {
     );
 }
 
-/// Negating what was `i64::MIN` returns control, and a value.
+/// Negating `i64::MIN` returns control, and the exact value.
 ///
 /// `self.0.neg()` on an i64 panicked in a debug build and wrapped in release — the two worst options
-/// in one line. With one number kind (`removed: integer values`) there is no integer to overflow:
-/// the literal is the nearest double and negating it is exact. What is asserted is still that
-/// control comes BACK, now with the double's answer.
+/// in one line. Integers negate in `i128` and land in whichever representation holds the answer:
+/// `-i64::MIN` is `2^63`, a `u64`. Only `-u64::MAX`-sized answers overflow, as an error.
 #[test]
-fn negating_the_minimum_integer_is_a_double_not_a_panic() {
-    evaluates_to("-(-9223372036854775808)", "Float(9.223372036854776e18)");
-    evaluates_to("-(-9223372036854775807)", "Float(9.223372036854776e18)");
-    evaluates_to("-(9223372036854775807)", "Float(-9.223372036854776e18)");
-    evaluates_to("-19", "Float(-19.0)");
+fn negating_the_minimum_integer_is_exact_not_a_panic() {
+    evaluates_to("-(-9223372036854775808)", "UInt(9223372036854775808)");
+    evaluates_to("-(-9223372036854775807)", "Int(9223372036854775807)");
+    evaluates_to("-(9223372036854775807)", "Int(-9223372036854775807)");
+    evaluates_to("-(9223372036854775808)", "Int(-9223372036854775808)");
+    evaluates_to("-19", "Int(-19)");
 }
 
 /// `-` has no meaning on a bool, and answering `true` is worse than refusing.
@@ -76,18 +76,18 @@ fn repeated_unary_operators_apply_once_each() {
     // Even counts — the ones a single-application fold gets WRONG.
     evaluates_to("!!true", "Bool(true)");
     evaluates_to("!!!!true", "Bool(true)");
-    evaluates_to("--19", "Float(19.0)");
-    evaluates_to("----19", "Float(19.0)");
+    evaluates_to("--19", "Int(19)");
+    evaluates_to("----19", "Int(19)");
 
     // Odd counts — the ones it gets right by luck, kept so the fix cannot overshoot.
     evaluates_to("!true", "Bool(false)");
     evaluates_to("!!!true", "Bool(false)");
-    evaluates_to("-19", "Float(-19.0)");
-    evaluates_to("---19", "Float(-19.0)");
+    evaluates_to("-19", "Int(-19)");
+    evaluates_to("---19", "Int(-19)");
 
     // The corpus's own counts, which is where this was found: 32 of each.
     evaluates_to(&format!("{}true", "!".repeat(32)), "Bool(true)");
-    evaluates_to(&format!("{}19", "-".repeat(32)), "Float(19.0)");
+    evaluates_to(&format!("{}19", "-".repeat(32)), "Int(19)");
     evaluates_to(&format!("{}true", "!".repeat(31)), "Bool(false)");
-    evaluates_to(&format!("{}19", "-".repeat(31)), "Float(-19.0)");
+    evaluates_to(&format!("{}19", "-".repeat(31)), "Int(-19)");
 }

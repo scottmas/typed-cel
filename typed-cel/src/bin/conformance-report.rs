@@ -6,6 +6,7 @@
 //! cargo run -p typed-cel --features conformance --bin conformance-report -- --failures [file]
 //! cargo run -p typed-cel --features conformance --bin conformance-report -- --sections
 //! cargo run -p typed-cel --features conformance --bin conformance-report -- --list <file>
+//! cargo run -p typed-cel --features conformance --bin conformance-report -- --probe-excluded <reason>
 //! ```
 //!
 //! Without `--write` it prints the table and exits. With `--write` it regenerates
@@ -30,6 +31,36 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let exclusions = Exclusions::load(&conformance_dir().join("EXCLUSIONS.toml"))
         .unwrap_or_else(|e| panic!("{e}"));
+
+    // `--probe-excluded <reason>` — every case excluded under `<reason>`, RUN as a non-excluded
+    // case runs: `PASS <id>` or `FAIL <id>: <why>`, then the counts. What decides whether an
+    // exclusion still describes the code, or the construct it removed has come back.
+    if let Some(i) = args.iter().position(|a| a == "--probe-excluded") {
+        let reason = args.get(i + 1).expect("--probe-excluded <reason>");
+        let (mut pass, mut fail) = (0, 0);
+        for case in corpus().cases() {
+            if exclusions.reason_for(case) != Some(reason.as_str()) {
+                continue;
+            }
+            match harness::run::run(case) {
+                Outcome::Pass | Outcome::PassStatic(_) => {
+                    pass += 1;
+                    println!("PASS {}", case.unique_id());
+                }
+                Outcome::Refused(why) | Outcome::Fail(why) => {
+                    fail += 1;
+                    println!(
+                        "FAIL {}: {}\t{}",
+                        case.unique_id(),
+                        case.expr.escape_debug(),
+                        why.escape_debug()
+                    );
+                }
+            }
+        }
+        println!("{pass} PASS, {fail} FAIL");
+        return;
+    }
 
     // `--failures [file-stem]` — every non-excluded case that failed, with why. Triage input for
     // deciding whether a red is a bug to fix or a construct to exclude.

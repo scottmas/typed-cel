@@ -229,17 +229,17 @@ fn objects_a_non_bool_logical_operand_is_refused() {
     }
 }
 
-/// `removed: integer values`: what was checked i64 arithmetic is IEEE double arithmetic.
-/// Nothing overflows and nothing divides by zero — `1 / 0` is `+inf`.
+/// Integer arithmetic is exact across `i64` and `u64` (`diverges: exact integers span int64 and
+/// uint64`), and division is real division: nothing divides by zero — `1 / 0` is `+inf`.
 #[test]
-fn objects_number_math_is_double_math() {
+fn objects_number_math_is_exact_math() {
     for (expr, want) in [
-        ("1 / 0".to_string(), f64::INFINITY),
-        ("7 / 2".to_string(), 3.5),
-        (format!("{} + 1", i64::MAX), i64::MAX as f64 + 1.0),
-        (format!("{} * 2", i64::MAX), i64::MAX as f64 * 2.0),
+        ("1 / 0".to_string(), Value::Num(f64::INFINITY)),
+        ("7 / 2".to_string(), Value::Num(3.5)),
+        (format!("{} + 1", i64::MAX), Value::UInt(1 << 63)),
+        (format!("{} * 2", i64::MAX), Value::UInt(u64::MAX - 1)),
     ] {
-        assert_eq!(support::run_closed(&expr), Ok(Value::Num(want)), "{expr}");
+        assert_eq!(support::run_closed(&expr), Ok(want), "{expr}");
     }
 }
 
@@ -418,7 +418,7 @@ fn values_render_as_the_error_contract_says() {
     for (src, want) in [
         (
             "[1, 2][5] == 1.0",
-            "could not be evaluated: Index out of bounds: Float(5.0)",
+            "could not be evaluated: Index out of bounds: Int(5)",
         ),
         (
             "[1, 2][1.5] == 1.0",
@@ -426,11 +426,11 @@ fn values_render_as_the_error_contract_says() {
         ),
         (
             "[[1]][0][3] == 1.0",
-            "could not be evaluated: Index out of bounds: Float(3.0)",
+            "could not be evaluated: Index out of bounds: Int(3)",
         ),
         (
             "[1][-1] == 1.0",
-            "could not be evaluated: Index out of bounds: Float(-1.0)",
+            "could not be evaluated: Index out of bounds: Int(-1)",
         ),
         (
             "{null: true}[null]",
@@ -438,7 +438,7 @@ fn values_render_as_the_error_contract_says() {
         ),
         (
             "[1.0, 2.5]",
-            "produced List([Float(1.0), Float(2.5)]) rather than a bool",
+            "produced List([Int(1), Float(2.5)]) rather than a bool",
         ),
         ("'x'", "produced String(\"x\") rather than a bool"),
         ("b'ab'", "produced Bytes([97, 98]) rather than a bool"),
@@ -453,7 +453,7 @@ fn values_render_as_the_error_contract_says() {
         ),
         (
             "[[1], []]",
-            "produced List([List([Float(1.0)]), List([])]) rather than a bool",
+            "produced List([List([Int(1)]), List([])]) rather than a bool",
         ),
         (
             "['a', 'b']",
@@ -461,7 +461,7 @@ fn values_render_as_the_error_contract_says() {
         ),
         (
             "{'a': 1}",
-            "produced Map(Map { map: {String(\"a\"): Float(1.0)} }) rather than a bool",
+            "produced Map(Map { map: {String(\"a\"): Int(1)} }) rather than a bool",
         ),
         (
             "{1: 'a'}",
@@ -469,7 +469,7 @@ fn values_render_as_the_error_contract_says() {
         ),
         (
             "{true: [1]}",
-            "produced Map(Map { map: {Bool(true): List([Float(1.0)])} }) rather than a bool",
+            "produced Map(Map { map: {Bool(true): List([Int(1)])} }) rather than a bool",
         ),
         ("3.5", "produced Float(3.5) rather than a bool"),
         ("[b'x']", "produced List([Bytes([120])]) rather than a bool"),
@@ -495,7 +495,7 @@ fn a_map_result_comes_back_in_key_order() {
     };
     assert_eq!(
         result("{'b': 1, 'a': 2, 'c': 3}"),
-        r#"Ok(Map(Map { map: {String("a"): Float(2.0), String("b"): Float(1.0), String("c"): Float(3.0)} }))"#
+        r#"Ok(Map(Map { map: {String("a"): Int(2), String("b"): Int(1), String("c"): Int(3)} }))"#
     );
     assert_eq!(
         result("{3: 'c', 1: 'a', 2: 'b'}"),

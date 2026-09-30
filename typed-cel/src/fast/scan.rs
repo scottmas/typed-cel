@@ -13,6 +13,7 @@
 
 use super::reg;
 use super::{Cmp, Code, Concat, FieldTest, Iter, Op, Pc, Reg, StrOp, NO_CACHE, NO_REG, R};
+use crate::num::{cmp_i64_f64, CelNum};
 
 /// A step that does not jump.
 const NO_TARGET: Pc = Pc::MAX;
@@ -561,16 +562,33 @@ fn skip_one<'a>(step: &Step, it: &mut Iter<'a>, regs: &[Reg<'a>], code: &'a Code
                     |v| matches!(v, V::Str(s) if ((&**s == y) != ne) == invert)
                 )
             }
-            (FieldTest::Eq { ne }, Reg::Num(y)) => {
-                pass_while!(
-                    l,
-                    i,
-                    |v| matches!(v, V::Num(x) if ((*x == y) != ne) == invert)
-                )
+            // A number: an `Int` element against an `Int` field in one compare, any other pair
+            // of representations exactly.
+            (FieldTest::Eq { ne }, Reg::Int(y)) => pass_while!(l, i, |v| match v {
+                V::Int(x) => ((*x == y) != ne) == invert,
+                v => num_eq(v, CelNum::Int(y)).is_some_and(|eq| (eq != ne) == invert),
+            }),
+            (FieldTest::Eq { ne }, y @ (Reg::Num(_) | Reg::UInt(_))) => {
+                let y = y.num().expect("a number");
+                pass_while!(l, i, |v| num_eq(v, y)
+                    .is_some_and(|eq| (eq != ne) == invert))
             }
-            (FieldTest::Cmp(c), Reg::Num(y)) => pass_while!(l, i, |v| matches!(
-                v, V::Num(x) if x.partial_cmp(&y).is_some_and(|o| c.holds(o) == invert)
-            )),
+            (FieldTest::Cmp(c), Reg::Int(y)) => pass_while!(l, i, |v| match v {
+                V::Int(x) => c.holds(x.cmp(&y)) == invert,
+                v => num_cmp(v, CelNum::Int(y)).is_some_and(|o| c.holds(o) == invert),
+            }),
+            // A double field: an `Int` element (a JSON integer) and a `Num` element each in one
+            // compare.
+            (FieldTest::Cmp(c), Reg::Num(y)) => pass_while!(l, i, |v| match v {
+                V::Int(x) => cmp_i64_f64(*x, y).is_some_and(|o| c.holds(o) == invert),
+                V::Num(x) => x.partial_cmp(&y).is_some_and(|o| c.holds(o) == invert),
+                v => num_cmp(v, CelNum::Float(y)).is_some_and(|o| c.holds(o) == invert),
+            }),
+            (FieldTest::Cmp(c), y @ Reg::UInt(_)) => {
+                let y = y.num().expect("a number");
+                pass_while!(l, i, |v| num_cmp(v, y)
+                    .is_some_and(|o| c.holds(o) == invert))
+            }
             (FieldTest::Cmp(c), Reg::Str(y)) => pass_while!(l, i, |v| matches!(
                 v, V::Str(x) if c.holds((**x).cmp(y)) == invert
             )),
@@ -639,7 +657,14 @@ fn skip_one<'a>(step: &Step, it: &mut Iter<'a>, regs: &[Reg<'a>], code: &'a Code
             Iter::Vals(l, i),
         ) => match code.konst(k) {
             Reg::Str(y) => pass_while!(l, i, |v| matches!(v, V::Str(s) if (&**s == y) == ne)),
-            Reg::Num(y) => pass_while!(l, i, |v| matches!(v, V::Num(x) if (*x == y) == ne)),
+            Reg::Int(y) => pass_while!(l, i, |v| match v {
+                V::Int(x) => (*x == y) == ne,
+                v => num_eq(v, CelNum::Int(y)).is_some_and(|eq| eq == ne),
+            }),
+            y @ (Reg::Num(_) | Reg::UInt(_)) => {
+                let y = y.num().expect("a number");
+                pass_while!(l, i, |v| num_eq(v, y).is_some_and(|eq| eq == ne))
+            }
             _ => None,
         },
         (
@@ -652,13 +677,38 @@ fn skip_one<'a>(step: &Step, it: &mut Iter<'a>, regs: &[Reg<'a>], code: &'a Code
             },
             Iter::Vals(l, i),
         ) => match code.konst(k) {
-            Reg::Num(y) => pass_while!(l, i, |v| matches!(
-                v, V::Num(x) if x.partial_cmp(&y).is_some_and(|o| op.holds(o) == invert)
-            )),
+            Reg::Int(y) => pass_while!(l, i, |v| match v {
+                V::Int(x) => op.holds(x.cmp(&y)) == invert,
+                v => num_cmp(v, CelNum::Int(y)).is_some_and(|o| op.holds(o) == invert),
+            }),
+            Reg::Num(y) => pass_while!(l, i, |v| match v {
+                V::Int(x) => cmp_i64_f64(*x, y).is_some_and(|o| op.holds(o) == invert),
+                V::Num(x) => x.partial_cmp(&y).is_some_and(|o| op.holds(o) == invert),
+                v => num_cmp(v, CelNum::Float(y)).is_some_and(|o| op.holds(o) == invert),
+            }),
+            y @ Reg::UInt(_) => {
+                let y = y.num().expect("a number");
+                pass_while!(l, i, |v| num_cmp(v, y)
+                    .is_some_and(|o| op.holds(o) == invert))
+            }
             _ => None,
         },
         _ => None,
     }
+}
+
+/// A number element against `y`, exactly: `None` for an element that is no number, which the
+/// caller hands off.
+#[inline(always)]
+fn num_eq(v: &crate::CelValue, y: CelNum) -> Option<bool> {
+    Some(v.num()?.eq_exact(y))
+}
+
+/// A number element's order against `y`, exactly: `None` for a non-number or a NaN, which the
+/// caller hands off.
+#[inline(always)]
+fn num_cmp(v: &crate::CelValue, y: CelNum) -> Option<std::cmp::Ordering> {
+    v.num()?.cmp_exact(y)
 }
 
 /// The most member tests `skip_members` runs per element.
@@ -668,12 +718,16 @@ const MAX_PAIRS: usize = 4;
 /// tested as it lies where the kinds are the common ones, through `field_test` otherwise.
 #[derive(Clone, Copy)]
 enum Probe<'a> {
-    /// A number member against a number field, by order.
-    NumCmp(Cmp, f64),
+    /// An integer member against an `Int` field, by order; any other number member exactly.
+    IntCmp(Cmp, i64),
+    /// A number member against a number field, by order, exactly.
+    NumCmp(Cmp, CelNum),
     /// A string member against a string field, for equality (`!=` when `ne`).
     StrEq(bool, &'a str),
-    /// A number member against a number field, for equality.
-    NumEq(bool, f64),
+    /// An integer member against an `Int` field, for equality; any other number member exactly.
+    IntEq(bool, i64),
+    /// A number member against a number field, for equality, exactly.
+    NumEq(bool, CelNum),
     /// Anything else.
     Any(FieldTest, Reg<'a>),
     /// The field is not read yet: the body reads it.
@@ -686,9 +740,17 @@ impl Probe<'_> {
     fn test(&self, v: &crate::CelValue) -> Option<bool> {
         use crate::CelValue as V;
         match (self, v) {
-            (Probe::NumCmp(c, y), V::Num(x)) => x.partial_cmp(y).map(|o| c.holds(o)),
+            (Probe::IntCmp(c, y), V::Int(x)) => Some(c.holds(x.cmp(y))),
+            (Probe::IntCmp(c, y), v) => num_cmp(v, CelNum::Int(*y)).map(|o| c.holds(o)),
+            (Probe::NumCmp(c, CelNum::Float(y)), V::Int(x)) => {
+                cmp_i64_f64(*x, *y).map(|o| c.holds(o))
+            }
+            (Probe::NumCmp(c, CelNum::Float(y)), V::Num(x)) => x.partial_cmp(y).map(|o| c.holds(o)),
+            (Probe::NumCmp(c, y), v) => num_cmp(v, *y).map(|o| c.holds(o)),
             (Probe::StrEq(ne, y), V::Str(x)) => Some((&**x == *y) != *ne),
-            (Probe::NumEq(ne, y), V::Num(x)) => Some((*x == *y) != *ne),
+            (Probe::IntEq(ne, y), V::Int(x)) => Some((*x == *y) != *ne),
+            (Probe::IntEq(ne, y), v) => num_eq(v, CelNum::Int(*y)).map(|eq| eq != *ne),
+            (Probe::NumEq(ne, y), v) => num_eq(v, *y).map(|eq| eq != *ne),
             (Probe::Any(test, field), v) => super::field_test(*test, &reg::of_cel(v), field),
             // A member of an unexpected kind, or an unread field: the body's.
             _ => None,
@@ -734,9 +796,15 @@ fn skip_members<'a>(
         // reads it — which a record whose first test already goes on never does.
         let probe = match (test, regs[cache as usize]) {
             (_, Reg::Unset) => Probe::Unread,
-            (FieldTest::Cmp(c), Reg::Num(y)) => Probe::NumCmp(c, y),
+            (FieldTest::Cmp(c), Reg::Int(y)) => Probe::IntCmp(c, y),
+            (FieldTest::Cmp(c), y @ (Reg::Num(_) | Reg::UInt(_))) => {
+                Probe::NumCmp(c, y.num().expect("a number"))
+            }
             (FieldTest::Eq { ne }, Reg::Str(y)) => Probe::StrEq(ne, y),
-            (FieldTest::Eq { ne }, Reg::Num(y)) => Probe::NumEq(ne, y),
+            (FieldTest::Eq { ne }, Reg::Int(y)) => Probe::IntEq(ne, y),
+            (FieldTest::Eq { ne }, y @ (Reg::Num(_) | Reg::UInt(_))) => {
+                Probe::NumEq(ne, y.num().expect("a number"))
+            }
             (test, field) => Probe::Any(test, field),
         };
         pairs[j] = (code.names[key as usize].as_str(), probe, invert);

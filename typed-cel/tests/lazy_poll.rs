@@ -135,7 +135,7 @@ fn poll_member_defaults_to_member() {
         reads: Arc::clone(&reads),
     };
     match v.poll_member("field") {
-        Ok(Access::Ready(CelValue::Num(n))) => assert_eq!(n, 2.5),
+        Ok(Access::Ready(v)) if v.num().is_some() => assert_eq!(v, CelValue::Num(2.5)),
         other => panic!("expected Ready(Num), got {other:?}"),
     }
     assert_eq!(reads.load(Ordering::SeqCst), 1);

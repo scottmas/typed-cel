@@ -1,8 +1,8 @@
 //! `fork::reify` turns an evaluated value back into a literal expression, or refuses.
 //!
 //! The property every reifying test holds is "reify then evaluate is the identity": the expression
-//! `reify` returns, run on the backend, produces the value it was given — same
-//! variant, same bits. Where no CEL literal can spell a value (a non-finite double, an opaque host
+//! `reify` returns, run on the backend, produces the value it was given — the same number (an
+//! embedder's `Num(7.0)` may come back as the canonical `Int(7)`), a double's same bits. Where no CEL literal can spell a value (a non-finite double, an opaque host
 //! value, a function value) the answer is `None`, never an approximation.
 
 #[path = "support/mod.rs"]
@@ -28,8 +28,9 @@ fn eval_src(src: &str) -> Value {
     support::run_closed(src).unwrap_or_else(|err| panic!("{src}: {err:?}"))
 }
 
-/// Bit-exact equality: `Value`'s `==` says `-0.0 == 0.0` and `NaN != NaN`, and neither is the
-/// question here. Recurses through containers.
+/// Bit-exact equality of doubles: `Value`'s `==` says `-0.0 == 0.0` and `NaN != NaN`, and neither
+/// is the question here. Numbers in two representations compare by exact value (`==`). Recurses
+/// through containers.
 fn identical(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Num(x), Value::Num(y)) => x.to_bits() == y.to_bits(),
@@ -92,8 +93,8 @@ fn scalars_reify_to_themselves() {
     }
 }
 
-/// Every number is a `Float`, even `7`, and reifies as a `Double` literal: there is no runtime
-/// integer for an `Int` literal to stand for (`removed: integer values`).
+/// A number reifies in the representation it has: an embedder's `Num(7.0)` as a `Double` literal
+/// (which re-lowers canonically, to the same number), an integer as an integer literal.
 #[test]
 fn bound_number_reifies_as_double() {
     let e = round_trip(&Value::Num(7.0));
@@ -102,6 +103,29 @@ fn bound_number_reifies_as_double() {
         "Float(7.0) must reify as a Double literal, got {e:?}"
     );
     assert_eq!(fork::unparse(&e).unwrap(), "7.0");
+}
+
+/// An integer reifies as the exact integer literal — above 2^53 and above `i64::MAX` too — and
+/// comes back the same integer, not its rounded neighbour.
+#[test]
+fn integers_reify_exactly() {
+    for (v, text) in [
+        (Value::Int(7), "7"),
+        (Value::Int(9007199254740993), "9007199254740993"),
+        (Value::Int(-9007199254740993), "-9007199254740993"),
+        (Value::UInt(18446744073709551615), "18446744073709551615"),
+    ] {
+        let e = round_trip(&v);
+        assert!(
+            matches!(
+                e.expr,
+                Expr::Literal(LiteralValue::Int(_) | LiteralValue::UInt(_))
+            ) || matches!(e.expr, Expr::Call(_)),
+            "{v:?} reifies as an integer literal, got {e:?}"
+        );
+        assert_eq!(fork::unparse(&e).unwrap(), text);
+        assert!(!identical(&eval_expr(&e), &Value::Int(9007199254740992)));
+    }
 }
 
 /// The parser refuses a non-finite double literal, so no residual can spell one. Not saturated,
@@ -197,7 +221,7 @@ fn containers_reify_recursively() {
     let e = fork::reify(&mixed).expect("a mixed-key map reifies");
     assert_eq!(
         fork::unparse(&e).unwrap(),
-        r#"{(-4.0): [], true: [], "xs": []}"#
+        r#"{(-4): [], true: [], "xs": []}"#
     );
 }
 

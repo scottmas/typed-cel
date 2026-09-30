@@ -117,14 +117,15 @@ fn zero(e: &mut IdedExpr) {
 }
 
 #[test]
-fn closed_arithmetic_folds_to_a_double() {
-    // A COMPUTED number reifies as the double it is; an authored literal keeps its spelling.
-    folds(&[("1 + 2 * 3 == u.n", "7.0 == u.n")]);
+fn closed_arithmetic_folds_to_its_number() {
+    // A COMPUTED number reifies as the number it is (an integer here); an authored literal keeps
+    // its spelling.
+    folds(&[("1 + 2 * 3 == u.n", "7 == u.n")]);
 }
 
 #[test]
-fn known_root_substitutes_as_double() {
-    folds(&[("k > u.n", "10.0 > u.n")]);
+fn known_root_substitutes_as_its_number() {
+    folds(&[("k > u.n", "10 > u.n")]);
 }
 
 #[test]
@@ -186,7 +187,7 @@ fn closed_error_stays_in_place() {
 
 #[test]
 fn nonfinite_not_folded() {
-    folds(&[("k / 0.0 < u.n", "(10.0 / 0.0) < u.n")]);
+    folds(&[("k / 0.0 < u.n", "(10 / 0.0) < u.n")]);
 }
 
 #[test]
@@ -202,7 +203,7 @@ fn ternary_picks_on_known_bool() {
 /// left as the whole conditional, which would still read the known roots.
 #[test]
 fn picked_branch_that_cannot_be_spelled_is_rebuilt() {
-    folds(&[("(t ? k / 0.0 : u.a) < u.n", "(10.0 / 0.0) < u.n")]);
+    folds(&[("(t ? k / 0.0 : u.a) < u.n", "(10 / 0.0) < u.n")]);
 }
 
 #[test]
@@ -239,8 +240,8 @@ fn in_folds_either_side() {
 #[test]
 fn container_literals_fold_element_wise() {
     folds(&[
-        ("[k, u.a] == u.l", "[10.0, u.a] == u.l"),
-        ("{\"x\": k}[\"x\"] == u.n", "10.0 == u.n"),
+        ("[k, u.a] == u.l", "[10, u.a] == u.l"),
+        ("{\"x\": k}[\"x\"] == u.n", "10 == u.n"),
     ]);
 }
 
@@ -248,7 +249,7 @@ fn container_literals_fold_element_wise() {
 fn iteration_variable_shadows_a_known_root() {
     folds(&[
         ("u.items.exists(k, k > 1.0)", "u.items.exists(k, k > 1.0)"),
-        ("u.items.exists(x, x > k)", "u.items.exists(x, x > 10.0)"),
+        ("u.items.exists(x, x > k)", "u.items.exists(x, x > 10)"),
     ]);
 }
 
@@ -319,7 +320,10 @@ fn a_call_whose_arguments_all_folded_is_evaluated() {
     folds(&[
         (r#"!(t || u.s == "a")"#, "false"),
         ("!(f && u.b)", "true"),
-        (r#"u.s.startsWith(p.fs.root + "/")"#, r#"u.s.startsWith("/ws/")"#),
+        (
+            r#"u.s.startsWith(p.fs.root + "/")"#,
+            r#"u.s.startsWith("/ws/")"#,
+        ),
     ]);
 }
 

@@ -241,14 +241,16 @@ const FAST_MAY_NAME: &[&str] = &[
     // way `lazy` is — never a forge module.
     "hostfn",
     "lazy",
-    // The one value, and its map, key and duration.
+    // The one value, and its map, key and duration; the one number's representations (`num`).
     "value",
+    "num",
     "CelActivation",
     "CelDuration",
     "CelError",
     "CelKey",
     "CelMap",
     "CelMapKey",
+    "CelNum",
     "CelProgram",
     "CelValue",
     "ExecutionError",

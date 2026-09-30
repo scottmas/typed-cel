@@ -24,8 +24,9 @@ use crate::CelValue;
 
 /// The literal expression that evaluates to `v`, or `None` when no CEL literal can spell it.
 ///
-/// Reify-then-evaluate is the identity: every number is a `Float` and reifies as a `Double`
-/// literal, integral or not — there is no runtime integer to reify (`removed: integer values`). A duration becomes the `duration("…")` call the desugarer
+/// Reify-then-evaluate is the identity: an `Int` reifies as an integer literal, a `UInt` as an
+/// integer literal above `i64::MAX`, and a finite `Num` as a `Double` literal — which re-lowers
+/// canonically (`Num(3.0)` comes back `Int(3)`, the same number). A duration becomes the `duration("…")` call the desugarer
 /// produces for a duration literal. Map entries are sorted by key so the rendering is
 /// deterministic. Refused: a non-finite double (the parser has no literal for it), a lazy view, and
 /// any container holding one of those.
@@ -37,6 +38,8 @@ pub fn reify(v: &CelValue) -> Option<IdedExpr> {
         CelValue::Bool(b) => lit(LiteralValue::Boolean((*b).into())),
         CelValue::Num(f) if f.is_finite() => lit(LiteralValue::Double((*f).into())),
         CelValue::Num(_) => None,
+        CelValue::Int(i) => lit(LiteralValue::Int(*i)),
+        CelValue::UInt(u) => lit(LiteralValue::UInt(*u)),
         CelValue::Str(s) => lit(LiteralValue::String(s.to_string().into())),
         CelValue::Bytes(b) => lit(LiteralValue::Bytes(b.to_vec().into())),
         CelValue::Null => lit(LiteralValue::Null),
@@ -256,11 +259,15 @@ fn is_composite(v: &CelValue) -> bool {
     matches!(v, CelValue::List(_) | CelValue::Map(_))
 }
 
-/// Are `a` and `b` the SAME value — not CEL-equal: `0.0` and `-0.0` differ, and a NaN is itself?
-/// Two reads that intern to one slot must be indistinguishable to every operation.
+/// Are `a` and `b` the SAME value — not CEL-equal: `0.0` and `-0.0` differ, a NaN is itself, and
+/// `Num(3.0)` is not `Int(3)` (they print differently, so interning one for the other would change
+/// a residual's source)? Two reads that intern to one slot must be indistinguishable to every
+/// operation.
 fn same(a: &CelValue, b: &CelValue) -> bool {
     match (a, b) {
         (CelValue::Num(x), CelValue::Num(y)) => x.to_bits() == y.to_bits(),
+        (CelValue::Int(x), CelValue::Int(y)) => x == y,
+        (CelValue::UInt(x), CelValue::UInt(y)) => x == y,
         (CelValue::List(x), CelValue::List(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| same(p, q))
         }

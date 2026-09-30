@@ -363,7 +363,7 @@ fn a_residual_renders_its_slots_by_name_and_appends_a_legend() {
         residual.source(),
         concat!(
             "(s in $k0) && ($k1.filter(r, s.startsWith(r)).size() > 0.0)\n",
-            "// $k0 = {\"y\": 0.5, \"z\": 2.0}\n",
+            "// $k0 = {\"y\": 0.5, \"z\": 2}\n",
             "// $k1 = [\"/a\", \"/b\"]",
         )
     );

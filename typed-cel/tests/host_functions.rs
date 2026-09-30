@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use support::gen::{host_roster, host_typed_json, Gen, SEEDS};
 use typed_cel::{
-    emit, CelActivation, CelEnvironment, CelError, CelKey, CelProgram, CelTy, CelValue, HostCall,
-    LazyValue, Vm,
+    emit, CelActivation, CelEnvironment, CelError, CelKey, CelNum, CelProgram, CelTy, CelValue,
+    HostCall, LazyValue, Vm,
 };
 
 fn eval_err(message: &str) -> CelError {
@@ -23,7 +23,11 @@ fn eval_err(message: &str) -> CelError {
 
 fn twice() -> HostCall {
     Arc::new(|a: &[CelValue]| match a {
-        [CelValue::Num(n)] => Ok(CelValue::Num(n * 2.0)),
+        // A number arrives in whichever representation holds it (`twice(3)` is an integer).
+        [a] => match a.num() {
+            Some(n) => Ok(CelValue::from(CelNum::from_f64(n.as_f64() * 2.0))),
+            None => Err(eval_err("twice expects one number")),
+        },
         _ => Err(eval_err("twice expects one number")),
     })
 }
@@ -250,10 +254,7 @@ fn a_host_argument_with_no_cel_value_form_is_an_error() {
             [CelValue::List(items)] => Ok(CelValue::Num(
                 items
                     .iter()
-                    .map(|v| match v {
-                        CelValue::Num(n) => *n,
-                        _ => f64::NAN,
-                    })
+                    .map(|v| v.num().map_or(f64::NAN, CelNum::as_f64))
                     .sum(),
             )),
             _ => Err(eval_err("total expects a list")),

@@ -35,6 +35,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::bindings::Bindings;
+use crate::num::{CelNum, NumOp};
 use crate::CelValue;
 use crate::ExecutionError;
 use crate::{CelKey, CelMapKey};
@@ -83,15 +84,47 @@ pub(crate) enum Arith {
 }
 
 impl Arith {
-    /// Over two numbers: IEEE, so a zero divisor is an infinity or a NaN, never an error.
+    /// Over two doubles: IEEE, so a zero divisor is an infinity or a NaN, never an error; the
+    /// result canonical, so `1.5 + 1.5` is the integer `3`.
     #[inline(always)]
-    pub(crate) fn num(self, x: f64, y: f64) -> f64 {
-        match self {
+    pub(crate) fn float(self, x: f64, y: f64) -> Reg<'static> {
+        Reg::from(CelNum::from_f64(match self {
             Arith::Add => x + y,
             Arith::Sub => x - y,
             Arith::Mul => x * y,
             Arith::Div => x / y,
+        }))
+    }
+
+    /// Over two `i64`s, as [`Arith::num`] answers, where that is cheap: `None` sends it there (a
+    /// result past `i64`, which is a `u64` or an overflow). A quotient is real division: exact
+    /// when it divides, else a double, and a zero divisor IEEE's infinity or NaN.
+    #[inline(always)]
+    pub(crate) fn int(self, x: i64, y: i64) -> Option<Reg<'static>> {
+        match self {
+            Arith::Add => x.checked_add(y).map(Reg::Int),
+            Arith::Sub => x.checked_sub(y).map(Reg::Int),
+            Arith::Mul => x.checked_mul(y).map(Reg::Int),
+            Arith::Div if y == 0 => Some(Reg::Num(x as f64 / 0.0)),
+            Arith::Div => match x.checked_rem(y) {
+                Some(0) => x.checked_div(y).map(Reg::Int),
+                Some(_) => Some(Reg::Num(x as f64 / y as f64)),
+                // `i64::MIN / -1` is `2^63`, a `u64`.
+                None => None,
+            },
         }
+    }
+
+    /// Over any two numbers, exactly (`crate::num::arith`); overflow is an error naming both.
+    pub(crate) fn num(self, x: CelNum, y: CelNum) -> Result<CelNum, ExecutionError> {
+        let op = match self {
+            Arith::Add => NumOp::Add,
+            Arith::Sub => NumOp::Sub,
+            Arith::Mul => NumOp::Mul,
+            Arith::Div => NumOp::Div,
+        };
+        crate::num::arith(op, x, y)
+            .map_err(|_| ExecutionError::Overflow(op.name(), x.into(), y.into()))
     }
 }
 
@@ -947,7 +980,7 @@ impl Op {
 #[derive(Debug)]
 pub(crate) enum CVal {
     Bool(bool),
-    Num(f64),
+    Num(CelNum),
     Null,
     Dur(chrono::Duration),
     Str(Box<str>),
@@ -980,7 +1013,7 @@ impl CVal {
     fn reg(&self) -> Reg<'_> {
         match self {
             CVal::Bool(b) => Reg::Bool(*b),
-            CVal::Num(n) => Reg::Num(*n),
+            CVal::Num(n) => Reg::from(*n),
             CVal::Null => Reg::Null,
             CVal::Dur(d) => Reg::Dur(*d),
             CVal::Str(s) => Reg::Str(s),
@@ -1477,7 +1510,7 @@ impl FastProgram {
         facts: &F,
         scratch: &mut FastScratch,
         dispatch: &mut dyn crate::hostfn::HostDispatch,
-    ) -> Result<f64, crate::CelError> {
+    ) -> Result<CelNum, crate::CelError> {
         let cell = std::cell::RefCell::new(dispatch);
         let host = Dispatching {
             inner: FactsHost {
@@ -1487,9 +1520,9 @@ impl FastProgram {
             },
             dispatch: &cell,
         };
-        let out = run(&self.code, &host, scratch, |r, errs| match r {
-            Reg::Num(n) => Ok(n),
-            other => Err(reg::to_cel(other, errs).unwrap_or(CelValue::Null)),
+        let out = run(&self.code, &host, scratch, |r, errs| match r.num() {
+            Some(n) => Ok(n),
+            None => Err(reg::to_cel(r, errs).unwrap_or(CelValue::Null)),
         });
         match out {
             Ok(Ok(n)) => Ok(n),
@@ -1951,6 +1984,7 @@ fn exec<'a, H: Host<'a>>(
                         // assembled through the stack.
                         match v {
                             CelValue::Str(s) => *d = Reg::Str(s),
+                            CelValue::Int(n) => *d = Reg::Int(*n),
                             CelValue::Num(n) => *d = Reg::Num(*n),
                             _ => *d = reg::of_cel(v),
                         }
@@ -2086,8 +2120,18 @@ fn exec<'a, H: Host<'a>>(
                 if cache != NO_CACHE {
                     let hit = match (test, &regs[a as usize], &regs[cache as usize]) {
                         (FieldTest::Eq { ne }, Reg::Str(x), Reg::Str(y)) => Some((x == y) != ne),
+                        (FieldTest::Cmp(c), Reg::Int(x), Reg::Int(y)) => Some(c.holds(x.cmp(y))),
                         (FieldTest::Cmp(c), Reg::Num(x), Reg::Num(y)) => {
                             x.partial_cmp(y).map(|o| c.holds(o))
+                        }
+                        (FieldTest::Cmp(c), Reg::Int(x), Reg::Num(y)) => {
+                            crate::num::cmp_i64_f64(*x, *y).map(|o| c.holds(o))
+                        }
+                        (FieldTest::Cmp(c), Reg::Num(x), Reg::Int(y)) => {
+                            crate::num::cmp_i64_f64(*y, *x).map(|o| c.holds(o.reverse()))
+                        }
+                        (FieldTest::Cmp(c), x, y) => {
+                            mixed_order(x.num(), y.num()).map(|o| c.holds(o))
                         }
                         _ => None,
                     };
@@ -2406,8 +2450,16 @@ fn exec<'a, H: Host<'a>>(
             Op::Arith {
                 dst, a, b, op: o, ..
             } => match (regs[a as usize], regs[b as usize]) {
-                (Reg::Num(x), Reg::Num(y)) => regs[dst as usize] = Reg::Num(o.num(x, y)),
-                // A string or a duration, or a refusal: `slow` (`fn arith`) builds it.
+                (Reg::Int(x), Reg::Int(y)) => match o.int(x, y) {
+                    Some(v) => regs[dst as usize] = v,
+                    None => go_slow!(*op),
+                },
+                (Reg::Num(x), Reg::Num(y)) => regs[dst as usize] = o.float(x, y),
+                // A double beside an integer: IEEE on both, as `crate::num::arith` does.
+                (Reg::Num(x), Reg::Int(y)) => regs[dst as usize] = o.float(x, y as f64),
+                (Reg::Int(x), Reg::Num(y)) => regs[dst as usize] = o.float(x as f64, y),
+                // A wide integer, an overflow, a string or a duration, or a refusal: `slow`
+                // (`fn arith`) builds it.
                 _ => go_slow!(*op),
             },
             Op::ArithK {
@@ -2418,8 +2470,20 @@ fn exec<'a, H: Host<'a>>(
                 rev,
                 ..
             } => match (regs[a as usize], code.konst(k)) {
+                (Reg::Int(x), Reg::Int(y)) => match if rev { o.int(y, x) } else { o.int(x, y) } {
+                    Some(v) => regs[dst as usize] = v,
+                    None => go_slow!(*op),
+                },
                 (Reg::Num(x), Reg::Num(y)) => {
-                    regs[dst as usize] = Reg::Num(if rev { o.num(y, x) } else { o.num(x, y) })
+                    regs[dst as usize] = if rev { o.float(y, x) } else { o.float(x, y) }
+                }
+                (Reg::Num(x), Reg::Int(y)) => {
+                    let y = y as f64;
+                    regs[dst as usize] = if rev { o.float(y, x) } else { o.float(x, y) }
+                }
+                (Reg::Int(x), Reg::Num(y)) => {
+                    let x = x as f64;
+                    regs[dst as usize] = if rev { o.float(y, x) } else { o.float(x, y) }
                 }
                 _ => go_slow!(*op),
             },
@@ -2464,6 +2528,7 @@ fn exec<'a, H: Host<'a>>(
                 Reg::Val(CelValue::Map(m)) => match m.get(code.names[key as usize].as_str()) {
                     // A store per kind, as `IterNext` does.
                     Some(CelValue::Str(s)) => regs[dst as usize] = Reg::Str(s),
+                    Some(CelValue::Int(n)) => regs[dst as usize] = Reg::Int(*n),
                     Some(CelValue::Num(n)) => regs[dst as usize] = Reg::Num(*n),
                     Some(v) => regs[dst as usize] = reg::of_cel(v),
                     None => go_slow!(*op),
@@ -2492,11 +2557,12 @@ fn exec<'a, H: Host<'a>>(
             Op::Clear { r } => regs[r as usize] = Reg::Unset,
             // No pending error: nothing to raise. Raising one goes to `slow`.
             Op::RaisePending { pend, .. } if !matches!(regs[pend as usize], Reg::Err(_)) => {}
-            Op::Inc { r } => {
-                if let Reg::Num(n) = regs[r as usize] {
-                    regs[r as usize] = Reg::Num(n + 1.0);
-                }
-            }
+            Op::Inc { r } => match regs[r as usize] {
+                // A comprehension's counter: an integer that never nears `i64::MAX`.
+                Reg::Int(n) if n < i64::MAX => regs[r as usize] = Reg::Int(n + 1),
+                Reg::Num(n) => regs[r as usize] = Arith::Add.float(n, 1.0),
+                _ => {}
+            },
             Op::Append { slot, src } => {
                 if let Iter::Build(v) = &mut iters[slot as usize] {
                     v.push(regs[src as usize]);
@@ -2655,11 +2721,25 @@ fn take_pending(errs: &mut Vec<ExecutionError>, i: u32) -> ExecutionError {
 #[inline(always)]
 fn ordering(a: &Reg<'_>, b: &Reg<'_>) -> Option<std::cmp::Ordering> {
     match (a, b) {
+        (Reg::Int(x), Reg::Int(y)) => Some(x.cmp(y)),
         (Reg::Num(x), Reg::Num(y)) => x.partial_cmp(y),
         (Reg::Str(x), Reg::Str(y)) => Some(x.cmp(y)),
         (Reg::Dur(x), Reg::Dur(y)) => Some(x.cmp(y)),
-        _ => None,
+        // A JSON integer against a fractional bound, inline; any wider pair out of line.
+        (Reg::Int(x), Reg::Num(y)) => crate::num::cmp_i64_f64(*x, *y),
+        (Reg::Num(x), Reg::Int(y)) => crate::num::cmp_i64_f64(*y, *x).map(|o| o.reverse()),
+        (x, y) => mixed_order(x.num(), y.num()),
     }
+}
+
+/// Two numbers in different representations (or a `u64`), in exact order; `None` for a NaN or a
+/// non-number. OUT of line, and handed the numbers BY VALUE: the exact comparison's `i128`
+/// arithmetic inlined into `exec` cost the dispatch loop a register (measured: `exec` spilled its op
+/// pointer to the stack, and every decision paid it, numeric or not), and a reference to a register
+/// escaping into a call forces that register into memory on every path through the match.
+#[inline(never)]
+fn mixed_order(a: Option<CelNum>, b: Option<CelNum>) -> Option<std::cmp::Ordering> {
+    a?.cmp_exact(b?)
 }
 
 /// Put `e` in flight. A handler takes the error out of its box and leaves the box behind
@@ -2758,12 +2838,11 @@ fn handled_inline(op: Op, regs: &[Reg<'_>], iters: &[Iter<'_>]) -> bool {
         Op::CondCmpK { .. } => false,
         // Nor the names: `slow` answers the member that is missing, and every non-map.
         Op::Select { .. } => false,
-        Op::Arith { a, b, .. } => {
-            matches!(
-                (regs[a as usize], regs[b as usize]),
-                (Reg::Num(_), Reg::Num(_))
-            )
-        }
+        Op::Arith { a, b, op, .. } => match (regs[a as usize], regs[b as usize]) {
+            (Reg::Num(_), Reg::Num(_) | Reg::Int(_)) | (Reg::Int(_), Reg::Num(_)) => true,
+            (Reg::Int(x), Reg::Int(y)) => op.int(x, y).is_some(),
+            _ => false,
+        },
         Op::ArithK { .. } => false,
         Op::StrOp2 { a, b, c, .. } => matches!(
             (regs[a as usize], regs[b as usize], regs[c as usize]),
@@ -2947,9 +3026,15 @@ fn slow<'a, H: Host<'a>>(
             Reg::Bool(b) => regs[dst as usize] = Reg::Bool(!b),
             _ => fail!(ExecutionError::NoSuchOverload, err),
         },
-        Op::Neg { dst, a, err } => match regs[a as usize] {
-            Reg::Num(n) => regs[dst as usize] = Reg::Num(-n),
-            _ => fail!(ExecutionError::NoSuchOverload, err),
+        Op::Neg { dst, a, err } => match regs[a as usize].num() {
+            Some(n) => match crate::num::neg(n) {
+                Ok(v) => regs[dst as usize] = Reg::from(v),
+                Err(_) => fail!(
+                    ExecutionError::Overflow("negate", n.into(), CelValue::Null),
+                    err
+                ),
+            },
+            None => fail!(ExecutionError::NoSuchOverload, err),
         },
         Op::Eq { dst, a, b } => {
             regs[dst as usize] = Reg::Bool(reg::equals(regs[a as usize], regs[b as usize]))
@@ -3048,7 +3133,7 @@ fn slow<'a, H: Host<'a>>(
             regs[dst as usize] = Reg::Bool(hit);
         }
         Op::Size { dst, a, err } => {
-            regs[dst as usize] = Reg::Num(tryr!(reg::size(regs[a as usize]), err));
+            regs[dst as usize] = Reg::from(tryr!(reg::size(regs[a as usize]), err));
         }
         Op::Duration { dst, a, err } => match regs[a as usize] {
             Reg::Str(s) => match crate::duration::parse_duration(s) {
@@ -3068,10 +3153,10 @@ fn slow<'a, H: Host<'a>>(
             err,
         } => match regs[a as usize] {
             Reg::Dur(d) => {
-                regs[dst as usize] = Reg::Num(if millis {
-                    d.num_milliseconds() as f64
+                regs[dst as usize] = Reg::Int(if millis {
+                    d.num_milliseconds()
                 } else {
-                    d.num_seconds() as f64
+                    d.num_seconds()
                 })
             }
             _ => fail!(ExecutionError::NoSuchOverload, err),
@@ -3264,8 +3349,9 @@ fn slow<'a, H: Host<'a>>(
         Op::Clear { r } => regs[r as usize] = Reg::Unset,
         Op::NumIn { dst, a, set } => {
             regs[dst as usize] = Reg::Bool(match regs[a as usize] {
-                Reg::Num(n) => code.numsets[set as usize].contains(n),
-                _ => false,
+                r => r
+                    .num()
+                    .is_some_and(|n| code.numsets[set as usize].contains(n)),
             })
         }
         Op::ListNew { slot, hint } => {
@@ -3361,6 +3447,8 @@ fn slow<'a, H: Host<'a>>(
             regs[dst as usize] = match out {
                 crate::CelValue::Bool(b) => Reg::Bool(b),
                 crate::CelValue::Num(x) => Reg::Num(x),
+                crate::CelValue::Int(x) => Reg::Int(x),
+                crate::CelValue::UInt(x) => Reg::UInt(x),
                 crate::CelValue::Null => Reg::Null,
                 crate::CelValue::Str(x) => Reg::Str(st.str(x.to_string())),
                 crate::CelValue::Bytes(x) => Reg::Bytes(st.bytes(x.to_vec())),
@@ -3414,6 +3502,7 @@ fn eq_k(a: &Reg<'_>, k: &Reg<'_>) -> bool {
     match (a, k) {
         (Reg::Str(x), Reg::Str(y)) => x == y,
         (Reg::Bool(x), Reg::Bool(y)) => x == y,
+        (Reg::Int(x), Reg::Int(y)) => x == y,
         (Reg::Num(x), Reg::Num(y)) => x == y,
         _ => reg::equals(*a, *k),
     }
@@ -3434,8 +3523,10 @@ fn arith<'a>(
             reg::to_cel(b, errs).unwrap_or(CelValue::Null),
         )
     };
+    if let (Some(x), Some(y)) = (a.num(), b.num()) {
+        return op.num(x, y).map(Reg::from);
+    }
     Ok(match (op, a, b) {
-        (o, Reg::Num(x), Reg::Num(y)) => Reg::Num(o.num(x, y)),
         (Arith::Add, Reg::Str(x), Reg::Str(y)) => {
             let mut s = String::with_capacity(x.len() + y.len());
             s.push_str(x);
@@ -3476,7 +3567,8 @@ fn arith<'a>(
 fn type_name(r: Reg<'_>) -> &'static str {
     match r {
         Reg::Bool(_) => "bool",
-        Reg::Num(_) => "double",
+        // The one number type, whichever representation holds the value.
+        Reg::Num(_) | Reg::Int(_) | Reg::UInt(_) => "double",
         Reg::Str(_) => "string",
         Reg::Bytes(_) => "bytes",
         Reg::Null => "null_type",
@@ -3598,7 +3690,14 @@ fn rehome<'a>(r: Reg<'a>, code: &'a Code, out: &mut Store<'a>) -> Reg<'a> {
                 .collect();
             Reg::Map(out.pairs(pairs))
         }
-        Reg::Unset | Reg::Bool(_) | Reg::Num(_) | Reg::Null | Reg::Dur(_) | Reg::Err(_) => r,
+        Reg::Unset
+        | Reg::Bool(_)
+        | Reg::Num(_)
+        | Reg::Int(_)
+        | Reg::UInt(_)
+        | Reg::Null
+        | Reg::Dur(_)
+        | Reg::Err(_) => r,
     }
 }
 

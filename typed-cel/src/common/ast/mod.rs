@@ -42,10 +42,12 @@ pub enum LiteralValue {
     Boolean(CelBool),
     Bytes(CelBytes),
     Double(CelDouble),
-    /// An integer as WRITTEN. It is syntax only — `1` parses and renders as `1` — and it becomes
-    /// the dialect's one number kind, a double, the moment a value is built from it
-    /// (`removed: integer values`).
+    /// An integer as WRITTEN, in `i64` range. It is a value of the dialect's one number type,
+    /// held exactly (`CelValue::Int`).
     Int(i64),
+    /// An integer literal above `i64::MAX`, written without a `u`. The same one number type,
+    /// held exactly (`CelValue::UInt`).
+    UInt(u64),
     Null,
     String(CelString),
 }

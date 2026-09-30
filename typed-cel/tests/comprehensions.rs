@@ -102,14 +102,8 @@ fn the_plain_logical_operators_absorb_too() {
 fn a_non_logical_comprehension_still_propagates() {
     errors("[1, 2, 3].map(e, {1: 6, 3: -6}[e])");
     errors("[1, 2, 3].filter(e, {1: true, 3: false}[e])");
-    evaluates_to(
-        "[1, 2, 3].map(e, e + 1)",
-        "List([Float(2.0), Float(3.0), Float(4.0)])",
-    );
-    evaluates_to(
-        "[1, 2, 3].filter(e, e > 1)",
-        "List([Float(2.0), Float(3.0)])",
-    );
+    evaluates_to("[1, 2, 3].map(e, e + 1)", "List([Int(2), Int(3), Int(4)])");
+    evaluates_to("[1, 2, 3].filter(e, e > 1)", "List([Int(2), Int(3)])");
 }
 
 /// Every `exists` / `all` / `exists_one` lowers to a predicate loop (the predicate a branch, no

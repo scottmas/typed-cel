@@ -185,11 +185,11 @@ fn a_known_that_decides_the_whole_expression_folds_to_a_constant() {
 }
 
 #[test]
-fn bound_numbers_stay_doubles_in_the_residual() {
+fn bound_numbers_are_exact_in_the_residual() {
     let env = env();
     let p = policy(false);
     let (original, residual) = spec(&env, LIMIT, &p);
-    assert_eq!(residual.source(), "req.size > 8.0");
+    assert_eq!(residual.source(), "req.size > 8");
     for (size, want) in [(7.5, false), (9.0, true)] {
         let r = req("/x", size, false);
         assert_eq!(residual.evaluate(&rest(&env, &r)).expect("evaluates"), want);
@@ -701,7 +701,7 @@ fn the_absent_field_case_specializes_without_gradual_typing() {
         .unwrap_or_else(|e| panic!("specializes without gradual typing: {e}"));
     assert_eq!(
         residual.source(),
-        "$k0.o == s\n// $k0 = {\"l\": [\"x\", \"y\"], \"n\": 7.0, \"s\": \"a\"}"
+        "$k0.o == s\n// $k0 = {\"l\": [\"x\", \"y\"], \"n\": 7, \"s\": \"a\"}"
     );
     let mut u = env.activation();
     u.bind("s", &json!("a")).expect("s binds");

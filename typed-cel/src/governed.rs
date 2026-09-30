@@ -805,11 +805,14 @@ impl DocState {
             (Kind::Leaf(Leaf::Bool), Event::Bool(b)) => {
                 self.settle(n, Cell::Value(CelValue::Bool(b)))
             }
-            (Kind::Leaf(Leaf::Num), Event::Number(t)) => match t.parse::<f64>() {
-                Ok(v) => self.settle(n, Cell::Value(CelValue::Num(v))),
-                Err(_) => {
+            // Exact: integer text is an integer, and integer text outside `[i64::MIN, u64::MAX]`
+            // fails the read rather than rounding to a neighbour.
+            (Kind::Leaf(Leaf::Num), Event::Number(t)) => match crate::CelNum::parse_json(t) {
+                Ok(v) => self.settle(n, Cell::Value(CelValue::from(v))),
+                Err(crate::Inexact) => {
                     let m = format!(
-                        "`{}`: schema says {}, value is a number that does not parse",
+                        "`{}`: schema says {}, value `{t}` is not a number held exactly \
+                         (an integer outside [-9223372036854775808, 18446744073709551615])",
                         node.path, node.ty_name
                     );
                     self.settle(n, Cell::Failed(m))
@@ -1007,10 +1010,11 @@ impl Facts for DocFacts<'_> {
     }
 
     fn num(&self, f: FieldId) -> Option<f64> {
-        match self.leaf(f)? {
-            CelValue::Num(n) => Some(*n),
-            _ => None,
-        }
+        self.number(f).map(crate::CelNum::as_f64)
+    }
+
+    fn number(&self, f: FieldId) -> Option<crate::CelNum> {
+        self.leaf(f)?.num()
     }
 
     fn str(&self, f: FieldId) -> Option<&str> {

@@ -27,6 +27,8 @@ fn same(a: &CelValue, b: &CelValue) -> bool {
     match (a, b) {
         (V::Bool(x), V::Bool(y)) => x == y,
         (V::Num(x), V::Num(y)) => x.to_bits() == y.to_bits(),
+        (V::Int(x), V::Int(y)) => x == y,
+        (V::UInt(x), V::UInt(y)) => x == y,
         (V::Str(x), V::Str(y)) => x == y,
         (V::Duration(x), V::Duration(y)) => x == y,
         (V::Bytes(x), V::Bytes(y)) => x == y,
@@ -123,7 +125,7 @@ fn eval_result_returns_non_bool_values() {
         (r#"b"ab""#, CelValue::Bytes(b"ab"[..].into())),
         (
             "[1, 2]",
-            CelValue::list([CelValue::Num(1.0), CelValue::Num(2.0)]),
+            CelValue::list([CelValue::Int(1), CelValue::Int(2)]),
         ),
         (
             r#"{"k": true}"#,

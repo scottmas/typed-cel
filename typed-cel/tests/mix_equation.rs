@@ -262,7 +262,7 @@ fn the_worked_examples_are_rows() {
             LIMIT,
             policy(false),
             req("/x", size),
-            "req.size > 8.0",
+            "req.size > 8",
             Some(want),
         );
     }

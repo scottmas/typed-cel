@@ -146,7 +146,7 @@ fn a_number_settles_on_its_token() {
     assert!(pending(root(&doc).poll_member("amount")));
     feed(&doc, &evs[num..=num]);
     match root(&doc).poll_member("amount") {
-        Ok(Access::Ready(CelValue::Num(n))) => assert_eq!(n, 12.5),
+        Ok(Access::Ready(v)) if v.num().is_some() => assert_eq!(v, CelValue::Num(12.5)),
         other => panic!("{other:?}"),
     }
 }
@@ -319,7 +319,8 @@ fn settled_cells_never_change_and_generation_counts_settles() {
     assert_eq!(name_seen.as_deref(), Some("ab"));
     assert_eq!(ready_str(v.poll_member("name")), "ab");
     match v.poll_member("amount") {
-        Ok(Access::Ready(CelValue::Num(n))) => assert_eq!(n, 3.0),
+        // The number, whichever representation holds it.
+        Ok(Access::Ready(v)) if v.num().is_some() => assert_eq!(v, CelValue::Int(3)),
         other => panic!("{other:?}"),
     }
 }

@@ -23,8 +23,8 @@ req.body.account.owner_id == req.user && req.body.account.tier == "gold"
 
 | | ns / eval | allocations |
 |---|---:|---:|
-| cel-rust 0.14.2 | 9,330 | 193 |
-| **typed-cel** | **36.7** | **0** |
+| cel-rust 0.14.2 | 8,878 | 193 |
+| **typed-cel** | **35.9** | **0** |
 | hand-written Rust | 8.7 | 0 |
 
 A dynamically typed CEL builds a map of boxed values for every request, looks each field up by
@@ -116,14 +116,14 @@ policy.roots.exists(r, req.path == r || req.path.startsWith(r + "/"))
 
 | | ns / eval | allocations |
 |---|---:|---:|
-| cel-rust 0.14.2 | 914,900 | 18,257 |
-| typed-cel, no specialization | 14,400 | 0 |
+| cel-rust 0.14.2 | 881,300 | 18,257 |
+| typed-cel, no specialization | 14,700 | 0 |
 | **typed-cel, specialized** | **110** | **0** |
-| hand-written Rust (loop over the roots) | 2,479 | 0 |
+| hand-written Rust (loop over the roots) | 2,343 | 0 |
 
-That's **8,300× faster than cel-rust, and 22× faster than the Rust.** The Rust version was compiled
+That's **8,000× faster than cel-rust, and 21× faster than the Rust.** The Rust version was compiled
 before anyone knew the roots, so it has to loop over them. The specialized program was compiled
-after, with the roots as constants. (With 13 roots the Rust loop still wins, 41 ns against 49 ns.
+after, with the roots as constants. (With 13 roots the Rust loop still wins, 36 ns against 48 ns.
 The crossover comes where the static data gets big.)
 
 ```rust
@@ -216,7 +216,9 @@ lean on those answers:
 
 The dialect removes whatever would force a type check at run time:
 
-- **One number type** (`f64`). No `int`/`uint`, no `%`.
+- **One number type.** No `int`/`uint` split and no `%`; `7 / 2` is `3.5`. Its values are still
+  exact: an integer up to `u64::MAX` is held as an integer, so `9007199254740993` is never its
+  neighbour.
 - **No dynamic values.** Lists are homogeneous, both branches of a conditional have the same type,
   and `dyn()` is gone.
 - **Homogeneous equality.** `1 == "1"` is a compile error, not `false`.

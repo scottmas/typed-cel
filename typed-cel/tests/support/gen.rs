@@ -405,7 +405,12 @@ pub fn host_roster() -> CelEnvironment {
         CelTy::Num,
         false,
         Arc::new(|a: &[CelValue]| match a {
-            [CelValue::Num(n)] => Ok(CelValue::Num(n * 2.0)),
+            [a] => match a.num() {
+                Some(n) => Ok(CelValue::from(typed_cel::CelNum::from_f64(
+                    n.as_f64() * 2.0,
+                ))),
+                None => Err(fail("twice")),
+            },
             _ => Err(fail("twice")),
         }),
     )

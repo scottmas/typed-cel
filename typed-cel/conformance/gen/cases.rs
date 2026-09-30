@@ -6,6 +6,10 @@
 // greps this file for the attribute, which is why it is not spelled out.
 
 #[test]
+fn basic_self_eval_zeroish_self_eval_int_zero() {
+    super::check("basic", "self_eval_zeroish", "self_eval_int_zero", 0);
+}
+#[test]
 fn basic_self_eval_zeroish_self_eval_float_zero() {
     super::check("basic", "self_eval_zeroish", "self_eval_float_zero", 0);
 }
@@ -54,6 +58,14 @@ fn basic_self_eval_zeroish_self_eval_string_raw_prefix_triple_single() {
     super::check("basic", "self_eval_zeroish", "self_eval_string_raw_prefix_triple_single", 0);
 }
 #[test]
+fn basic_self_eval_nonzeroish_self_eval_int_nonzero() {
+    super::check("basic", "self_eval_nonzeroish", "self_eval_int_nonzero", 0);
+}
+#[test]
+fn basic_self_eval_nonzeroish_self_eval_int_negative_min() {
+    super::check("basic", "self_eval_nonzeroish", "self_eval_int_negative_min", 0);
+}
+#[test]
 fn basic_self_eval_nonzeroish_self_eval_float_negative_exp() {
     super::check("basic", "self_eval_nonzeroish", "self_eval_float_negative_exp", 0);
 }
@@ -74,12 +86,24 @@ fn basic_self_eval_nonzeroish_self_eval_bytes_invalid_utf8() {
     super::check("basic", "self_eval_nonzeroish", "self_eval_bytes_invalid_utf8", 0);
 }
 #[test]
+fn basic_self_eval_nonzeroish_self_eval_list_singleitem() {
+    super::check("basic", "self_eval_nonzeroish", "self_eval_list_singleitem", 0);
+}
+#[test]
 fn basic_self_eval_nonzeroish_self_eval_map_singleitem() {
     super::check("basic", "self_eval_nonzeroish", "self_eval_map_singleitem", 0);
 }
 #[test]
 fn basic_self_eval_nonzeroish_self_eval_bool_true() {
     super::check("basic", "self_eval_nonzeroish", "self_eval_bool_true", 0);
+}
+#[test]
+fn basic_self_eval_nonzeroish_self_eval_int_hex() {
+    super::check("basic", "self_eval_nonzeroish", "self_eval_int_hex", 0);
+}
+#[test]
+fn basic_self_eval_nonzeroish_self_eval_int_hex_negative() {
+    super::check("basic", "self_eval_nonzeroish", "self_eval_int_hex_negative", 0);
 }
 #[test]
 fn basic_self_eval_nonzeroish_self_eval_unicode_escape_four() {
@@ -94,8 +118,16 @@ fn basic_self_eval_nonzeroish_self_eval_ascii_escape_seq() {
     super::check("basic", "self_eval_nonzeroish", "self_eval_ascii_escape_seq", 0);
 }
 #[test]
+fn basic_variables_self_eval_bound_lookup() {
+    super::check("basic", "variables", "self_eval_bound_lookup", 0);
+}
+#[test]
 fn basic_variables_self_eval_unbound_lookup() {
     super::check("basic", "variables", "self_eval_unbound_lookup", 0);
+}
+#[test]
+fn basic_functions_binop() {
+    super::check("basic", "functions", "binop", 0);
 }
 #[test]
 fn basic_functions_unbound() {
@@ -658,6 +690,14 @@ fn conversions_bool_string_false_badcase() {
     super::check("conversions", "bool", "string_false_badcase", 0);
 }
 #[test]
+fn fields_map_fields_map_key_bool() {
+    super::check("fields", "map_fields", "map_key_bool", 0);
+}
+#[test]
+fn fields_map_fields_map_field_access() {
+    super::check("fields", "map_fields", "map_field_access", 0);
+}
+#[test]
 fn fields_map_fields_map_no_such_key() {
     super::check("fields", "map_fields", "map_no_such_key", 0);
 }
@@ -680,6 +720,10 @@ fn fields_map_fields_map_value_string() {
 #[test]
 fn fields_map_fields_map_value_float() {
     super::check("fields", "map_fields", "map_value_float", 0);
+}
+#[test]
+fn fields_map_fields_map_value_int64() {
+    super::check("fields", "map_fields", "map_value_int64", 0);
 }
 #[test]
 fn fields_map_fields_map_value_bytes() {
@@ -834,6 +878,130 @@ fn fp_math_fp_math_fp_underflow() {
     super::check("fp_math", "fp_math", "fp_underflow", 0);
 }
 #[test]
+fn integer_math_int64_math_add_positive_positive() {
+    super::check("integer_math", "int64_math", "add_positive_positive", 0);
+}
+#[test]
+fn integer_math_int64_math_add_positive_negative() {
+    super::check("integer_math", "int64_math", "add_positive_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_add_negative_negative() {
+    super::check("integer_math", "int64_math", "add_negative_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_sub_positive_positive() {
+    super::check("integer_math", "int64_math", "sub_positive_positive", 0);
+}
+#[test]
+fn integer_math_int64_math_sub_positive_negative() {
+    super::check("integer_math", "int64_math", "sub_positive_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_sub_negative_negative() {
+    super::check("integer_math", "int64_math", "sub_negative_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_multiply_positive_positive() {
+    super::check("integer_math", "int64_math", "multiply_positive_positive", 0);
+}
+#[test]
+fn integer_math_int64_math_multiply_positive_negative() {
+    super::check("integer_math", "int64_math", "multiply_positive_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_multiply_negative_negative() {
+    super::check("integer_math", "int64_math", "multiply_negative_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_divide_positive_positive() {
+    super::check("integer_math", "int64_math", "divide_positive_positive", 0);
+}
+#[test]
+fn integer_math_int64_math_divide_positive_negative() {
+    super::check("integer_math", "int64_math", "divide_positive_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_divide_negative_negative() {
+    super::check("integer_math", "int64_math", "divide_negative_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_unary_minus_pos() {
+    super::check("integer_math", "int64_math", "unary_minus_pos", 0);
+}
+#[test]
+fn integer_math_int64_math_unary_minus_neg() {
+    super::check("integer_math", "int64_math", "unary_minus_neg", 0);
+}
+#[test]
+fn integer_math_int64_math_unary_minus_not_bool() {
+    super::check("integer_math", "int64_math", "unary_minus_not_bool", 0);
+}
+#[test]
+fn integer_math_int64_math_negative_zero() {
+    super::check("integer_math", "int64_math", "negative_zero", 0);
+}
+#[test]
+fn integer_math_int64_math_double_negative() {
+    super::check("integer_math", "int64_math", "double_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_multiply_zero() {
+    super::check("integer_math", "int64_math", "multiply_zero", 0);
+}
+#[test]
+fn integer_math_int64_math_add_left_identity() {
+    super::check("integer_math", "int64_math", "add_left_identity", 0);
+}
+#[test]
+fn integer_math_int64_math_add_right_identity() {
+    super::check("integer_math", "int64_math", "add_right_identity", 0);
+}
+#[test]
+fn integer_math_int64_math_add_commutative() {
+    super::check("integer_math", "int64_math", "add_commutative", 0);
+}
+#[test]
+fn integer_math_int64_math_add_associative() {
+    super::check("integer_math", "int64_math", "add_associative", 0);
+}
+#[test]
+fn integer_math_int64_math_mul_left_identity() {
+    super::check("integer_math", "int64_math", "mul_left_identity", 0);
+}
+#[test]
+fn integer_math_int64_math_mul_right_identity() {
+    super::check("integer_math", "int64_math", "mul_right_identity", 0);
+}
+#[test]
+fn integer_math_int64_math_mul_commutative() {
+    super::check("integer_math", "int64_math", "mul_commutative", 0);
+}
+#[test]
+fn integer_math_int64_math_mul_associative() {
+    super::check("integer_math", "int64_math", "mul_associative", 0);
+}
+#[test]
+fn integer_math_int64_math_add_mul_distribute() {
+    super::check("integer_math", "int64_math", "add_mul_distribute", 0);
+}
+#[test]
+fn integer_math_int64_math_int64_overflow_negative() {
+    super::check("integer_math", "int64_math", "int64_overflow_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_int64_overflow_add_negative() {
+    super::check("integer_math", "int64_math", "int64_overflow_add_negative", 0);
+}
+#[test]
+fn integer_math_int64_math_int64_overflow_mul_positive() {
+    super::check("integer_math", "int64_math", "int64_overflow_mul_positive", 0);
+}
+#[test]
+fn integer_math_int64_math_int64_overflow_mul_negative() {
+    super::check("integer_math", "int64_math", "int64_overflow_mul_negative", 0);
+}
+#[test]
 fn lists_concatenation_list_append() {
     super::check("lists", "concatenation", "list_append", 0);
 }
@@ -842,12 +1010,32 @@ fn lists_concatenation_list_not_commutative() {
     super::check("lists", "concatenation", "list_not_commutative", 0);
 }
 #[test]
+fn lists_concatenation_list_repeat() {
+    super::check("lists", "concatenation", "list_repeat", 0);
+}
+#[test]
 fn lists_concatenation_empty_empty() {
     super::check("lists", "concatenation", "empty_empty", 0);
 }
 #[test]
+fn lists_concatenation_left_unit() {
+    super::check("lists", "concatenation", "left_unit", 0);
+}
+#[test]
+fn lists_concatenation_right_unit() {
+    super::check("lists", "concatenation", "right_unit", 0);
+}
+#[test]
+fn lists_index_zero_based() {
+    super::check("lists", "index", "zero_based", 0);
+}
+#[test]
 fn lists_index_singleton() {
     super::check("lists", "index", "singleton", 0);
+}
+#[test]
+fn lists_index_middle() {
+    super::check("lists", "index", "middle", 0);
 }
 #[test]
 fn lists_index_last() {
@@ -872,6 +1060,26 @@ fn lists_in_middle() {
 #[test]
 fn lists_in_missing() {
     super::check("lists", "in", "missing", 0);
+}
+#[test]
+fn lists_size_list_empty() {
+    super::check("lists", "size", "list_empty", 0);
+}
+#[test]
+fn lists_size_list() {
+    super::check("lists", "size", "list", 0);
+}
+#[test]
+fn lists_size_map_empty() {
+    super::check("lists", "size", "map_empty", 0);
+}
+#[test]
+fn lists_size_map() {
+    super::check("lists", "size", "map", 0);
+}
+#[test]
+fn logic_conditional_true_case() {
+    super::check("logic", "conditional", "true_case", 0);
 }
 #[test]
 fn logic_conditional_false_case() {
@@ -1022,8 +1230,20 @@ fn macros_map_list_empty() {
     super::check("macros", "map", "list_empty", 0);
 }
 #[test]
+fn macros_map_list_one() {
+    super::check("macros", "map", "list_one", 0);
+}
+#[test]
+fn macros_map_list_many() {
+    super::check("macros", "map", "list_many", 0);
+}
+#[test]
 fn macros_map_map_extract_keys() {
     super::check("macros", "map", "map_extract_keys", 0);
+}
+#[test]
+fn macros_filter_list_one_true() {
+    super::check("macros", "filter", "list_one_true", 0);
 }
 #[test]
 fn macros_filter_list_one_false() {
@@ -1032,6 +1252,10 @@ fn macros_filter_list_one_false() {
 #[test]
 fn macros_filter_list_none() {
     super::check("macros", "filter", "list_none", 0);
+}
+#[test]
+fn macros_filter_list_all() {
+    super::check("macros", "filter", "list_all", 0);
 }
 #[test]
 fn macros_filter_map_filter_keys() {
@@ -1046,6 +1270,22 @@ fn macros_nested_all_all() {
     super::check("macros", "nested", "all_all", 0);
 }
 #[test]
+fn parse_nest_list_index() {
+    super::check("parse", "nest", "list_index", 0);
+}
+#[test]
+fn parse_nest_list_literal() {
+    super::check("parse", "nest", "list_literal", 0);
+}
+#[test]
+fn parse_nest_map_literal() {
+    super::check("parse", "nest", "map_literal", 0);
+}
+#[test]
+fn parse_nest_parens() {
+    super::check("parse", "nest", "parens", 0);
+}
+#[test]
 fn parse_repeat_conditional() {
     super::check("parse", "repeat", "conditional", 0);
 }
@@ -1058,8 +1298,20 @@ fn parse_repeat_and() {
     super::check("parse", "repeat", "and", 0);
 }
 #[test]
+fn parse_repeat_add_sub() {
+    super::check("parse", "repeat", "add_sub", 0);
+}
+#[test]
+fn parse_repeat_mul_div() {
+    super::check("parse", "repeat", "mul_div", 0);
+}
+#[test]
 fn parse_repeat_index() {
     super::check("parse", "repeat", "index", 0);
+}
+#[test]
+fn parse_repeat_list_literal() {
+    super::check("parse", "repeat", "list_literal", 0);
 }
 #[test]
 fn parse_repeat_map_literal() {
@@ -1642,6 +1894,78 @@ fn parse_bytes_literals_upper_raw_triple_double_quoted_escapes() {
     super::check("parse", "bytes_literals", "upper_raw_triple_double_quoted_escapes", 0);
 }
 #[test]
+fn parse_selectors_as() {
+    super::check("parse", "selectors", "as", 0);
+}
+#[test]
+fn parse_selectors_break() {
+    super::check("parse", "selectors", "break", 0);
+}
+#[test]
+fn parse_selectors_const() {
+    super::check("parse", "selectors", "const", 0);
+}
+#[test]
+fn parse_selectors_continue() {
+    super::check("parse", "selectors", "continue", 0);
+}
+#[test]
+fn parse_selectors_else() {
+    super::check("parse", "selectors", "else", 0);
+}
+#[test]
+fn parse_selectors_for() {
+    super::check("parse", "selectors", "for", 0);
+}
+#[test]
+fn parse_selectors_function() {
+    super::check("parse", "selectors", "function", 0);
+}
+#[test]
+fn parse_selectors_if() {
+    super::check("parse", "selectors", "if", 0);
+}
+#[test]
+fn parse_selectors_import() {
+    super::check("parse", "selectors", "import", 0);
+}
+#[test]
+fn parse_selectors_let() {
+    super::check("parse", "selectors", "let", 0);
+}
+#[test]
+fn parse_selectors_loop() {
+    super::check("parse", "selectors", "loop", 0);
+}
+#[test]
+fn parse_selectors_package() {
+    super::check("parse", "selectors", "package", 0);
+}
+#[test]
+fn parse_selectors_namespace() {
+    super::check("parse", "selectors", "namespace", 0);
+}
+#[test]
+fn parse_selectors_return() {
+    super::check("parse", "selectors", "return", 0);
+}
+#[test]
+fn parse_selectors_var() {
+    super::check("parse", "selectors", "var", 0);
+}
+#[test]
+fn parse_selectors_void() {
+    super::check("parse", "selectors", "void", 0);
+}
+#[test]
+fn parse_selectors_while() {
+    super::check("parse", "selectors", "while", 0);
+}
+#[test]
+fn plumbing_min_min_program() {
+    super::check("plumbing", "min", "min_program", 0);
+}
+#[test]
 fn plumbing_eval_results_eval_map_results() {
     super::check("plumbing", "eval_results", "eval_map_results", 0);
 }
@@ -1856,6 +2180,10 @@ fn timestamps_comparisons_geq_duration_false() {
 #[test]
 fn timestamps_comparisons_greater_duration_true() {
     super::check("timestamps", "comparisons", "greater_duration_true", 0);
+}
+#[test]
+fn timestamps_duration_converters_get_seconds() {
+    super::check("timestamps", "duration_converters", "get_seconds", 0);
 }
 #[test]
 fn timestamps_duration_range_from_string_under() {

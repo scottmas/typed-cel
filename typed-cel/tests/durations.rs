@@ -121,6 +121,6 @@ fn an_ordinary_policy_duration_is_untouched() {
     }
     assert_eq!(
         eval("duration('90s').getSeconds()").map(|v| format!("{v:?}")),
-        Ok("Float(90.0)".to_string())
+        Ok("Int(90)".to_string())
     );
 }

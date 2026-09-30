@@ -12,6 +12,8 @@
 //! two thirds of a specialized decision: `fs_open_13` 372 -> 242 cycles, `prefix_1000` 680 -> 358
 //! (`ablation --cycles`).
 
+use crate::num::CelNum;
+
 /// Above this many keys a sorted set is searched; at or below it, scanned. A scan of a handful of
 /// short keys beats a binary search's unpredictable branches.
 pub(crate) const LINEAR_MAX: usize = 16;
@@ -352,37 +354,65 @@ mod tests {
     }
 }
 
-/// A set of numbers, as `==` sees them: `-0.0` is `0.0`, and NaN — equal to nothing — is never a
-/// member. Sorted bit patterns, answered by binary search.
+/// A set of numbers, as `==` sees them: by exact value, whatever the representation (`3`, `3.0`
+/// and a `u64` 3 are one member; `-0.0` is `0`), and NaN — equal to nothing — is never a member.
+/// Sorted [`CelNum::key_bits`], answered by binary search.
 #[derive(Debug)]
 pub(crate) struct NumSet {
-    bits: Box<[u64]>,
+    keys: Box<[(u8, u64)]>,
 }
 
 impl NumSet {
-    pub(crate) fn new(nums: impl IntoIterator<Item = f64>) -> NumSet {
-        let mut bits: Vec<u64> = nums
-            .into_iter()
-            .filter(|n| !n.is_nan())
-            .map(canonical)
-            .collect();
-        bits.sort_unstable();
-        bits.dedup();
+    pub(crate) fn new(nums: impl IntoIterator<Item = CelNum>) -> NumSet {
+        let mut keys: Vec<(u8, u64)> = nums.into_iter().filter_map(CelNum::key_bits).collect();
+        keys.sort_unstable();
+        keys.dedup();
         NumSet {
-            bits: bits.into_boxed_slice(),
+            keys: keys.into_boxed_slice(),
         }
     }
 
-    pub(crate) fn contains(&self, n: f64) -> bool {
-        !n.is_nan() && self.bits.binary_search(&canonical(n)).is_ok()
+    pub(crate) fn contains(&self, n: CelNum) -> bool {
+        n.key_bits()
+            .is_some_and(|k| self.keys.binary_search(&k).is_ok())
     }
 }
 
-/// `n`'s bits, with the two zeros made one.
-fn canonical(n: f64) -> u64 {
-    if n == 0.0 {
-        0.0f64.to_bits()
-    } else {
-        n.to_bits()
+#[cfg(test)]
+mod num_set_tests {
+    use super::*;
+
+    #[test]
+    fn every_representation_of_a_needle_finds_the_same_members() {
+        let set = NumSet::new([
+            CelNum::Int(3),
+            CelNum::Int(9007199254740993),
+            CelNum::UInt(u64::MAX),
+            CelNum::Float(0.5),
+        ]);
+        for hit in [
+            CelNum::Int(3),
+            CelNum::Float(3.0),
+            CelNum::UInt(3),
+            CelNum::UInt(u64::MAX),
+            CelNum::Float(0.5),
+            CelNum::Int(9007199254740993),
+            CelNum::UInt(9007199254740993),
+        ] {
+            assert!(set.contains(hit), "{hit:?}");
+        }
+        for miss in [
+            CelNum::Float(9007199254740992.0),
+            CelNum::Int(9007199254740992),
+            CelNum::Int(4),
+            CelNum::Float(f64::NAN),
+            CelNum::Float(2f64.powi(64)),
+        ] {
+            assert!(!set.contains(miss), "{miss:?}");
+        }
+        let zero = NumSet::new([CelNum::Float(-0.0)]);
+        assert!(zero.contains(CelNum::Int(0)));
+        assert!(NumSet::new([CelNum::Int(0)]).contains(CelNum::Float(-0.0)));
+        assert!(!NumSet::new([CelNum::Float(f64::NAN)]).contains(CelNum::Float(f64::NAN)));
     }
 }
