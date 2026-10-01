@@ -23,7 +23,7 @@ Every case is compiled through the checker a policy compiles through, then evalu
   macros2                    0       0        46      0
   math_ext                   0       0       199      0
   namespace                  0       0         3      0
-  optionals                  0       0        70      0
+  optionals                  5       0        65      0
   parse                    173       0        46      0
   plumbing                   3       0         2      0
   proto2                     0       0       108      0
@@ -35,7 +35,7 @@ Every case is compiled through the checker a policy compiles through, then evalu
   type_deduction             0       0        47      0
   unknowns                   0       0         0      0
   wrappers                   0       0        36      0
-  TOTAL                    521      29      1794      0
+  TOTAL                    526      29      1789      0
 
   Excluded by dialect:
         1  diverges: absence must be proven
@@ -46,21 +46,22 @@ Every case is compiled through the checker a policy compiles through, then evalu
        19  diverges: undeclared names are compile errors
         6  not implemented: backtick-quoted field selection
        13  not implemented: container name resolution
+        1  not implemented: optional index on a list
        47  not implemented: the cel-spec checker
        46  not implemented: two-variable comprehension macros
         4  removed: bytes concatenation
-       17  removed: dyn values
-       88  removed: dyn()
+       18  removed: dyn values
+       92  removed: dyn()
       454  removed: extension libraries
        12  removed: integer division
         4  removed: logic on non-bools
        12  removed: modulo
-       70  removed: optional syntax
+       44  removed: optional values
        25  removed: ordering beyond numbers and strings
-      648  removed: protobuf
+      659  removed: protobuf
         7  removed: size() on strings
        55  removed: timestamp
        54  removed: type conversion functions
        25  removed: type values
-      178  removed: uint
+      182  removed: uint
 ```

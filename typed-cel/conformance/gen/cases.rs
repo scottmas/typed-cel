@@ -1266,6 +1266,26 @@ fn macros_nested_all_all() {
     super::check("macros", "nested", "all_all", 0);
 }
 #[test]
+fn optionals_optionals_map_undefined_entry_hasvalue() {
+    super::check("optionals", "optionals", "map_undefined_entry_hasValue", 0);
+}
+#[test]
+fn optionals_optionals_map_optindex_hasvalue() {
+    super::check("optionals", "optionals", "map_optindex_hasValue", 0);
+}
+#[test]
+fn optionals_optionals_has_map_optindex() {
+    super::check("optionals", "optionals", "has_map_optindex", 0);
+}
+#[test]
+fn optionals_optionals_has_map_optindex_field() {
+    super::check("optionals", "optionals", "has_map_optindex_field", 0);
+}
+#[test]
+fn optionals_optionals_optional_chaining_2() {
+    super::check("optionals", "optionals", "optional_chaining_2", 0);
+}
+#[test]
 fn parse_nest_list_index() {
     super::check("parse", "nest", "list_index", 0);
 }

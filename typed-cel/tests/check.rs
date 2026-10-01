@@ -469,16 +469,58 @@ fn the_optional_syntax_message_tells_the_truth() {
         "body",
         Record::new("body", [("x", CelTy::Num), ("y", CelTy::Num)]).with_optional(["x"]),
     );
-    for src in ["optional(1) == 1", "body.y.orValue(0) == 1", "body.?x == 1"] {
-        let e = env
-            .compile(src, &CompileOpts::default())
-            .expect_err("optional syntax is removed")
-            .to_string();
-        assert!(e.contains("has("), "`{src}`: {e}");
-        assert!(e.contains("in m"), "`{src}`: {e}");
-        assert!(
-            !e.contains("every declared path is present"),
-            "`{src}`: {e}"
-        );
+    let refused = |src: &str| {
+        env.compile(src, &CompileOpts::default())
+            .expect_err(src)
+            .to_string()
+    };
+    let e = refused("optional(1) == 1");
+    assert!(e.contains("`optional` values are removed"), "{e}");
+    assert!(e.contains("removed: optional values"), "{e}");
+    let e = refused("body.y.orValue(0) == 1");
+    assert!(e.contains("x.?f.orValue(d)"), "{e}");
+    assert!(e.contains("added: optional reads"), "{e}");
+    let e = refused("body.?x == 1");
+    assert!(e.contains(".orValue("), "{e}");
+    assert!(e.contains("removed: optional values"), "{e}");
+    for e in [
+        refused("optional(1) == 1"),
+        refused("body.y.orValue(0) == 1"),
+        refused("body.?x == 1"),
+    ] {
+        assert!(!e.contains("every declared path is present"), "{e}");
     }
+}
+
+/// A bare optional read is a CHECK error, not a parse error: the parser keeps `.?f` as spec CEL's
+/// call so the optional-read macros can rewrite it, and the checker names what IS supported, with a
+/// caret on the `.?` the author wrote.
+#[test]
+fn an_optional_read_outside_orvalue_names_what_is_supported() {
+    use typed_cel::{CelEnvironment, CelError, CelTy, Record};
+    let mut env = CelEnvironment::new();
+    env.declare(
+        "body",
+        Record::new("body", [("x", CelTy::Num)]).with_optional(["x"]),
+    );
+    let src = "body.?x == 1";
+    let err = env
+        .compile(src, &CompileOpts::default())
+        .expect_err("a bare optional read");
+    let CelError::Check { at, message, .. } = &err else {
+        panic!("a check error, not {err:?}");
+    };
+    for needle in [
+        ".orValue(",
+        ".hasValue()",
+        "has(",
+        "removed: optional values",
+    ] {
+        assert!(message.contains(needle), "{needle}: {message}");
+    }
+    let at = at.expect("a span");
+    assert!(
+        at.start <= 4 && at.end >= 5,
+        "the caret covers `.?`: {at:?} in `{src}`"
+    );
 }

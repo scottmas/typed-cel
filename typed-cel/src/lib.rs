@@ -250,6 +250,15 @@ pub mod fork {
     }
 
     /// The backend's value over `activation`'s bound values.
+    /// [`FastProgram::new`](crate::FastProgram::new), with every guarded read lowered as the
+    /// ternary it is written as (`Has`, a branch, `Read`): the reference the fused form answers
+    /// exactly as.
+    pub fn fast_program_unfused(
+        p: &crate::CelProgram,
+    ) -> Result<crate::FastProgram, crate::CelError> {
+        crate::FastProgram::new_unfused(p)
+    }
+
     pub fn fast_value(
         p: &crate::FastProgram,
         activation: &crate::CelActivation,
@@ -728,7 +737,8 @@ impl CelEnvironment {
         Result<(CelTy, DemandSet, std::collections::HashMap<u64, CelTy>), Vec<check::CheckError>>,
         Vec<check::Unproven>,
     ) {
-        let mut checker = check::Checker::new(&self.env, self.limits.max_depth);
+        let mut checker = check::Checker::new(&self.env, self.limits.max_depth)
+            .with_optional_reads(&parsed.info.optional_reads);
         if !enforce_presence {
             checker = checker.observing_presence();
         }

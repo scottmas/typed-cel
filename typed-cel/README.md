@@ -87,7 +87,7 @@ Five things about that are worth knowing before writing any of it:
   (`register_host`) that belong to that environment alone — a numeric argument arrives as
   `CelValue::Int`, `UInt` or `Num`, read with `CelValue::num` — and a host function never shadows a
   dialect name — a built-in, a removal, a macro or an operator spelling is refused at registration.
-- **There is no optional syntax, and absence is real.** An optional field, a key only an index
+- **There are no optional values, and absence is real.** An optional field, a key only an index
   signature allows, and any `map` key may be absent, and a read of one compiles only where it is
   PROVEN present — by `has`/`in`, by iterating the container, by a known value, or by an
   `unsafe_map` declaration. See [Proving presence](#proving-presence):
@@ -95,8 +95,9 @@ Five things about that are worth knowing before writing any of it:
   ```text
   schema:   {"discount?": "number"}
   policy:   body.discount < 10                          -> compile error: `body.discount` may be absent
-  fixed:    has(body.discount) && body.discount < 10    -> compiles
-  or:       !has(body.discount) || body.discount < 10   -> compiles
+  fixed:    has(body.discount) && body.discount < 10    -> compiles  (absent: false)
+  or:       !has(body.discount) || body.discount < 10   -> compiles  (absent: true)
+  or:       body.?discount.orValue(0) < 10              -> compiles  (absent: reads 0)
   ```
 
 Comparisons are homogeneous — `(T, T) -> bool` with `T` a real type variable — so
@@ -148,8 +149,9 @@ decision (allocations per decision); the columns are defined in
 - ordering beyond numbers, strings and durations (`removed: ordering beyond numbers and strings`)
 - timestamps and every clock read (`removed: timestamp`)
 - protobuf messages and enums (`removed: protobuf`)
-- optional syntax: `.?`, `[?]`, `optional.*` (`removed: optional syntax`) — absence is proven with
-  `has()`/`in` instead
+- optional values: `optional.*`, `.value()`, `[?x]`, `{?k: v}` (`removed: optional values`) —
+  absence is proven with `has()`/`in`, and an optional READ with a default (`x.?f.orValue(d)`,
+  `added: optional reads`) is spelled as spec CEL spells it
 - type values and conversion functions: `type()`, `int()`, `string()`, … (`removed: type values`, `removed: type conversion functions`)
 - `size()` on strings (`removed: size() on strings`)
 - bytes concatenation (`removed: bytes concatenation`)
@@ -402,7 +404,42 @@ one of two guards, depending on what the absent case should mean:
 ```text
 has(body.discount) && body.discount < 10     // absent: false
 !has(body.discount) || body.discount < 10    // absent: true
+body.?discount.orValue(0) < 10               // absent: reads 0
 ```
+
+#### Optional reads
+
+Spec CEL's optional reads compile, with spec CEL's answers (`added: optional reads`), and there is
+still no optional VALUE: `x.?f` and `m[?k]` are legal only as the operand of `.orValue(d)`,
+`.hasValue()` or `has()`. The parser rewrites each into the guards that prove it, so the presence
+rules above are the only rules. A chain is a root followed by segments, `k0` its first optional
+segment; `P_i` is the root followed by segments `1 … i` written as PLAIN reads, and `test(i)` is
+`has(P_{i-1}.f)` for a field segment and `k in P_{i-1}` for an index segment:
+
+| authored | rewritten |
+|---|---|
+| `chain.orValue(d)` | `test(k0) && … && test(n) ? P_n : d` |
+| `chain.hasValue()` | `test(k0) && … && test(n)` |
+| `has(chain.f)` | `test(k0) && … && test(n) && has(P_n.f)` |
+
+```cel
+body.?shipping.?address.?zip.orValue('')
+  -> has(body.shipping) && has(body.shipping.address) && has(body.shipping.address.zip)
+       ? body.shipping.address.zip : ''
+req.headers[?'x-tenant'].orValue('default')
+  -> 'x-tenant' in req.headers ? req.headers['x-tenant'] : 'default'
+body.items.all(i, i.?note.orValue('') != 'x')
+  -> body.items.all(i, (has(i.note) ? i.note : '') != 'x')
+```
+
+Once a chain is optional, every later segment is: `{}.?null_key.invalid.hasValue()` is `false`
+(the corpus case `map_undefined_entry_hasValue`), and `body.?s.z.orValue('')` guards `z` as well as
+`s`. A plain read BEFORE the first `.?` is an ordinary read and must be proven like any other, so
+with an optional `shipping`, `body.shipping.?zip` is refused and `body.?shipping.?zip` is the
+spelling. The default is evaluated only when the value is absent (`diverges: orValue's default is
+lazy`) — it is the `: d` arm of the rewrite. A refusal of an unproven read offers the optional read
+as a third fix. An optional index on a LIST (`xs[?i]`) is refused: bounds are not presence, and
+`size(xs) > i ? xs[i] : d` is the spelling (`not implemented: optional index on a list`).
 
 ### Querying an expression's shape
 
@@ -542,7 +579,7 @@ type, which is what makes `(T, T) -> bool` reject `body.amount == session.user_i
 | `_-_` | `(double, double) -> double`, `(duration, duration) -> duration` | |
 | `_*_` | `(double, double) -> double` | **no `duration * double`.** Every such addition widens a surface where the internal unit (nanoseconds, via `chrono::TimeDelta`) leaks into a policy's arithmetic. Durations are compared and added |
 | `_/_` | `(double, double) -> double` | |
-| `_[_]` | `(list(T), double) -> T`, `(map(K, V), K) -> V` | a string-literal index into a RECORD never reaches the table — see `diverges: literal-key record index`. There is no `_[?_]`: `removed: optional syntax` |
+| `_[_]` | `(list(T), double) -> T`, `(map(K, V), K) -> V` | a string-literal index into a RECORD never reaches the table — see `diverges: literal-key record index`. `x[?k]` is an optional read (`added: optional reads`): only the operand of `.orValue`, `.hasValue` or `has` |
 | `@in` | `(T, list(T)) -> bool`, `(K, map(K, V)) -> bool` | written `x in y`. The map row is the membership spelling the system environment needs (`"8080" in listeners`) |
 | `duration` | `(string) -> duration` | the ONE temporal constructor. `timestamp` is absent, and its absence is structural |
 | `getSeconds` | `duration.getSeconds() -> double` | |
@@ -637,9 +674,9 @@ three outcomes:
 ```text
   google/cel-spec v0.25.1 — 2344 cases, each checked, then evaluated
 
-      521  pass
+      526  pass
        29  pass statically (the case expects an error; the checker refused it first)
-     1794  excluded by dialect
+     1789  excluded by dialect
         0  fail
 
   Excluded by dialect:
@@ -651,23 +688,24 @@ three outcomes:
        19  diverges: undeclared names are compile errors
         6  not implemented: backtick-quoted field selection
        13  not implemented: container name resolution
+        1  not implemented: optional index on a list
        47  not implemented: the cel-spec checker
        46  not implemented: two-variable comprehension macros
         4  removed: bytes concatenation
-       17  removed: dyn values
-       88  removed: dyn()
+       18  removed: dyn values
+       92  removed: dyn()
       454  removed: extension libraries
        12  removed: integer division
         4  removed: logic on non-bools
        12  removed: modulo
-       70  removed: optional syntax
+       44  removed: optional values
        25  removed: ordering beyond numbers and strings
-      648  removed: protobuf
+      659  removed: protobuf
         7  removed: size() on strings
        55  removed: timestamp
        54  removed: type conversion functions
        25  removed: type values
-      178  removed: uint
+      182  removed: uint
 ```
 
 <!-- @end conformance summary -->
@@ -684,7 +722,7 @@ keeps working, nobody notices, and a policy gets written against something this 
 |---|---|---|---|
 | `removed: protobuf` | protobuf messages, `Expr::Struct`, enums, wrappers | `message_construction_is_gone` | nothing in either environment produces one |
 | `removed: dyn()` | `dyn()` | `dyn_is_gone` | one numeric type and a real checker make it unnecessary; it exists to defeat type checking |
-| `removed: optional syntax` | `[?k]`, `.?f`, `optional.*`, `orValue` | `optional_syntax_is_gone` | absence is proven at compile time instead (`added: proven presence`); an optional VALUE type would be a second way to say the same thing, and `.?field` is measurably wrong on maps |
+| `removed: optional values` | the `optional` type and every function over it (`optional.of`, `optional.none`, `optional.ofNonZeroValue`, `.value()`, `.or()`, `.optMap()`, `.optFlatMap()`, `==` on optionals), `[?x]` list elements, `{?k: v}` map entries, and an optional read anywhere but under `.orValue`/`.hasValue`/`has` | `optional_values_are_gone` | absence is proven at compile time (`added: proven presence`), and an optional READ with a default (`added: optional reads`) covers what authors reach for; a first-class optional value would be a second way to say both |
 | `removed: timestamp` | `timestamp`, and every wall-clock reading | `timestamp_is_gone` | **a clock read in a sandbox decision is a bug.** `CLOCK_MONOTONIC` is a repo rule; a revocation that fires because NTP stepped is not a policy |
 | `removed: uint` | the `u` literal suffix, `uint()` and the `uint` type | `uint_is_gone` | one numeric type: a large integer is written without a `u` and held exactly. The trap where a serde-converted positive integer arrives as a `u64` and picks a different arithmetic stays closed because arithmetic and comparison are defined across every representation of a number |
 | `removed: size() on strings` | `size()` over a string | `size_on_a_string_is_gone` | it returns **bytes**, not code points: `size('πέντε')` is 10. A length predicate that means something different on non-ASCII input is worse than none |
@@ -719,6 +757,7 @@ Standard CEL this dialect does not provide, and does not intend to.
 | `not implemented: container name resolution` | the `container` namespace qualified identifiers resolve against | both environments bind their roots by name into a flat activation, so there is no namespace to resolve against |
 | `not implemented: the cel-spec checker` | cel-spec's `type_deduction` phase | typed-cel has a checker, but a different one — over structural declared types rather than proto descriptors — and it is tested directly |
 | `not implemented: backtick-quoted field selection` | ``m.`content-type` `` | the index form `m['content-type']` works, is what the HTTP environment already uses, and is the form `diverges: literal-key record index` is written about. Two spellings for one access is a second thing to keep in step. Rejected by the CHECKER (`backtick_field_selection_is_gone`), because the parser leaves the backticks in the field name and the select would otherwise fail at evaluation as a missing key |
+| `not implemented: optional index on a list` | `xs[?i]` | bounds are not presence, and the presence rules do not track a list's length; `size(xs) > i ? xs[i] : d` is the spelling. Pinned by `optional_reads_that_stay_refused` |
 
 ### Divergences
 
@@ -729,6 +768,7 @@ Spec CEL says one thing and this dialect does another, on purpose.
 | `diverges: one numeric type` | one number TYPE, `double`, to the checker; at run time its values are held exactly — an `i64`, a `u64` above `i64::MAX`, or an `f64` (`CelNum`) — and compare by value across those | ergonomic: no `1` vs `1.0` type errors, no operator whose meaning depends on how an operand was spelled. The values are exact because a rounded one is a bypass: `9007199254740993` and `9007199254740992` are different account ids and one double |
 | `diverges: exact integers span int64 and uint64` | an integer is exact across `[i64::MIN, u64::MAX]`: `9223372036854775807 + 1` is `9223372036854775808`, where spec CEL's `int` overflows. Past that range it is an error here too | the one number type has no `int64` to overflow; stopping at `i64::MAX` would refuse a `u64` id or `RLIM_INFINITY` a document legitimately carries. Pinned by `one_numeric_type_many_representations` |
 | `diverges: absence must be proven` | a read that may be absent — an optional field, a key only an index signature allows, any `map` key — must be proven present at compile time; spec CEL evaluates it and errors at run time | a policy that silently denies every request missing an optional field is a bug found at authoring time; pinned by `unproven_map_reads_are_refused` |
+| `diverges: orValue's default is lazy` | `x.?f.orValue(d)` evaluates `d` only when `x.f` is absent; spec CEL evaluates a function's argument eagerly, so a `d` that errors is an error there even when `x.f` is present | it reads as what an author means — "use `d` if there is nothing there" — and it is what the rewrite (`has(x.f) ? x.f : d`) is. Pinned by `lazy_default` |
 | `diverges: literal-key record index` | a string-literal index into a record is checked field access | `headers['content-type']` must keep unknown-key detection |
 | `diverges: dyn must be narrowed` | a `dyn` value must be narrowed before it is used; spec CEL checks one against everything | a schema's `unknown` is a statement about DATA; CEL's `dyn` is a statement about VERIFICATION. This dialect DELETED `dyn()` because it exists to defeat type checking, so a schema must not be able to manufacture what an author may not write |
 | `diverges: undeclared names are compile errors` | an unbound variable or an unknown function is a CHECK error; spec CEL defers both to evaluation, where a short circuit can absorb the error (spec CEL answers `true` for an unbound `x` or-ed with `true`) | a typo in a generated program must never be silently absorbed by a short circuit. Every name a program may read is declared in its environment |
@@ -786,6 +826,7 @@ not a status report — it either has its API or it is in the test's output.
 | `added: compile with known values` | one `compile(source, &CompileOpts)`: the required result type, and the roots whose values are known now. The check runs WITH the known values in view (a known value proves presence), then every read of a known root folds, leaving a residual over the rest | `CelEnvironment::compile`, `CompileOpts`, `Parsed`, `CelEnvironment::parse`, `CelError::Specialize` | a decision whose configuration is fixed for a process's life is compiled against it ONCE; the per-call program reads only the per-call input. The fold runs on the backend, so it adds no second semantics. See [Specializing](#specializing) |
 | `added: proven presence` | a read that may be absent — an optional field, a key only an index signature allows, any `map` key — compiles only where something proves it present: a guard (`has`, `in`), iteration over the same container, a known value, or an `unsafe_map` declaration | `CelEnvironment::compile` | a policy that silently denies every request missing an optional field is found when it is written. Pinned by `unproven_record_reads_are_refused` and `a_compiled_program_never_raises_no_such_key`. See [Proving presence](#proving-presence) |
 | `added: unsafe_map` | a map type whose DECLARER asserts every key a program can name reads as a value, so a read of one needs no proof; a schema never derives one | `CelTy::unsafe_map` | an embedder that fills a root from the program's own demand (pre-creating every key the program names) has a root that is total by construction — and saying so in the type keeps the same program text meaning the same thing against the same declared types everywhere |
+| `added: optional reads` | `x.?f.orValue(d)`, `m[?k].orValue(d)`, `x.?f.hasValue()` and `has(x.?a.b)`, rewritten at parse time into the guards that prove them (`has(x.f) ? x.f : d`) — spec CEL's spelling and spec CEL's answers | `CelEnvironment::compile` | a read with a fallback is the commonest thing an author writes against an optional field; spelling it as CEL spells it, and proving it with the rules that already exist, costs nothing at run time. See [Proving presence](#proving-presence) |
 | `added: host functions` | typed, pure functions an embedding environment declares | `CelEnvironment::register_host`, `HostCall` | an embedder's matching engines (route tables, schema checks) are exposed as calls the checker types and partial evaluation treats as opaque until every argument is known, instead of being re-implemented in CEL or left outside it. The backend dispatches them, and builds a matcher through one over a known list |
 | `added: closed string sets` | an environment may declare that a string field holds one of a fixed list of values; nothing about its meaning changes | `CelEnvironment::declare_enum`, `TAG_OTHER`, `Facts` | a field like an access mode is compared with a handful of literals on every decision. The fast backend compares a listed literal as a TAG — the value's index — which a `Facts` provider may answer without producing a string at all; `f == "a" \|\| f == "b"` over listed values is one mask test. A literal outside the list is still an ordinary string comparison |
 | `added: typed results` | programs that must produce a declared non-bool type, and the runtime to run them | `CelEnvironment::compile`, `CompileOpts`, `ResultKind`, `CelRuntime`, `CelActivation::bind_fact`, `Vm::eval_result`, `FastProgram::decide_tag` | a decision point with more than two outcomes (allow / read-only / a specific errno) needs a result the checker can still prove the type of, and a specialization of it keeps that type. The fast backend answers such a program with the index of a tag rather than a string value, so the answer allocates nothing |

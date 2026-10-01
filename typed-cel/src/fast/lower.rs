@@ -487,7 +487,12 @@ impl Lower<'_> {
             Expr::Ident(_) => {
                 read(self, e);
             }
-            Expr::Select(s) if s.test => self.scan_reads(&s.operand, loops, seen),
+            // `has(x.f)` over a path asks the host about `x.f` (`Has`): `x` is not read.
+            Expr::Select(s) if s.test => {
+                if self.path(&s.operand).is_none() {
+                    self.scan_reads(&s.operand, loops, seen);
+                }
+            }
             Expr::Select(s) => {
                 if !read(self, e) {
                     self.scan_reads(&s.operand, loops, seen);
@@ -495,6 +500,16 @@ impl Lower<'_> {
             }
             Expr::Call(c) => {
                 if c.func_name == operators::INDEX && read(self, e) {
+                    return;
+                }
+                // `"k" in x` over a path is `has(x.k)`: `x` is not read.
+                if c.func_name == operators::IN
+                    && c.target.is_none()
+                    && c.args.len() == 2
+                    && string_literal(&c.args[0]).is_some()
+                    && self.kind_is_container(&c.args[1])
+                    && self.path(&c.args[1]).is_some()
+                {
                     return;
                 }
                 if let Some(t) = c.target.as_deref() {
@@ -1200,6 +1215,23 @@ impl Lower<'_> {
     /// `c ? a : b`, each arm lowered by `arm` into `dst`. The condition is lowered as control flow
     /// (`branch`), so `f == "x" && !g ? … : …` tests and jumps rather than building a bool.
     fn ternary(&mut self, args: &[IdedExpr], dst: R, h: Label, arm: Arm) -> Result<(), String> {
+        // A guarded read: one host call that answers the value or `Unset`, then the default
+        // only where it is — no `Has`, no second read.
+        if let (Arm::Value, Some((f, from))) = (arm, self.guarded_read(&args[0], &args[1])) {
+            let want = want(self.kind(&args[1]));
+            let done = self.label();
+            self.push(Op::ReadOr {
+                dst,
+                f,
+                want,
+                from,
+                err: h,
+            });
+            self.push(Op::BrSet { r: dst, to: done });
+            self.expr(&args[2], dst, h)?;
+            self.place(done);
+            return Ok(());
+        }
         let else_ = self.label();
         let end = self.label();
         self.branch(&args[0], else_, false, h)?;
@@ -1209,6 +1241,60 @@ impl Lower<'_> {
         self.arm(&args[2], arm, dst, h)?;
         self.place(end);
         Ok(())
+    }
+
+    /// `has(p) ? p : d`, `k in m ? m[k] : d`, and a `&&` chain of such guards over PREFIXES of `p`
+    /// (`has(a) && has(a.b) ? a.b : d`): the guards say exactly "p is present", so one read that
+    /// answers "absent" replaces them. The field, how many of its leading members no guard covers
+    /// (`from`), and its `Want`. The guards must cover every prefix from the first guarded one to
+    /// `p` itself: across a gap (`has(a) && has(a.b.c)`) a missing `a.b` is the walk's ERROR,
+    /// which one absent-or-present read could not tell from absence.
+    fn guarded_read(&mut self, cond: &IdedExpr, value: &IdedExpr) -> Option<(u32, u8)> {
+        if NO_FUSED_GUARD.with(|n| n.get()) {
+            return None;
+        }
+        let (root, steps) = self.path(value)?;
+        let names: Vec<&str> = steps.iter().map(|(n, _)| n.as_str()).collect();
+        if names.is_empty() {
+            return None;
+        }
+        let mut conjuncts = Vec::new();
+        conjunction(cond, &mut conjuncts);
+        let mut covered = vec![false; names.len()];
+        for c in conjuncts {
+            let (groot, gsteps) = match &c.expr {
+                Expr::Select(s) if s.test => {
+                    let (r, mut st) = self.path(&s.operand)?;
+                    st.push((s.field.clone(), false));
+                    (r, st)
+                }
+                Expr::Call(ca)
+                    if ca.func_name == operators::IN
+                        && ca.target.is_none()
+                        && ca.args.len() == 2
+                        && self.kind_is_container(&ca.args[1]) =>
+                {
+                    let k = string_literal(&ca.args[0])?;
+                    let (r, mut st) = self.path(&ca.args[1])?;
+                    st.push((k.to_string(), false));
+                    (r, st)
+                }
+                _ => return None,
+            };
+            let prefix = groot == root
+                && gsteps.len() <= names.len()
+                && gsteps.iter().zip(&names).all(|((g, _), n)| g == n);
+            if !prefix {
+                return None;
+            }
+            covered[gsteps.len() - 1] = true;
+        }
+        let first = covered.iter().position(|c| *c)?;
+        if !covered[first..].iter().all(|c| *c) {
+            return None;
+        }
+        let from = u8::try_from(first).ok()?;
+        Some((self.field(&root, &steps), from))
     }
 
     /// Lower the bool `e` as a branch: jump to `target` when its value is `jump_if`, fall through
@@ -2976,6 +3062,26 @@ fn or_leaves<'e>(e: &'e IdedExpr, out: &mut Vec<&'e IdedExpr>) {
         {
             or_leaves(&c.args[0], out);
             or_leaves(&c.args[1], out);
+        }
+        _ => out.push(e),
+    }
+}
+
+thread_local! {
+    /// Lower every guarded read as the ternary it is written as: the reference the fused form
+    /// (`ReadOr`, then `BrSet`) is compared against
+    /// (`fork::fast_program_unfused`).
+    pub(crate) static NO_FUSED_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The conjuncts of a `&&` tree, left to right.
+fn conjunction<'e>(e: &'e IdedExpr, out: &mut Vec<&'e IdedExpr>) {
+    match &e.expr {
+        Expr::Call(c)
+            if c.func_name == operators::LOGICAL_AND && c.target.is_none() && c.args.len() == 2 =>
+        {
+            conjunction(&c.args[0], out);
+            conjunction(&c.args[1], out);
         }
         _ => out.push(e),
     }

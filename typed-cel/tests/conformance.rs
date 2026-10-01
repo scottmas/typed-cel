@@ -258,6 +258,8 @@ fn every_readme_dialect_id_is_accounted_for() {
         "diverges: literal-key record index",
         "diverges: durations without timestamps",
         "diverges: dyn must be narrowed",
+        // No corpus case reaches an erroring default without `optional.*`.
+        "diverges: orValue's default is lazy",
     ];
 
     let readme = std::fs::read_to_string(
@@ -417,7 +419,7 @@ fn the_corpus_rows_moved() {
         ("removed: uint", names_uint),
         ("removed: timestamp", names_timestamp),
         ("removed: dyn()", names_dyn),
-        ("removed: optional syntax", names_optional),
+        ("removed: optional values", names_optional_value),
         ("removed: integer division", names_integer_division),
         ("removed: modulo", names_modulo),
     ];
@@ -577,13 +579,22 @@ fn names_dyn(case: &Case) -> bool {
     case.expr.contains("dyn(")
 }
 
-fn names_optional(case: &Case) -> bool {
+fn names_optional_value(case: &Case) -> bool {
     let e = &case.expr;
-    e.contains("optional.")
-        || e.contains("[?")
-        || e.contains(".?")
-        || e.contains(".orValue(")
-        || e.contains(".hasValue(")
+    // `[?x]` as a list ELEMENT; `m[?k]` (an operand before the bracket) is an optional read.
+    let list_element = e.match_indices("[?").any(|(at, _)| {
+        e[..at]
+            .trim_end()
+            .chars()
+            .last()
+            .is_none_or(|c| "([,{:?".contains(c))
+    });
+    list_element
+        || e.contains("optional.")
+        || e.contains("{?")
+        || e.contains(", ?")
+        || e.contains(".value()")
+        || e.contains(".or(")
         || e.contains(".optMap(")
         || e.contains(".optFlatMap(")
 }

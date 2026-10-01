@@ -55,6 +55,8 @@ const WORKLOADS: &[&str] = &[
     "all_items",
     "exists_items",
     "durations",
+    "optional_sum",
+    "required_sum",
     "streamed_body_early",
     "streamed_body_late",
     "policy_residual",
@@ -102,6 +104,26 @@ struct Body {
     items: Vec<Item>,
     amount: f64,
 }
+/// Four fields declared OPTIONAL (`req.opt`), read through `.orValue(0)`.
+#[derive(serde::Serialize, Clone, Default)]
+struct Opt {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    a: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    b: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d: Option<f64>,
+}
+/// The same four fields declared REQUIRED (`req.sum`): the floor a guarded read can reach.
+#[derive(serde::Serialize, Clone, Default)]
+struct Sum {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+}
 #[derive(serde::Serialize, Clone, Default)]
 struct Flags {
     f0: bool,
@@ -127,6 +149,8 @@ struct Req {
     subject: String,
     body: Body,
     flags: Flags,
+    opt: Opt,
+    sum: Sum,
     /// Bound as durations, per leg (upstream: `chrono::Duration`; the dialect: a `"<n>ms"` string).
     #[serde(skip)]
     uptime_ms: i64,
@@ -176,6 +200,8 @@ fn base_req() -> Req {
             amount: 50.0,
         },
         flags: Flags::default(),
+        opt: Opt::default(),
+        sum: Sum::default(),
         uptime_ms: 45_000,
         idle_ms: 1_000,
     }
@@ -228,6 +254,24 @@ fn env() -> CelEnvironment {
                         flags.iter().map(|(n, t)| (n.as_str(), t.clone())),
                     )
                     .into(),
+                ),
+                (
+                    "opt",
+                    Record::new("req.opt", ["a", "b", "c", "d"].map(|n| (n, CelTy::Num)))
+                        .with_optional(["a", "b", "c", "d"])
+                        .into(),
+                ),
+                (
+                    "sum",
+                    rec(
+                        "req.sum",
+                        &[
+                            ("a", CelTy::Num),
+                            ("b", CelTy::Num),
+                            ("c", CelTy::Num),
+                            ("d", CelTy::Num),
+                        ],
+                    ),
                 ),
                 ("uptime", CelTy::Duration),
                 ("idle", CelTy::Duration),
@@ -290,6 +334,8 @@ fn upstream_req(r: &Req) -> cel::Value {
 // ------------------------------------------------------------------------------------------
 
 enum Scalar {
+    /// An optional field that is not there.
+    Absent,
     Bool(bool),
     Num(f64),
     Str(String),
@@ -326,8 +372,8 @@ impl Facts for ReqFacts {
             _ => None,
         }
     }
-    fn has(&self, _: FieldId) -> bool {
-        true
+    fn has(&self, f: FieldId) -> bool {
+        !matches!(self.vals[f.index()], Scalar::Absent)
     }
 }
 
@@ -359,6 +405,21 @@ fn scalar(p: &Policy, r: &Req, names: &[&str]) -> Result<Scalar, String> {
             "f6" => r.flags.f6,
             "f7" => r.flags.f7,
             other => panic!("no flag {other}"),
+        }),
+        ["req", "opt", f] => match *f {
+            "a" => r.opt.a,
+            "b" => r.opt.b,
+            "c" => r.opt.c,
+            "d" => r.opt.d,
+            other => panic!("no optional field {other}"),
+        }
+        .map_or(Absent, Num),
+        ["req", "sum", f] => Num(match *f {
+            "a" => r.sum.a,
+            "b" => r.sum.b,
+            "c" => r.sum.c,
+            "d" => r.sum.d,
+            other => panic!("no field {other}"),
         }),
         ["req", "uptime"] => Dur(r.uptime_ms),
         ["req", "idle"] => Dur(r.idle_ms),
@@ -750,6 +811,69 @@ fn workloads() -> Vec<Workload> {
         rust: |_, r| r.uptime_ms > 40_000 && r.idle_ms < 300_000,
         policy: Policy::default(),
         requests: dur,
+    });
+
+    // Two of the four optional fields present in every request, a different two each time.
+    let pairs = [
+        (0, 1),
+        (2, 3),
+        (0, 2),
+        (1, 3),
+        (0, 3),
+        (1, 2),
+        (0, 1),
+        (2, 3),
+    ];
+    let opt_reqs: Vec<Req> = pairs
+        .iter()
+        .enumerate()
+        .map(|(i, (x, y))| {
+            // Every other request sums past 100: both answers, so neither is a short circuit.
+            let big = if i % 2 == 0 { 0.0 } else { 50.0 };
+            let mut v = [None; 4];
+            v[*x] = Some(10.0 + big + i as f64);
+            v[*y] = Some(20.0 + big + i as f64);
+            let mut r = base_req();
+            r.opt = Opt {
+                a: v[0],
+                b: v[1],
+                c: v[2],
+                d: v[3],
+            };
+            let n = |o: Option<f64>| o.unwrap_or(0.0);
+            r.sum = Sum {
+                a: n(v[0]),
+                b: n(v[1]),
+                c: n(v[2]),
+                d: n(v[3]),
+            };
+            r
+        })
+        .collect();
+    out.push(Workload {
+        id: "optional_sum",
+        dialect: "req.opt.?a.orValue(0) + req.opt.?b.orValue(0) + req.opt.?c.orValue(0) \
+                  + req.opt.?d.orValue(0) < 100"
+            .into(),
+        upstream: "(has(req.opt.a) ? req.opt.a : 0.0) + (has(req.opt.b) ? req.opt.b : 0.0) \
+                   + (has(req.opt.c) ? req.opt.c : 0.0) + (has(req.opt.d) ? req.opt.d : 0.0) \
+                   < 100.0"
+            .into(),
+        rust: |_, r| {
+            let o = &r.opt;
+            o.a.unwrap_or(0.0) + o.b.unwrap_or(0.0) + o.c.unwrap_or(0.0) + o.d.unwrap_or(0.0)
+                < 100.0
+        },
+        policy: Policy::default(),
+        requests: opt_reqs.clone(),
+    });
+    out.push(Workload {
+        id: "required_sum",
+        dialect: "req.sum.a + req.sum.b + req.sum.c + req.sum.d < 100".into(),
+        upstream: "req.sum.a + req.sum.b + req.sum.c + req.sum.d < 100.0".into(),
+        rust: |_, r| r.sum.a + r.sum.b + r.sum.c + r.sum.d < 100.0,
+        policy: Policy::default(),
+        requests: opt_reqs,
     });
 
     let residual_roots = roots("w", 13);

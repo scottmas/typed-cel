@@ -125,6 +125,17 @@ pub struct ComprehensionExpr {
 pub struct SourceInfo {
     offsets: BTreeMap<u64, OffsetRange>,
     pub source: String,
+    /// Nodes an optional-read rewrite produced, and what they stand for.
+    pub(crate) optional_reads: BTreeMap<u64, OptionalRewrite>,
+}
+
+/// What a node an optional-read rewrite produced stands for (`added: optional reads`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum OptionalRewrite {
+    /// `k in P` testing an optional INDEX segment — a presence question, never membership.
+    IndexPresence,
+    /// The `?:` an `.orValue(d)` became: the read and the default as the author wrote them.
+    OrValue { read: String, default: String },
 }
 
 impl SourceInfo {

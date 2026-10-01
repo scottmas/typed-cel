@@ -117,6 +117,8 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 | `all_items` | 18.0 ns (0) | 21.5 µs (455.4) | 782 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
 | `exists_items` | 15.6 ns (0) | 19.9 µs (416.2) | 538 ns (0) | n/a (composite root: `req.body.items`) | — (reads no policy) |
 | `durations` | 7.1 ns (0) | 721 ns (10) | 149 ns (0) | 39.7 ns (0) | — (reads no policy) |
+| `optional_sum` | 7.5 ns (0) | 2937 ns (58) | 454 ns (0) | 110 ns (0) | — (reads no policy) |
+| `required_sum` | 7.2 ns (0) | 3118 ns (56) | 470 ns (0) | 132 ns (0) | — (reads no policy) |
 | `streamed_body_early` | — (streamed row) | 50.1 µs (579.2) | 38.6 µs (538) | 3107 ns (22.2) | — (streamed row) |
 | `streamed_body_late` | — (streamed row) | 48.4 µs (579.2) | 38.4 µs (538) | 15.7 µs (63.2) | — (streamed row) |
 | `policy_residual` | 25.1 ns (0) | 6357 ns (143.1) | 548 ns (0) | n/a (composite root: `policy.methods`) | 63.2 ns (0) |
@@ -140,6 +142,8 @@ within ONE run: (1)/(2) and (2)/(3a) from the historical run, everything else fr
 | `all_items` | 47.4 µs | 49.1 µs | 54.1 µs | — | 1451 B | 2199 B | 4870 B | — |
 | `exists_items` | 28.5 µs | 31.3 µs | 38.1 µs | — | 1181 B | 1913 B | 3816 B | — |
 | `durations` | 40.2 µs | 45.9 µs | 48.8 µs | — | 1081 B | 1845 B | 3995 B | — |
+| `optional_sum` | 151.9 µs | 123.4 µs | 188.2 µs | — | 2488 B | 4308 B | 7308 B | — |
+| `required_sum` | 37.3 µs | 59.5 µs | 68.2 µs | — | 1112 B | 2388 B | 4620 B | — |
 | `streamed_body_early` | 27.1 µs | 31.7 µs | 37.8 µs | — | 625 B | 1440 B | 3629 B | — |
 | `streamed_body_late` | 26.6 µs | 31.4 µs | 36.5 µs | — | 625 B | 1440 B | 3629 B | — |
 | `policy_residual` | 108.9 µs | 161.9 µs | 178.5 µs | 161.9 µs / 107.6 µs / 18.3 µs | 3038 B | 5198 B | 8700 B | 11.7 KiB |

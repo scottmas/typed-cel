@@ -24,6 +24,10 @@ pub const GREATER: &str = "_>_";
 pub const LESS: &str = "_<_";
 pub const NEGATE: &str = "-_";
 pub const INDEX: &str = "_[_]";
+/// Spec CEL's optional select `x.?f`, kept as a call so the optional-read macros can rewrite it.
+pub const OPT_SELECT: &str = "_?._";
+/// Spec CEL's optional index `m[?k]`.
+pub const OPT_INDEX: &str = "_[?_]";
 
 pub const EXISTS_ONE: &str = "exists_one";
 pub const HAS: &str = "has";

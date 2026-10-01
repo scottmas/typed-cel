@@ -106,9 +106,9 @@ excluded = 3
 fail = 0
 
 [optionals]
-pass = 0
+pass = 5
 static_pass = 0
-excluded = 70
+excluded = 65
 fail = 0
 
 [parse]

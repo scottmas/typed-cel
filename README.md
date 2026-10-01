@@ -2,7 +2,7 @@
 
 A statically typed dialect of [CEL](https://github.com/google/cel-spec) in Rust. It drops the parts
 of CEL that force an interpreter to check types on every step: dynamic values, the int/uint/double
-split, protobuf, timestamps and optionals. In return it gets two things:
+split, protobuf, timestamps and optional values. In return it gets two things:
 
 1. **It's fast.** Every program is type-checked, then compiled to register bytecode over unboxed
    values. At run time there are no type checks, no boxing and no allocation.
@@ -232,16 +232,17 @@ The dialect removes whatever would force a type check at run time:
   and `dyn()` is gone.
 - **Homogeneous equality.** `1 == "1"` is a compile error, not `false`.
 - **No protobuf or timestamps.** Durations stay (`30s`), with no wall clock.
-- **No optionals: a read that may be absent is proven present at compile time** (`has`, `in`), so
-  a missing field is an authoring error, never a silent deny. `body.discount < 10` against
-  `{"discount?": "number"}` does not compile; `!has(body.discount) || body.discount < 10` does.
+- **No optional values: a read that may be absent is proven present at compile time** (`has`, `in`),
+  so a missing field is an authoring error, never a silent deny. `body.discount < 10` against
+  `{"discount?": "number"}` does not compile; `body.?discount.orValue(0) < 10` and
+  `!has(body.discount) || body.discount < 10` do.
 - **Undeclared names are compile errors,** even behind a short circuit. `true || typo` doesn't
   compile.
 
 Every removal has a reason and a rejection test; the full table is in
 [`typed-cel/README.md`](./typed-cel/README.md#relationship-to-spec-cel). What remains still passes
-the [cel-spec](https://github.com/google/cel-spec) conformance corpus: 521 + 29 cases pass, 0 fail,
-and 1,794 cases that use the removed or changed features are excluded, each with its reason.
+the [cel-spec](https://github.com/google/cel-spec) conformance corpus: 526 + 29 cases pass, 0 fail,
+and 1,789 cases that use the removed or changed features are excluded, each with its reason.
 
 ## Status
 

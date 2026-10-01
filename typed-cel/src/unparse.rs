@@ -223,6 +223,21 @@ fn write_call(out: &mut String, c: &CallExpr) -> Result<(), UnparseError> {
             out.push_str(" : ");
             write_operand(out, b)
         }
+        (operators::OPT_SELECT, None, [t, f]) => match &f.expr {
+            Expr::Literal(LiteralValue::String(f)) => {
+                write_operand(out, t)?;
+                out.push_str(".?");
+                write_name(out, f.inner(), "field name")
+            }
+            _ => err("an optional select names its field with a string"),
+        },
+        (operators::OPT_INDEX, None, [t, k]) => {
+            write_operand(out, t)?;
+            out.push_str("[?");
+            write_expr(out, k)?;
+            out.push(']');
+            Ok(())
+        }
         (operators::INDEX, None, [t, k]) => {
             write_operand(out, t)?;
             out.push('[');

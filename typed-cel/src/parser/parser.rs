@@ -46,6 +46,78 @@ impl MacroExprHelper<'_> {
     pub(crate) fn pos_for(&self, id: u64) -> Option<(isize, isize)> {
         self.helper.source_info.pos_for(id)
     }
+
+    /// A fresh id whose span is `authored`'s — or the macro call's, for a node with none.
+    pub(crate) fn id_for(&mut self, authored: u64) -> u64 {
+        let from = if self.helper.source_info.offset_for(authored).is_some() {
+            authored
+        } else {
+            self.id
+        };
+        self.helper.next_id_for(from)
+    }
+
+    /// `expr` with a fresh id whose span is `authored`'s.
+    pub(crate) fn expr_for(&mut self, authored: u64, expr: Expr) -> IdedExpr {
+        IdedExpr {
+            id: self.id_for(authored),
+            expr,
+        }
+    }
+
+    /// A deep copy of `e` in which every node has a fresh id carrying the span of the node it was
+    /// copied from. A rewrite that writes one subtree twice needs two: the checker's type table
+    /// and the backend's lowering are keyed by id.
+    pub(crate) fn copy(&mut self, e: &IdedExpr) -> IdedExpr {
+        let expr = match &e.expr {
+            Expr::Select(s) => Expr::Select(ast::SelectExpr {
+                operand: Box::new(self.copy(&s.operand)),
+                field: s.field.clone(),
+                test: s.test,
+            }),
+            Expr::Call(c) => Expr::Call(CallExpr {
+                func_name: c.func_name.clone(),
+                target: c.target.as_ref().map(|t| Box::new(self.copy(t))),
+                args: c.args.iter().map(|a| self.copy(a)).collect(),
+            }),
+            Expr::List(l) => Expr::List(ast::ListExpr {
+                elements: l.elements.iter().map(|x| self.copy(x)).collect(),
+            }),
+            Expr::Map(m) => Expr::Map(ast::MapExpr {
+                entries: m
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        let EntryExpr::MapEntry(me) = &entry.expr;
+                        IdedEntryExpr {
+                            id: self.id_for(entry.id),
+                            expr: EntryExpr::MapEntry(MapEntryExpr {
+                                key: self.copy(&me.key),
+                                value: self.copy(&me.value),
+                            }),
+                        }
+                    })
+                    .collect(),
+            }),
+            Expr::Comprehension(c) => Expr::Comprehension(Box::new(ast::ComprehensionExpr {
+                iter_range: self.copy(&c.iter_range),
+                iter_var: c.iter_var.clone(),
+                iter_var2: c.iter_var2.clone(),
+                accu_var: c.accu_var.clone(),
+                accu_init: self.copy(&c.accu_init),
+                loop_cond: self.copy(&c.loop_cond),
+                loop_step: self.copy(&c.loop_step),
+                result: self.copy(&c.result),
+            })),
+            other => other.clone(),
+        };
+        self.expr_for(e.id, expr)
+    }
+
+    /// Record what a node an optional-read rewrite produced stands for.
+    pub(crate) fn mark(&mut self, id: u64, what: ast::OptionalRewrite) {
+        self.helper.source_info.optional_reads.insert(id, what);
+    }
 }
 
 #[derive(Debug)]
@@ -96,12 +168,6 @@ impl Display for ParseError {
 
 impl Error for ParseError {}
 
-/// `removed: optional syntax`, as the parser says it.
-///
-/// One message for all four spellings — `[?k]`, `.?f`, `?k: v` in a map, `?x` in a list — because
-/// they are one construct with four entrances, and a policy author who hit any of them needs the
-/// same next step. There is deliberately no flag to turn it back on: an option is something a
-/// future caller can set, and this is a property of the language rather than a mode of the parser.
 /// The hex digits of an int literal, sign included, or `None` if it is not hex.
 ///
 /// The SIGN is part of the token — the grammar is `Int : sign=MINUS? tok=NUM_INT` — so it has to
@@ -124,9 +190,12 @@ fn hex_digits(text: &str) -> Option<String> {
     }
 }
 
+/// `removed: optional values`, as the parser says it: an optional list element `[?x]` and an
+/// optional map entry `{?k: v}` build optional VALUES, which this dialect does not have. (An
+/// optional READ, `.?f` and `[?k]`, parses; the checker refuses one no macro consumes.)
 const OPTIONAL_SYNTAX_REMOVED: &str =
-    "optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be \
-     absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it";
+    "optional values are not in the typed-CEL dialect (removed: optional values): an optional READ \
+     ends in `.orValue(<default>)` or `.hasValue()` — `x.?f.orValue(0)`, `m[?'k'].hasValue()`";
 
 pub struct Parser {
     ast: ast::Ast,
@@ -737,10 +806,22 @@ impl gen::CELVisitorCompat<'_> for Parser {
             let operand = self.visit(member.as_ref());
             let field = id.get_text();
             if ctx.opt.is_some() {
-                return self.report_error::<ParseError, _>(
+                // `x.?f` is spec CEL's optional select, `_?._(x, "f")`. Kept as that call so the
+                // `orValue`/`hasValue`/`has` macros can rewrite it into guards
+                // (`added: optional reads`); one no macro consumes is refused by the checker
+                // (`DELETED_FUNCTIONS`, `_?._`).
+                let field_id = self.helper.next_id(&id.start());
+                let field = IdedExpr {
+                    id: field_id,
+                    expr: Expr::Literal(LiteralValue::String(field.into())),
+                };
+                return self.helper.next_expr(
                     op.as_ref(),
-                    None,
-                    OPTIONAL_SYNTAX_REMOVED,
+                    Expr::Call(CallExpr {
+                        target: None,
+                        func_name: operators::OPT_SELECT.to_string(),
+                        args: vec![operand, field],
+                    }),
                 );
             }
             self.helper.next_expr(
@@ -773,18 +854,13 @@ impl gen::CELVisitorCompat<'_> for Parser {
                 Some(op) => {
                     let op_id = self.helper.next_id(op);
                     let index = self.visit(index.as_ref());
-                    if ctx.opt.is_some() {
-                        return self.report_error::<ParseError, _>(
-                            op.as_ref(),
-                            None,
-                            OPTIONAL_SYNTAX_REMOVED,
-                        );
-                    }
-                    self.global_call_or_macro(
-                        op_id,
-                        operators::INDEX.to_string(),
-                        vec![target, index],
-                    )
+                    // `m[?k]` is spec CEL's optional index, `_[?_](m, k)`; see `visit_Select`.
+                    let func = if ctx.opt.is_some() {
+                        operators::OPT_INDEX
+                    } else {
+                        operators::INDEX
+                    };
+                    self.global_call_or_macro(op_id, func.to_string(), vec![target, index])
                 }
             }
         } else {
@@ -1937,24 +2013,28 @@ ERROR: <input>:1:5: Syntax error: extraneous input 'b' expecting <EOF>
 | ....^",
                 ..Default::default()
             },
+            // An optional read PARSES, as spec CEL's calls; the checker (or a macro) owns it.
             TestInfo {
                 i: "a.?b && a[?b]",
-                p: "",
-                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
-| a.?b && a[?b]
-| .^
-ERROR: <input>:1:10: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
-| a.?b && a[?b]
-| .........^",
+                p: "_&&_(
+    _?._(
+        a^#1:*expr.Expr_IdentExpr#,
+        \"b\"^#2:*expr.Constant_StringValue#
+    )^#3:*expr.Expr_CallExpr#,
+    _[?_](
+        a^#4:*expr.Expr_IdentExpr#,
+        b^#6:*expr.Expr_IdentExpr#
+    )^#5:*expr.Expr_CallExpr#
+)^#7:*expr.Expr_CallExpr#",
                 ..Default::default()
             },
             TestInfo {
                 i: "[?a, ?b]",
                 p: "",
-                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
+                e: "ERROR: <input>:1:2: optional values are not in the typed-CEL dialect (removed: optional values): an optional READ ends in `.orValue(<default>)` or `.hasValue()` — `x.?f.orValue(0)`, `m[?'k'].hasValue()`
 | [?a, ?b]
 | .^
-ERROR: <input>:1:6: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
+ERROR: <input>:1:6: optional values are not in the typed-CEL dialect (removed: optional values): an optional READ ends in `.orValue(<default>)` or `.hasValue()` — `x.?f.orValue(0)`, `m[?'k'].hasValue()`
 | [?a, ?b]
 | .....^",
                 ..Default::default()
@@ -1962,7 +2042,7 @@ ERROR: <input>:1:6: optional syntax is not in the typed-CEL dialect (removed: op
             TestInfo {
                 i: "{?\'key\': value}",
                 p: "",
-                e: "ERROR: <input>:1:2: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
+                e: "ERROR: <input>:1:2: optional values are not in the typed-CEL dialect (removed: optional values): an optional READ ends in `.orValue(<default>)` or `.hasValue()` — `x.?f.orValue(0)`, `m[?'k'].hasValue()`
 | {?\'key\': value}
 | .^",
                 ..Default::default()
@@ -1975,7 +2055,7 @@ ERROR: <input>:1:6: optional syntax is not in the typed-CEL dialect (removed: op
                 e: "ERROR: <input>:1:1: message construction `Msg{...}` is not in the typed-CEL dialect (removed: protobuf)
 | Msg{?field: value} && {?\'key\': value}
 | ^
-ERROR: <input>:1:24: optional syntax is not in the typed-CEL dialect (removed: optional syntax): a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it
+ERROR: <input>:1:24: optional values are not in the typed-CEL dialect (removed: optional values): an optional READ ends in `.orValue(<default>)` or `.hasValue()` — `x.?f.orValue(0)`, `m[?'k'].hasValue()`
 | Msg{?field: value} && {?\'key\': value}
 | .......................^",
                 ..Default::default()

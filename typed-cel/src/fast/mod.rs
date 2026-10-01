@@ -259,6 +259,17 @@ pub(crate) enum Op {
         f: u32,
         err: Pc,
     },
+    /// A GUARDED read — `has(p) ? p : d`, and a `&&` chain of guards over `p`'s prefixes — as
+    /// one host call: [`Reg::Unset`] when `p` is absent (a `BrSet` after it skips the default
+    /// when it is not), otherwise exactly `Read` (so a mistyped value is `Read`'s error). The
+    /// first `from` members of `p` are unguarded: one of those missing is the walk's error.
+    ReadOr {
+        dst: R,
+        f: u32,
+        want: Want,
+        from: u8,
+        err: Pc,
+    },
     /// Read a comprehension variable.
     Local {
         dst: R,
@@ -688,6 +699,7 @@ impl Op {
             Raise { .. } => "Raise",
             Read { .. } => "Read",
             Has { .. } => "Has",
+            ReadOr { .. } => "ReadOr",
             Local { .. } => "Local",
             Select { .. } => "Select",
             HasOf { .. } => "HasOf",
@@ -767,6 +779,7 @@ impl Op {
         match *self {
             Const { dst, .. }
             | Read { dst, .. }
+            | ReadOr { dst, .. }
             | Has { dst, .. }
             | Catch { dst }
             | MakeList { dst, .. }
@@ -904,6 +917,7 @@ impl Op {
             Raise { err, .. }
             | Read { err, .. }
             | ReadCached { err, .. }
+            | ReadOr { err, .. }
             | Has { err, .. }
             | Select { err, .. }
             | HasOf { err, .. }
@@ -1244,6 +1258,14 @@ impl FastProgram {
             code,
             source: p.source_arc(),
         })
+    }
+
+    /// [`FastProgram::new`], with every guarded read lowered as the ternary it is written as.
+    pub(crate) fn new_unfused(p: &crate::CelProgram) -> Result<FastProgram, crate::CelError> {
+        lower::NO_FUSED_GUARD.with(|n| n.set(true));
+        let out = FastProgram::new(p);
+        lower::NO_FUSED_GUARD.with(|n| n.set(false));
+        out
     }
 
     /// One node of a CHECKED tree, lowered on its own — what the partial evaluator runs to fold a
@@ -2063,6 +2085,20 @@ fn exec<'a, H: Host<'a>>(
                 }
                 Err(Miss::Need(h)) => need!(h),
             },
+            Op::ReadOr {
+                dst,
+                f,
+                want,
+                from,
+                err,
+            } => match host.read_or_unset(f, from, want, st) {
+                Ok(v) => regs[dst as usize] = v,
+                Err(Miss::Err(e)) => {
+                    inflight = Some(e);
+                    jump!(err);
+                }
+                Err(Miss::Need(h)) => need!(h),
+            },
             Op::CondCmpFK {
                 f,
                 cache,
@@ -2779,6 +2815,7 @@ pub(crate) const INLINE: &[&str] = &[
     "Local",
     "Read",
     "ReadCached",
+    "ReadOr",
     "CondRead",
     "EqK",
     "CondEqK",
@@ -2939,7 +2976,8 @@ fn slow<'a, H: Host<'a>>(
         | Op::Inc { .. }
         | Op::Append { .. }
         | Op::BrSet { .. }
-        | Op::ReadCached { .. } => {
+        | Op::ReadCached { .. }
+        | Op::ReadOr { .. } => {
             unreachable!("{} reached slow", op.name())
         }
         Op::Const { dst, k } => regs[dst as usize] = code.konst(k),
@@ -3825,6 +3863,7 @@ impl FastProgram {
         let mut out = vec![false; self.code.fields.len()];
         for op in &self.code.ops {
             if let Op::Read { f, .. }
+            | Op::ReadOr { f, .. }
             | Op::CondRead { f, .. }
             | Op::CondEqFK { a: f, .. }
             | Op::TagIn { f, .. }

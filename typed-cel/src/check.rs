@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 use crate::bindings::Bindings;
 use crate::common::ast::{
-    operators, CallExpr, ComprehensionExpr, EntryExpr, Expr, IdedExpr, LiteralValue, SelectExpr,
+    operators, CallExpr, ComprehensionExpr, EntryExpr, Expr, IdedExpr, LiteralValue,
+    OptionalRewrite, SelectExpr,
 };
 use crate::demand::{DemandSet, Segment};
 use crate::sigs::{self, Lookup};
@@ -77,6 +78,7 @@ pub(crate) fn is_dialect_name(name: &str) -> bool {
             "existsOne",
             operators::MAP,
             operators::FILTER,
+            "hasValue",
         ]
         .contains(&name)
 }
@@ -174,10 +176,17 @@ const DELETED_FUNCTIONS: &[(&str, &str)] = &[
     ("map", "there are no type values in this dialect. See `removed: type values` in README.md"),
     ("bytes", "`bytes()` is removed: a string literal's bytes are written `b'…'`. See `removed: type conversion functions` in README.md"),
     ("null_type", "there are no type values in this dialect. See `removed: type values` in README.md"),
-    ("optional", "optional syntax is removed: a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it. See `removed: optional syntax` in README.md"),
-    ("orValue", "optional syntax is removed: a read that may be absent is proven present with `has(x.f)` or `'k' in m` — guard it where you read it. See `removed: optional syntax` in README.md"),
+    ("_?._", OPTIONAL_READ_ALONE),
+    ("_[?_]", OPTIONAL_READ_ALONE),
+    ("optional", "`optional` values are removed. See `removed: optional values` in README.md"),
+    ("orValue", "`.orValue(d)` unwraps an optional READ — write `x.?f.orValue(d)` or `m[?'k'].orValue(d)`. See `added: optional reads` in README.md"),
     ("_%_", "`%` is removed: this dialect has one number type, and no program needs its remainder. See `removed: modulo` in README.md"),
 ];
+
+/// An optional read (`x.?f`, `m[?k]`) that no optional-read macro consumed.
+const OPTIONAL_READ_ALONE: &str =
+    "an optional read is only the operand of `.orValue(<default>)`, `.hasValue()` or `has()`: this \
+     dialect has no optional values. See `removed: optional values` in README.md";
 
 /// The type DENOTATIONS, which are bare identifiers rather than calls.
 ///
@@ -247,9 +256,10 @@ pub(crate) enum PresRoot {
     Var(String),
     Local(u32),
     Slot(String),
-    /// A map LITERAL whose keys are all scalar literals, by its expression id: a known value, whose
-    /// keys are exactly the ones written.
-    Literal(u64),
+    /// A map LITERAL whose keys are all scalar literals, by its RENDERED text (and the scopes of the
+    /// iteration variables it names): two copies of one literal — a rewrite copies a root into
+    /// every guard — are one root, and hold the same keys.
+    Literal(String),
 }
 
 /// A root followed by literal keys. A field select and a literal-key index produce the SAME
@@ -350,10 +360,12 @@ pub struct Checker<'a> {
     /// What the presence rules refuse, in the order the walk met them.
     unproven: Vec<Unproven>,
     /// The keys each string-keyed map literal checked so far was written with, by expression id.
-    literal_keys: HashMap<u64, BTreeSet<String>>,
+    literal_keys: HashMap<String, BTreeSet<String>>,
     /// Whether an unproven read is a CHECK ERROR. Off only for the report and the unchecked test
     /// door, which observe the rules instead of applying them.
     enforce_presence: bool,
+    /// The nodes an optional-read rewrite produced ([`Checker::with_optional_reads`]).
+    optional_reads: Option<&'a BTreeMap<u64, OptionalRewrite>>,
 }
 
 impl<'a> Checker<'a> {
@@ -374,6 +386,7 @@ impl<'a> Checker<'a> {
             unproven: Vec::new(),
             literal_keys: HashMap::new(),
             enforce_presence: true,
+            optional_reads: None,
         }
     }
 
@@ -406,6 +419,22 @@ impl<'a> Checker<'a> {
             slot_values: values,
             ..self
         }
+    }
+
+    /// The nodes the parser's optional-read rewrite produced, so a refusal about one speaks of what
+    /// the author wrote: an optional index on a list, a default of the wrong type.
+    pub(crate) fn with_optional_reads(
+        self,
+        reads: &'a BTreeMap<u64, OptionalRewrite>,
+    ) -> Checker<'a> {
+        Checker {
+            optional_reads: Some(reads),
+            ..self
+        }
+    }
+
+    fn optional_read(&self, id: u64) -> Option<&'a OptionalRewrite> {
+        self.optional_reads.and_then(|r| r.get(&id))
     }
 
     /// Declare a residual's constant slots. A slot reads as its declared type and contributes no
@@ -479,7 +508,7 @@ impl<'a> Checker<'a> {
             Expr::Select(s) => self.select(s, e.id),
             Expr::Call(c) => self.call(c, e.id),
             Expr::List(l) => self.list(&l.elements, e.id),
-            Expr::Map(m) => self.map_literal(&m.entries, e.id),
+            Expr::Map(m) => self.map_literal(&m.entries, e),
             Expr::Comprehension(c) => self.comprehension(c, e.id),
             // `Expr::Struct` is `removed: protobuf` — it is not in the enum, so the exhaustive
             // match IS the rejection and there is no runtime check to keep in step.
@@ -569,22 +598,28 @@ impl<'a> Checker<'a> {
             p.push(Segment::Key(s.field.clone()));
             p
         });
-        let pres = operand.pres.as_ref().map(|p| p.child(&s.field));
+        let seg = string_segment(&s.field);
+        let pres = operand.pres.as_ref().map(|p| p.child(&seg));
         match &operand.ty {
             CelTy::Record(r) => match r.field_or_index(&s.field) {
                 // THE diagnostic this whole crate exists to produce.
                 None => self.unknown_field(&s.field, r, id),
                 Some(t) => {
                     let ty = t.clone();
-                    self.require_present(id, &operand.ty, operand.pres.as_ref(), &s.field, || {
-                        Read::select(&s.operand, &s.field)
-                    });
+                    self.require_present(
+                        id,
+                        &operand.ty,
+                        operand.pres.as_ref(),
+                        &s.field,
+                        &seg,
+                        || Read::select(&s.operand, &s.field),
+                    );
                     Some(Checked { ty, path, pres })
                 }
             },
             // A map has no declared field set, so a select is the value type.
             m if m.is_map() => {
-                self.require_present(id, m, operand.pres.as_ref(), &s.field, || {
+                self.require_present(id, m, operand.pres.as_ref(), &s.field, &seg, || {
                     Read::select(&s.operand, &s.field)
                 });
                 Some(Checked {
@@ -631,6 +666,18 @@ impl<'a> Checker<'a> {
         }
 
         let member = c.target.is_some();
+        // A removed METHOD is the author's mistake whatever its receiver is: say so FIRST, so
+        // `body.o.orValue(0)` names the removal rather than the receiver's unproven read. The
+        // receiver and arguments are still checked, for their own errors.
+        if member {
+            if let Some((_, why)) = DELETED_FUNCTIONS.iter().find(|(n, _)| *n == c.func_name) {
+                self.errors.push(CheckError::at(id, why.to_string()));
+                for e in c.target.as_deref().into_iter().chain(&c.args) {
+                    let _ = self.check(e);
+                }
+                return None;
+            }
+        }
         let mut args = Vec::with_capacity(c.args.len() + 1);
         // Every argument is checked, THEN the failure is propagated. `args.push(self.check(a)?)`
         // abandoned every sibling arm the moment one failed, so
@@ -711,6 +758,23 @@ impl<'a> Checker<'a> {
                 self.commit(a.path);
             }
             return Some(Checked::bare(CelTy::Bool));
+        }
+        // `x[?k]` rewrote to `k in x` — a presence question. On a list that would be MEMBERSHIP,
+        // a silently different answer: bounds are not presence.
+        if c.func_name == operators::IN
+            && args.len() == 2
+            && matches!(args[1].ty, CelTy::List(_))
+            && self.optional_read(id) == Some(&OptionalRewrite::IndexPresence)
+        {
+            let (xs, i) = (render(exprs[1]), render(exprs[0]));
+            return self.error(CheckError::at(
+                id,
+                format!(
+                    "an optional index on a list is not supported: bounds are not presence. \
+                     Write `size({xs}) > {i} ? {xs}[{i}] : …`. See `not implemented: optional \
+                     index on a list` in README.md"
+                ),
+            ));
         }
         // `k in x` on an open container is a presence question, and its key is demand exactly as
         // `has(x.k)`'s is. A key that is not a literal cannot be named at build, so the container
@@ -836,6 +900,17 @@ impl<'a> Checker<'a> {
                     && tys.len() == 3
                     && !tys[1].same_shape(&tys[2])
                 {
+                    if let Some(OptionalRewrite::OrValue { read, .. }) = self.optional_read(id) {
+                        return self.error(CheckError::at(
+                            id,
+                            format!(
+                                "`.orValue(<default>)` gives {}, but `{read}` is {}; a default \
+                                 has the type of the value it stands in for",
+                                tys[2].name(),
+                                tys[1].name()
+                            ),
+                        ));
+                    }
                     return self.error(CheckError::at(
                         id,
                         format!(
@@ -889,18 +964,20 @@ impl<'a> Checker<'a> {
                     match r.field_or_index(k.inner()) {
                         Some(t) => {
                             let ty = t.clone();
+                            let seg = string_segment(k.inner());
                             self.require_present(
                                 id,
                                 &target.ty,
                                 target.pres.as_ref(),
                                 k.inner(),
-                                || Read::index(&c.args[0], k.inner()),
+                                &seg,
+                                || Read::index(&c.args[0], key_expr),
                             );
                             let path = target.path.map(|mut p| {
                                 p.push(Segment::Key(k.inner().to_string()));
                                 p
                             });
-                            let pres = target.pres.as_ref().map(|p| p.child(k.inner()));
+                            let pres = target.pres.as_ref().map(|p| p.child(&seg));
                             Some(Checked { ty, path, pres })
                         }
                         None => self.unknown_field(k.inner(), &r, id),
@@ -924,44 +1001,30 @@ impl<'a> Checker<'a> {
         let mut pres = None;
         if target.ty.is_map() {
             match &key_expr.expr {
-                Expr::Literal(LiteralValue::String(k)) => {
-                    self.require_present(id, &target.ty, target.pres.as_ref(), k.inner(), || {
-                        Read::index(&c.args[0], k.inner())
-                    });
-                    pres = target.pres.as_ref().map(|p| p.child(k.inner()));
-                }
-                Expr::Ident(name) if self.iterated_key(name, target.pres.as_ref()) => {}
-                // A non-string literal key into a map LITERAL: present iff it was written.
-                Expr::Literal(lit)
-                    if matches!(
-                        target.pres.as_ref().map(|p| (&p.root, p.keys.len())),
-                        Some((PresRoot::Literal(_), 0))
-                    ) =>
-                {
-                    let Some(PresRoot::Literal(lit_id)) = target.pres.as_ref().map(|p| &p.root)
-                    else {
-                        unreachable!()
-                    };
-                    let written = literal_key(lit).is_some_and(|k| {
-                        self.literal_keys
-                            .get(lit_id)
-                            .is_some_and(|w| w.contains(&k))
-                    });
-                    if !written {
-                        let read = Read {
-                            rendered: format!("{}[{}]", render(&c.args[0]), render(key_expr)),
-                            container: render(&c.args[0]),
-                            key: None,
-                            select: false,
+                Expr::Literal(lit) => match key_segment(lit) {
+                    Some(seg) => {
+                        let field = match lit {
+                            LiteralValue::String(k) => k.inner().to_string(),
+                            _ => seg.clone(),
                         };
-                        self.unproven(
+                        self.require_present(
                             id,
-                            read,
-                            AbsentKind::KnownAbsent,
-                            Some("this map literal".to_string()),
+                            &target.ty,
+                            target.pres.as_ref(),
+                            &field,
+                            &seg,
+                            || Read::index(&c.args[0], key_expr),
                         );
+                        pres = target.pres.as_ref().map(|p| p.child(&seg));
                     }
-                }
+                    // A literal no map key can be (`1.5`, `null`): no key, so nothing proves it.
+                    None if matches!(target.ty, CelTy::Map(..)) => {
+                        let read = Read::index(&c.args[0], key_expr);
+                        self.unproven(id, read, AbsentKind::MapKey, None);
+                    }
+                    None => {}
+                },
+                Expr::Ident(name) if self.iterated_key(name, target.pres.as_ref()) => {}
                 // Outside iteration, a computed key into a rooted map is already refused below
                 // for its demand, with the better message.
                 _ if target.path.is_some() => {}
@@ -985,6 +1048,14 @@ impl<'a> Checker<'a> {
                 p.push(Segment::Key(k.inner().to_string()));
                 p
             }),
+            // A number or bool key names no string member; demand the container's members, as
+            // `1 in m` demands the container.
+            Expr::Literal(lit) if target.ty.is_map() && key_segment(lit).is_some() => {
+                target.path.clone().map(|mut p| {
+                    p.push(Segment::Wild);
+                    p
+                })
+            }
             // A computed key is legal ONLY inside a comprehension over the same container, where
             // the iteration itself proves the range. Anywhere else, widening one unreviewable
             // expression would silently turn the whole policy into "populate everything".
@@ -1071,8 +1142,9 @@ impl<'a> Checker<'a> {
     fn map_literal(
         &mut self,
         entries: &[crate::common::ast::IdedEntryExpr],
-        id: u64,
+        e: &IdedExpr,
     ) -> Option<Checked> {
+        let id = e.id;
         let mut keys = Element::default();
         let mut values = Element::default();
         for entry in entries {
@@ -1091,9 +1163,9 @@ impl<'a> Checker<'a> {
         let key_ty = keys.finish(&mut self.types);
         let val_ty = values.finish(&mut self.types);
         // A literal whose keys are all string literals is KNOWN: it holds exactly those keys.
-        let pres = literal_keys(entries).map(|written| {
-            self.literal_keys.insert(id, written);
-            PresPath::root(PresRoot::Literal(id))
+        let pres = self.literal_root(e).map(|(root, written)| {
+            self.literal_keys.insert(root.clone(), written);
+            PresPath::root(PresRoot::Literal(root))
         });
         match (key_ty, val_ty) {
             (Ok(k), Ok(v)) => Some(Checked {
@@ -1281,6 +1353,7 @@ impl<'a> Checker<'a> {
         container: &CelTy,
         pres: Option<&PresPath>,
         key: &str,
+        seg: &str,
         read: impl Fn() -> Read,
     ) {
         let kind = match container {
@@ -1293,7 +1366,7 @@ impl<'a> Checker<'a> {
         let Some(container) = pres else {
             return self.unproven(id, read(), kind, None);
         };
-        let p = container.child(key);
+        let p = container.child(seg);
         if self.proven.contains(&p) {
             return;
         }
@@ -1344,17 +1417,23 @@ impl<'a> Checker<'a> {
                 .iter()
                 .find(|(n, _)| &**n == name.as_str())
                 .map(|(_, v)| v)?,
-            PresRoot::Literal(id) => {
+            PresRoot::Literal(root) => {
                 // One level: a literal's own keys. A nested literal's keys are its own root.
-                let written = self.literal_keys.get(id)?;
+                let written = self.literal_keys.get(root)?;
                 return match p.keys.as_slice() {
-                    [k] => Some(written.contains(&format!("s{k}"))),
+                    [k] => Some(written.contains(&segment_literal_key(k))),
                     _ => None,
                 };
             }
             PresRoot::Local(_) => return None,
         };
         for k in &p.keys {
+            // A non-string key's segment: a known value answers only string keys here.
+            let k = match k.strip_prefix('\u{1}') {
+                Some(rest) if rest.starts_with('\u{1}') => rest,
+                Some(_) => return None,
+                None => k.as_str(),
+            };
             match v {
                 CelValue::Map(m) => match m.get(k) {
                     Some(next) => v = next,
@@ -1364,6 +1443,25 @@ impl<'a> Checker<'a> {
             }
         }
         Some(true)
+    }
+
+    /// A map literal's presence root and its written keys, when every key is a literal a map key
+    /// can be. The root is the literal's TEXT, so two copies of it are one root — plus the scope of
+    /// every iteration variable it names, since one text under a shadowing binding is another map.
+    fn literal_root(&self, e: &IdedExpr) -> Option<(String, BTreeSet<String>)> {
+        let Expr::Map(m) = &e.expr else {
+            return None;
+        };
+        let written = literal_keys(&m.entries)?;
+        let mut root = crate::unparse::unparse(e).ok()?;
+        let mut names = Vec::new();
+        idents(e, &mut names);
+        for name in names {
+            if let Some(l) = self.locals.iter().rev().find(|l| l.name == name) {
+                root.push_str(&format!("\u{0}{name}@{}", l.scope));
+            }
+        }
+        Some((root, written))
     }
 
     /// The presence path `e` names, resolved through the CURRENT locals, without checking it —
@@ -1381,14 +1479,17 @@ impl<'a> Checker<'a> {
                     .get(name)
                     .map(|_| PresPath::root(PresRoot::Var(name.clone())))
             }
-            Expr::Map(m) => {
-                literal_keys(&m.entries).map(|_| PresPath::root(PresRoot::Literal(e.id)))
-            }
-            Expr::Select(s) if !s.test => self.pres_of(&s.operand).map(|p| p.child(&s.field)),
+            Expr::Map(_) => self
+                .literal_root(e)
+                .map(|(root, _)| PresPath::root(PresRoot::Literal(root))),
+            Expr::Select(s) if !s.test => self
+                .pres_of(&s.operand)
+                .map(|p| p.child(&string_segment(&s.field))),
             Expr::Call(c) if c.func_name == operators::INDEX && c.args.len() == 2 => {
                 match &c.args[1].expr {
-                    Expr::Literal(LiteralValue::String(k)) => {
-                        self.pres_of(&c.args[0]).map(|p| p.child(k.inner()))
+                    Expr::Literal(lit) => {
+                        let seg = key_segment(lit)?;
+                        self.pres_of(&c.args[0]).map(|p| p.child(&seg))
                     }
                     _ => None,
                 }
@@ -1403,7 +1504,10 @@ impl<'a> Checker<'a> {
     fn facts(&self, e: &IdedExpr, when: bool, out: &mut Vec<PresPath>) {
         match &e.expr {
             Expr::Select(s) if s.test && when => {
-                if let Some(p) = self.pres_of(&s.operand).map(|p| p.child(&s.field)) {
+                if let Some(p) = self
+                    .pres_of(&s.operand)
+                    .map(|p| p.child(&string_segment(&s.field)))
+                {
                     out.extend(p.with_prefixes());
                 }
             }
@@ -1418,10 +1522,10 @@ impl<'a> Checker<'a> {
                     self.facts(b, false, out);
                 }
                 (operators::IN, [k, x]) if when => {
-                    if let (Expr::Literal(LiteralValue::String(k)), Some(p)) =
-                        (&k.expr, self.pres_of(x))
-                    {
-                        out.extend(p.child(k.inner()).with_prefixes());
+                    if let (Expr::Literal(k), Some(p)) = (&k.expr, self.pres_of(x)) {
+                        if let Some(seg) = key_segment(k) {
+                            out.extend(p.child(&seg).with_prefixes());
+                        }
                     }
                 }
                 _ => {}
@@ -1738,6 +1842,11 @@ fn heterogeneous(literal: &str, members: &str, a: &CelTy, b: &CelTy) -> String {
 
 /// A function name as an author would read it. `_>_` is `>`; `@in` is `in`.
 fn spell(name: &str) -> String {
+    match name {
+        operators::OPT_SELECT => return ".?".to_string(),
+        operators::OPT_INDEX => return "[?]".to_string(),
+        _ => {}
+    }
     if let Some(op) = name.strip_prefix('@') {
         return op.to_string();
     }
@@ -1797,7 +1906,8 @@ pub(crate) struct Read {
     rendered: String,
     /// The operand read FROM: `body`, `m`.
     container: String,
-    /// The key read, when it is a literal.
+    /// The key read, when it is a literal: a select's field, or an index key as written (`"k"`,
+    /// `1`).
     key: Option<String>,
     /// A field select (`x.k`, fixed with `has(x.k)`) rather than an index (`x["k"]`, fixed with
     /// `'k' in x`).
@@ -1815,14 +1925,30 @@ impl Read {
         }
     }
 
-    fn index(operand: &IdedExpr, key: &str) -> Read {
+    /// `operand[key]`, for a literal `key`.
+    fn index(operand: &IdedExpr, key: &IdedExpr) -> Read {
         let container = render(operand);
+        let key = match &key.expr {
+            Expr::Literal(LiteralValue::String(k)) => format!("{:?}", k.inner()),
+            _ => render(key),
+        };
         Read {
-            rendered: format!("{container}[{key:?}]"),
+            rendered: format!("{container}[{key}]"),
             container,
-            key: Some(key.to_string()),
+            key: Some(key),
             select: false,
         }
+    }
+
+    /// The read with a default, `x.?f.orValue(…)` / `m[?"k"].orValue(…)`, when its key is a
+    /// literal.
+    fn with_default(&self) -> Option<String> {
+        let key = self.key.as_ref()?;
+        Some(if self.select {
+            format!("{}.?{key}.orValue(…)", self.container)
+        } else {
+            format!("{}[?{key}].orValue(…)", self.container)
+        })
     }
 
     /// The two guards that prove this read: `(when present, when absent)`.
@@ -1833,8 +1959,8 @@ impl Read {
                 format!("!has({}) || …", self.rendered),
             ),
             Some(k) => (
-                format!("{k:?} in {} && …", self.container),
-                format!("!({k:?} in {}) || …", self.container),
+                format!("{k} in {} && …", self.container),
+                format!("!({k} in {}) || …", self.container),
             ),
             None => (
                 format!(
@@ -1884,6 +2010,67 @@ fn literal_key(v: &LiteralValue) -> Option<String> {
     }
 }
 
+/// The presence-path segment for a literal key: a string key IS its segment (so a select and a
+/// string index are one segment); any other key is its canonical runtime key ([`literal_key`])
+/// behind `\u{1}`, which no identifier (so no select) contains. A STRING key that itself starts
+/// with `\u{1}` gets a second one, so no string key can spell a non-string key's segment.
+fn key_segment(v: &LiteralValue) -> Option<String> {
+    match v {
+        LiteralValue::String(s) => Some(string_segment(s.inner())),
+        other => literal_key(other).map(|k| format!("\u{1}{k}")),
+    }
+}
+
+/// [`key_segment`] for a string key or a select's field.
+fn string_segment(s: &str) -> String {
+    if s.starts_with('\u{1}') {
+        format!("\u{1}{s}")
+    } else {
+        s.to_string()
+    }
+}
+
+/// The canonical literal key ([`literal_key`]) a segment names — the inverse of [`key_segment`].
+fn segment_literal_key(seg: &str) -> String {
+    match seg.strip_prefix('\u{1}') {
+        Some(rest) if rest.starts_with('\u{1}') => format!("s{rest}"),
+        Some(rest) => rest.to_string(),
+        None => format!("s{seg}"),
+    }
+}
+
+/// Every identifier `e` names, in order.
+fn idents(e: &IdedExpr, out: &mut Vec<String>) {
+    match &e.expr {
+        Expr::Ident(name) => out.push(name.clone()),
+        Expr::Select(s) => idents(&s.operand, out),
+        Expr::Call(c) => {
+            if let Some(t) = &c.target {
+                idents(t, out);
+            }
+            c.args.iter().for_each(|a| idents(a, out));
+        }
+        Expr::List(l) => l.elements.iter().for_each(|x| idents(x, out)),
+        Expr::Map(m) => m.entries.iter().for_each(|entry| {
+            let EntryExpr::MapEntry(me) = &entry.expr;
+            idents(&me.key, out);
+            idents(&me.value, out);
+        }),
+        Expr::Comprehension(c) => {
+            for x in [
+                &c.iter_range,
+                &c.accu_init,
+                &c.loop_cond,
+                &c.loop_step,
+                &c.result,
+            ] {
+                idents(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Where every presence refusal points.
 const PROVEN_PRESENCE: &str = "See `added: proven presence` in README.md";
 
@@ -1905,8 +2092,12 @@ fn unproven_message(read: &Read, kind: AbsentKind, known_root: Option<&str>) -> 
             )
         }
     };
+    let default = read
+        .with_default()
+        .map(|d| format!(", or read it with a default: `{d}`"))
+        .unwrap_or_default();
     format!(
         "`{r}` may be absent ({why}) and nothing here proves it present; write `{present}` or \
-         `{absent}`. {PROVEN_PRESENCE}"
+         `{absent}`{default}. {PROVEN_PRESENCE}"
     )
 }

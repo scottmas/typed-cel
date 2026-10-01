@@ -52,6 +52,7 @@ fn the_generators_reach_every_op() {
         "Read",
         "ReadCached",
         "Has",
+        "ReadOr",
         "Local",
         "Select",
         "HasOf",

@@ -469,6 +469,41 @@ fn the_dialect_doc_records_the_divergence() {
 /// The proven-presence rows exist, each naming what it must: the two additions, the one
 /// that supersedes specialization, and the divergence the conformance lane cites.
 #[test]
+fn the_optional_read_rows_exist() {
+    let doc = readme();
+    let row = |heading: &str, id: &str| -> Vec<String> {
+        rows_under(&doc, heading)
+            .into_iter()
+            .find(|r| backticked(&r[0]).first().map(String::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("README.md has no `{id}` row under {heading}"))
+    };
+    let added = row("### Added", "added: optional reads");
+    assert!(
+        backticked(&added[2])
+            .iter()
+            .any(|n| n == "CelEnvironment::compile"),
+        "`added: optional reads` names its API: {added:?}"
+    );
+    let removed = row("### Removed", "removed: optional values");
+    assert!(
+        removed[2].contains("optional_values_are_gone"),
+        "`removed: optional values` names its rejection test: {removed:?}"
+    );
+    assert!(
+        !rows_under(&doc, "### Removed")
+            .iter()
+            .any(|r| backticked(&r[0]).first().map(String::as_str)
+                == Some("removed: optional syntax")),
+        "`removed: optional syntax` is replaced by `removed: optional values`"
+    );
+    row("### Divergences", "diverges: orValue's default is lazy");
+    row(
+        "### Not implemented",
+        "not implemented: optional index on a list",
+    );
+}
+
+#[test]
 fn the_dialect_rows_this_plan_adds_exist() {
     let doc = readme();
     let added = rows_under(&doc, "### Added");

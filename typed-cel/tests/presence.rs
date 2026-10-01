@@ -595,6 +595,30 @@ fn unproven_map_reads_are_refused() {
     assert!(text.contains("makes the demand set unknowable"), "{text}");
 }
 
+/// A refusal offers the read with a default as well as the two guards.
+#[test]
+fn a_refusal_offers_the_optional_read() {
+    let env = env();
+    for (src, wants) in [
+        (
+            "body.o > 1",
+            &["has(body.o) && …", "!has(body.o) || …", "body.?o.orValue("][..],
+        ),
+        ("m[\"k\"] > 1", &["m[?\"k\"].orValue("][..]),
+    ] {
+        let text = env
+            .compile(src, &CompileOpts::default())
+            .expect_err(src)
+            .to_string();
+        for want in wants {
+            assert!(
+                text.contains(want),
+                "`{src}`: {want:?} missing from\n{text}"
+            );
+        }
+    }
+}
+
 #[test]
 fn proven_map_reads_compile() {
     let env = env();
@@ -639,4 +663,128 @@ fn a_map_literal_proves_its_own_keys() {
         .expect_err("an unwritten key")
         .to_string();
     assert!(text.contains("KNOWN value of this map literal"), "{text}");
+}
+
+/// A rewrite copies a chain's root into every guard, so two copies of one map literal — the same
+/// text — are ONE root: a guard on one proves the read on the other.
+#[test]
+fn two_copies_of_a_map_literal_are_one_root() {
+    let env = CelEnvironment::new();
+    env.compile(
+        "has({'a': {}}.a) && has({'a': {}}.a.b)",
+        &CompileOpts::default(),
+    )
+    .expect("the second copy's `.a` is proven by the first copy's guard");
+    let p = env
+        .compile(
+            "has({'a': 1}.x) && {'a': 1}.x == 1",
+            &CompileOpts::default(),
+        )
+        .expect("a guarded known-absent key");
+    assert!(!p.evaluate(&env.activation()).unwrap());
+    // One TEXT under a different binding is not one value: an inner `x` shadowing the outer one
+    // makes the same literal text a different map. A literal naming only what is bound outside
+    // the comprehension is the same value inside it.
+    let mut env = CelEnvironment::new();
+    env.declare("x", CelTy::map(CelTy::Str, CelTy::Num));
+    env.compile(
+        "has({'a': x}.a.k) && [1].all(i, {'a': x}.a.k > 0.0)",
+        &CompileOpts::default(),
+    )
+    .expect("the literal names only the outer `x`");
+    let text = env
+        .compile(
+            "has({'a': x}.a.k) && [{'j': 1.0}].all(x, {'a': x}.a.k > 0.0)",
+            &CompileOpts::default(),
+        )
+        .expect_err("the guard names the OUTER `x`, the read the inner one")
+        .to_string();
+    assert!(text.contains("may be absent"), "{text}");
+}
+
+/// `m: map(double, string)`, `b: map(bool, bool)`, `s: map(string, string)`.
+fn keyed_env() -> CelEnvironment {
+    let mut env = CelEnvironment::new();
+    env.declare("m", CelTy::map(CelTy::Num, CelTy::Str));
+    env.declare("b", CelTy::map(CelTy::Bool, CelTy::Bool));
+    env.declare("s", CelTy::map(CelTy::Str, CelTy::Str));
+    env
+}
+
+fn keyed_answer(
+    env: &CelEnvironment,
+    p: &typed_cel::CelProgram,
+    binds: &[(&str, typed_cel::CelValue)],
+) -> bool {
+    let mut act = env.activation();
+    for (name, v) in binds {
+        act.bind_fact(name, v.clone());
+    }
+    p.evaluate(&act).unwrap()
+}
+
+/// A number or bool literal key is a presence segment like a string one: `1 in m` proves `m[1]`,
+/// and `1.0` is the same key (there is one number type).
+#[test]
+fn a_non_string_literal_key_is_a_presence_segment() {
+    use typed_cel::{CelMap, CelMapKey, CelValue as V};
+    let env = keyed_env();
+    let one = V::Map(CelMap::new([(CelMapKey::Num(1), V::Str("x".into()))]));
+    let none = V::Map(CelMap::new([]));
+    for (src, with_one, empty) in [
+        ("1 in m && m[1] == 'x'", true, false),
+        ("!(1 in m) || m[1] == 'x'", true, true),
+        ("(1 in m ? m[1] : '') == 'x'", true, false),
+        ("1.0 in m && m[1] == 'x'", true, false),
+    ] {
+        let p = env
+            .compile(src, &CompileOpts::default())
+            .unwrap_or_else(|e| panic!("`{src}`: {e}"));
+        assert_eq!(
+            keyed_answer(&env, &p, &[("m", one.clone())]),
+            with_one,
+            "`{src}` over {{1: 'x'}}"
+        );
+        assert_eq!(
+            keyed_answer(&env, &p, &[("m", none.clone())]),
+            empty,
+            "`{src}` over {{}}"
+        );
+    }
+    let text = env
+        .compile("m[1] == 'x'", &CompileOpts::default())
+        .expect_err("an unguarded map read")
+        .to_string();
+    assert!(text.contains("`m[1]` may be absent"), "{text}");
+    assert!(text.contains("1 in m && …"), "{text}");
+    let p = env
+        .compile("true in b && b[true]", &CompileOpts::default())
+        .expect("a bool key");
+    let tb = V::Map(CelMap::new([(CelMapKey::Bool(true), V::Bool(true))]));
+    assert!(keyed_answer(&env, &p, &[("b", tb)]));
+    assert!(!keyed_answer(&env, &p, &[("b", none.clone())]));
+    // A string key spelling a canonical number's segment proves itself, and is not the number:
+    // a map's keys are one type, so the two cannot meet in one map, but the segments stay apart.
+    env.compile(
+        "'\\u0001n1' in s && s['\\u0001n1'] == 'x'",
+        &CompileOpts::default(),
+    )
+    .expect("a string key proves itself, whatever it spells");
+    let text = env
+        .compile(
+            "'\\u0001n1' in s && s['\\u0001\\u0001n1'] == 'x'",
+            &CompileOpts::default(),
+        )
+        .expect_err("a different key")
+        .to_string();
+    assert!(text.contains("may be absent"), "{text}");
+}
+
+/// A fractional literal is no map key: it neither proves nor is a provable read — the canonical
+/// form never invents a key.
+#[test]
+fn a_fractional_key_names_no_key() {
+    let env = keyed_env();
+    env.compile("1.5 in m && m[1.5] == 'x'", &CompileOpts::default())
+        .expect_err("`1.5` names no key");
 }

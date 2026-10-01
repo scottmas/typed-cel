@@ -192,11 +192,399 @@ case = "not_eq_dyn_timestamp_null"
 reason = "removed: dyn()"
 
 # ---------------------------------------------------------------------------------------------
-# removed: optional syntax
+# optionals — case by case. The file mixes optional VALUES (removed) with optional READS, which
+# compile (`added: optional reads`). A case that mixes removals takes the one its refusal cites:
+# `{}` is a `map(dyn, dyn)` literal, so `optional_chaining_3`'s guard is a use of a dyn value.
 # ---------------------------------------------------------------------------------------------
 [[exclude]]
 file = "optionals"
-reason = "removed: optional syntax"
+section = "optionals"
+case = "null"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "null_non_zero_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "none_or_none_or_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "none_optMap_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "empty_map_optFlatMap_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_empty_submap_optFlatMap_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_null_entry_hasValue"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_absent_key_absent_field_none"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_submap_subkey_optFlatMap_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_submap_optFlatMap_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_optindex_optFlatMap_optional_ofNonZeroValue_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_of_optMap_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_ofNonZeroValue_or_optional_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "ternary_optional_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "type"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_1"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_3"
+reason = "removed: dyn values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_4"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_5"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_6"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_7"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_8"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_9"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_11"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_12"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_13"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_14"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_15"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_16"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "has_optional_ofNonZeroValue_struct_optional_ofNonZeroValue_map_optindex_field"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_ofNonZeroValue_struct_optional_ofNonZeroValue_map_optindex_field"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "struct_map_optindex_field"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "struct_optional_ofNonZeroValue_map_optindex_field"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "struct_map_optindex_field_nested"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "struct_list_optindex_field"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_empty_map_optindex_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "empty_struct_optindex_hasValue"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_empty_struct_optindex_hasValue"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_none_optselect_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "struct_optindex_value"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_struct_optindex_value"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_struct_optindex_index_value"
+reason = "removed: protobuf"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "empty_list_optindex_hasValue"
+reason = "not implemented: optional index on a list"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_empty_list_optindex_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_none_optindex_hasValue"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "list_optindex_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_list_optindex_value"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_key_mixed_type_optindex_value"
+reason = "removed: uint"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_key_mixed_numbers_double_key_optindex_value"
+reason = "removed: uint"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_key_mixed_numbers_uint_key_optindex_value"
+reason = "removed: uint"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_key_mixed_numbers_int_key_optindex_value"
+reason = "removed: uint"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_eq_none_none"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_eq_none_int"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_eq_int_none"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_eq_int_int"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_ne_none_none"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_ne_none_int"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_ne_int_none"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_ne_int_int"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_optional_has"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_optional_select_has"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_optional_entry_has"
+reason = "removed: optional values"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_null_entry_no_such_key"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "map_present_key_invalid_field"
+reason = "removed: dyn()"
+
+[[exclude]]
+file = "optionals"
+section = "optionals"
+case = "optional_chaining_10"
+reason = "removed: optional values"
 
 # ---------------------------------------------------------------------------------------------
 # removed: extension libraries

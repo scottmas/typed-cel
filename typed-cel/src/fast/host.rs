@@ -179,6 +179,26 @@ pub(crate) trait Host<'a> {
         }
     }
     fn has(&self, f: u32, st: &mut Store<'a>) -> Result<bool, Miss>;
+    /// A GUARDED read (`has(p) ? p : d`, fused): [`Reg::Unset`] when the field is ABSENT,
+    /// otherwise exactly `read` — so a present value of the wrong type is `read`'s error, never
+    /// absence. `from` is how many of the path's leading members no guard covered: one of those
+    /// missing is an error, not absence. The default is `has` then `read`; a [`Facts`] provider
+    /// answers presence per field, so a missing prefix is an absent field there either way.
+    #[inline(always)]
+    fn read_or_unset(
+        &self,
+        f: u32,
+        from: u8,
+        want: Want,
+        st: &mut Store<'a>,
+    ) -> Result<Reg<'a>, Miss> {
+        let _ = from;
+        if self.has(f, st)? {
+            self.read(f, want, st)
+        } else {
+            Ok(Reg::Unset)
+        }
+    }
     /// Does a read that is not answerable yet PAUSE the run (`Miss::Need`)? Only a run that can
     /// wait says yes; every other run reads "not yet" as an error.
     fn waits(&self) -> bool {
@@ -214,6 +234,16 @@ impl<'a, H: Host<'a>> Host<'a> for Dispatching<'_, '_, H> {
     #[inline(always)]
     fn has(&self, f: u32, st: &mut Store<'a>) -> Result<bool, Miss> {
         self.inner.has(f, st)
+    }
+    #[inline(always)]
+    fn read_or_unset(
+        &self,
+        f: u32,
+        from: u8,
+        want: Want,
+        st: &mut Store<'a>,
+    ) -> Result<Reg<'a>, Miss> {
+        self.inner.read_or_unset(f, from, want, st)
     }
     fn waits(&self) -> bool {
         self.inner.waits()
@@ -388,12 +418,65 @@ impl<'a> RootsHost<'a> {
     }
 }
 
+impl<'a> RootsHost<'a> {
+    /// A guarded read's walk ([`Host::read_or_unset`]).
+    fn guarded(&self, path: &'a FieldPath, from: u8, st: &mut Store<'a>) -> Result<Reg<'a>, Miss> {
+        let (walked, guarded) = path.steps.split_at(from as usize);
+        let mut cur = self.walk(path, walked, st)?;
+        for step in guarded {
+            let name = step.name.as_str();
+            cur = match cur {
+                CelValue::Map(m) => match m.get(name) {
+                    Some(v) => v,
+                    None => return Ok(Reg::Unset),
+                },
+                CelValue::Lazy(l) => {
+                    let present = if self.wait {
+                        match lazy::poll_presence(l.as_ref(), name)? {
+                            Presence::Known(b) => b,
+                            Presence::Pending(h) => return Err(Miss::Need(h)),
+                        }
+                    } else {
+                        lazy::presence(l.as_ref(), name)?
+                    };
+                    if !present {
+                        return Ok(Reg::Unset);
+                    }
+                    match lazy::poll_read(l.as_ref(), name)? {
+                        Access::Ready(v) => st.value(v),
+                        Access::Pending(h) if self.wait => return Err(Miss::Need(h)),
+                        Access::Pending(h) => return Err(pending_error(name, h).into()),
+                    }
+                }
+                _ => return Err(ExecutionError::NoSuchOverload.into()),
+            };
+        }
+        Ok(of_cel(cur))
+    }
+}
+
 impl<'a> Host<'a> for RootsHost<'a> {
     fn read(&self, f: u32, _: Want, st: &mut Store<'a>) -> Result<Reg<'a>, Miss> {
         let path = &self.fields[f as usize];
         #[cfg(feature = "profile")]
         super::profile::read(f);
         Ok(of_cel(self.walk(path, &path.steps, st)?))
+    }
+
+    /// One walk: the first `from` members walked as `read` walks them, each later one asked as
+    /// `has` asks it — a missing one is ABSENT, a non-container `has`'s error — so the answer is
+    /// exactly the guards' and the read's.
+    fn read_or_unset(
+        &self,
+        f: u32,
+        from: u8,
+        _: Want,
+        st: &mut Store<'a>,
+    ) -> Result<Reg<'a>, Miss> {
+        let path = &self.fields[f as usize];
+        #[cfg(feature = "profile")]
+        super::profile::read(f);
+        self.guarded(path, from, st)
     }
 
     fn has(&self, f: u32, st: &mut Store<'a>) -> Result<bool, Miss> {
@@ -452,6 +535,20 @@ impl<'a, F: Facts + ?Sized> Host<'a> for SplitHost<'a, F> {
             self.facts.has(f, st)
         } else {
             self.ctx.has(f, st)
+        }
+    }
+
+    fn read_or_unset(
+        &self,
+        f: u32,
+        from: u8,
+        want: Want,
+        st: &mut Store<'a>,
+    ) -> Result<Reg<'a>, Miss> {
+        if self.mine[f as usize] {
+            self.facts.read_or_unset(f, from, want, st)
+        } else {
+            self.ctx.read_or_unset(f, from, want, st)
         }
     }
 

@@ -17,6 +17,7 @@ use support::gen::{same_error, same_outcome};
 use support::record;
 use typed_cel::fork;
 use typed_cel::CelValue as Value;
+use typed_cel::FastProgram;
 use typed_cel::{CelEnvironment, CelError, CelKey, CelTy, CelValue, ExecutionError, LazyValue};
 
 type Outcome = Result<Value, ExecutionError>;
@@ -1069,4 +1070,266 @@ fn a_literal_pattern_and_a_bound_list_search_answer_as_before() {
         }
     }
     assert!(wrong.is_empty(), "answers moved:\n{}", wrong.join("\n"));
+}
+
+/// `req: {o?, p?, q?, r?: double, d: double, s?: {a?: {z?: double}}, m: map(string, double)}`.
+fn guarded_env() -> CelEnvironment {
+    let z = support::record_opt("req.s.a", &[("z", CelTy::Num)], &["z"]);
+    let a = support::record_opt("req.s", &[("a", z)], &["a"]);
+    env_of(&[(
+        "req",
+        support::record_opt(
+            "req",
+            &[
+                ("o", CelTy::Num),
+                ("p", CelTy::Num),
+                ("q", CelTy::Num),
+                ("r", CelTy::Num),
+                ("d", CelTy::Num),
+                ("s", a),
+                ("m", CelTy::map(CelTy::Str, CelTy::Num)),
+            ],
+            &["o", "p", "q", "r", "s"],
+        ),
+    )])
+}
+
+fn lower_guarded(env: &CelEnvironment, src: &str) -> FastProgram {
+    let p = fork::compile_any_unchecked_presence(env, src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    FastProgram::new(&p).unwrap_or_else(|e| panic!("{src}: {e}"))
+}
+
+const FOUR_GUARDED: &str =
+    "req.?o.orValue(0.0) + req.?p.orValue(0.0) + req.?q.orValue(0.0) + req.?r.orValue(0.0) < 100.0";
+
+const GUARDED_CHAIN: &str =
+    "(has(req.s) && has(req.s.a) && has(req.s.a.z) ? req.s.a.z : 0.0) < 10.0";
+
+/// `has(p) ? p : d` — the guard says exactly "p is present" — lowers to ONE host call that reads
+/// `p` or answers "absent" (`ReadOr`), and a branch over the default (`BrSet`): no `Has`, no second
+/// read, whoever wrote the guard — by hand, or `.orValue` (`added: optional reads`).
+#[test]
+fn a_guarded_read_lowers_to_one_read() {
+    let env = guarded_env();
+    for (src, n) in [
+        ("(has(req.o) ? req.o : 0.0) < 10.0", 1),
+        (GUARDED_CHAIN, 1),
+        ("('k' in req.m ? req.m['k'] : 0.0) < 10.0", 1),
+        ("(has(req.o) ? req.o : req.d) < 10.0", 1),
+        (FOUR_GUARDED, 4),
+    ] {
+        let names = lower_guarded(&env, src).op_names();
+        assert!(
+            !names.contains(&"Has") && !names.contains(&"Jump") && !names.contains(&"Cond"),
+            "`{src}` still guards and jumps: {names:?}"
+        );
+        assert_eq!(
+            names.iter().filter(|o| **o == "BrSet").count(),
+            n,
+            "`{src}`: one branch per guarded read: {names:?}"
+        );
+        assert_eq!(
+            names.iter().filter(|o| **o == "ReadOr").count(),
+            n,
+            "`{src}`: one read per guarded read: {names:?}"
+        );
+    }
+}
+
+/// A guard that does not say exactly "the value's own path is present" is not fused.
+#[test]
+fn a_guard_that_is_not_the_reads_own_path_is_not_fused() {
+    let env = guarded_env();
+    for src in [
+        // Guards another field.
+        "(has(req.p) ? req.o : 0.0) < 10.0",
+        // A conjunct that is not a presence test.
+        "(has(req.s.a) && req.s.a.z > 1.0 ? req.s.a.z : 0.0) < 10.0",
+        // Inverted.
+        "(!has(req.o) ? 0.0 : req.o) < 10.0",
+        // A gap: `req.s.a` is not guarded, so a missing `a` is an error, not the default.
+        "(has(req.s) && has(req.s.a.z) ? req.s.a.z : 0.0) < 10.0",
+    ] {
+        let names = lower_guarded(&env, src).op_names();
+        assert!(
+            names.contains(&"Has") && !names.contains(&"ReadOr"),
+            "`{src}`: {names:?}"
+        );
+    }
+}
+
+/// The fused program answers exactly as the ternary it replaces — error text included — over
+/// every combination of present and absent, and over a present value of the WRONG type, which
+/// must stay an error and never read as the default.
+#[test]
+fn a_fused_read_answers_as_the_ternary() {
+    let env = guarded_env();
+    let num = |n: f64| Value::Num(n);
+    let rec = |fields: Vec<(&str, Value)>| {
+        Value::record(fields.into_iter().map(|(k, v)| (CelKey::new(k), v)))
+    };
+    let mut bindings: Vec<Value> = Vec::new();
+    for mask in 0..16u32 {
+        let mut fields = vec![("d", num(1.0)), ("m", rec(vec![]))];
+        for (i, name) in ["o", "p", "q", "r"].into_iter().enumerate() {
+            if mask & (1 << i) != 0 {
+                fields.push((name, num(i as f64 + 1.0)));
+            }
+        }
+        bindings.push(rec(fields));
+    }
+    // `o` present with the wrong type.
+    bindings.push(rec(vec![
+        ("o", Value::Str("three".into())),
+        ("d", num(1.0)),
+        ("m", rec(vec![])),
+    ]));
+    // The chain, at every depth, and mistyped at each step; and a map key present and absent.
+    let base = || vec![("d", num(1.0))];
+    let with = |extra: Vec<(&'static str, Value)>| {
+        let mut f = base();
+        f.extend(extra);
+        rec(f)
+    };
+    for extra in [
+        vec![("m", rec(vec![("k", num(2.0))]))],
+        vec![("s", rec(vec![])), ("m", rec(vec![]))],
+        vec![("s", rec(vec![("a", rec(vec![]))])), ("m", rec(vec![]))],
+        vec![
+            ("s", rec(vec![("a", rec(vec![("z", num(3.0))]))])),
+            ("m", rec(vec![])),
+        ],
+        vec![("s", Value::Str("s".into())), ("m", rec(vec![]))],
+        vec![("s", rec(vec![("a", num(1.0))])), ("m", rec(vec![]))],
+        vec![
+            (
+                "s",
+                rec(vec![("a", rec(vec![("z", Value::Str("z".into()))]))]),
+            ),
+            ("m", rec(vec![])),
+        ],
+        // `m` is required: missing, it is an error in both.
+        vec![],
+    ] {
+        bindings.push(with(extra));
+    }
+    let mut compared = 0;
+    for src in [
+        FOUR_GUARDED,
+        GUARDED_CHAIN,
+        "('k' in req.m ? req.m['k'] : 0.0) < 10.0",
+        "(has(req.o) ? req.o : req.d) < 10.0",
+        "(has(req.o) ? req.o : 0.0) + (has(req.o) ? req.o : 0.0) < 10.0",
+    ] {
+        let p = fork::compile_any_unchecked_presence(&env, src).unwrap();
+        let fused = FastProgram::new(&p).unwrap();
+        let plain = fork::fast_program_unfused(&p).unwrap();
+        assert!(
+            plain.op_names().contains(&"Has") && !plain.op_names().contains(&"ReadOr"),
+            "`{src}`: the unfused lowering fused: {:?}",
+            plain.op_names()
+        );
+        for b in &bindings {
+            let mut act = env.runtime().activation();
+            act.bind_fact("req", b.clone());
+            let (got, want) = (
+                format!("{:?}", fork::fast_value(&fused, &act)),
+                format!("{:?}", fork::fast_value(&plain, &act)),
+            );
+            assert_eq!(got, want, "`{src}` over {b:?}");
+            compared += 1;
+        }
+    }
+    assert_eq!(compared, 5 * 25);
+}
+
+/// A field as a `Facts` provider holds it: absent, a number, or a string where the schema says
+/// number (mistyped).
+#[derive(Clone, Copy, Debug)]
+enum Fact {
+    Absent,
+    Num(f64),
+    Str(&'static str),
+}
+
+/// `req.<name>` for each of `o, p, q, r, d`, answered by field id against one program's fields.
+struct GuardFacts(Vec<Fact>);
+
+impl GuardFacts {
+    fn of(code: &FastProgram, by_name: &[(&str, Fact)]) -> GuardFacts {
+        GuardFacts(
+            code.fields()
+                .iter()
+                .map(|f| {
+                    let names: Vec<&str> = f.segments().collect();
+                    match names.as_slice() {
+                        [n] => by_name
+                            .iter()
+                            .find(|(k, _)| k == n)
+                            .map_or(Fact::Absent, |(_, v)| *v),
+                        other => panic!("no fact for req.{}", other.join(".")),
+                    }
+                })
+                .collect(),
+        )
+    }
+}
+
+impl typed_cel::Facts for GuardFacts {
+    fn bool(&self, _: typed_cel::FieldId) -> Option<bool> {
+        None
+    }
+    fn num(&self, f: typed_cel::FieldId) -> Option<f64> {
+        match self.0[f.index()] {
+            Fact::Num(n) => Some(n),
+            _ => None,
+        }
+    }
+    fn str(&self, f: typed_cel::FieldId) -> Option<&str> {
+        match self.0[f.index()] {
+            Fact::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn has(&self, f: typed_cel::FieldId) -> bool {
+        !matches!(self.0[f.index()], Fact::Absent)
+    }
+}
+
+/// Through a `Facts` provider, whose getters answer `None` both for ABSENT and for a value of the
+/// wrong type: the fused read tells the two apart exactly as `has` then `Read` did — a mistyped
+/// field is an error, never the default.
+#[test]
+fn a_fused_read_over_facts_answers_as_the_ternary() {
+    let env = guarded_env();
+    let mut cases: Vec<Vec<(&str, Fact)>> = Vec::new();
+    for mask in 0..16u32 {
+        let mut c = vec![("d", Fact::Num(1.0))];
+        for (i, name) in ["o", "p", "q", "r"].into_iter().enumerate() {
+            if mask & (1 << i) != 0 {
+                c.push((name, Fact::Num(i as f64 + 1.0)));
+            }
+        }
+        cases.push(c);
+    }
+    cases.push(vec![("o", Fact::Str("three")), ("d", Fact::Num(1.0))]);
+    cases.push(vec![("d", Fact::Str("one"))]);
+    let mut errors = 0;
+    for src in [
+        FOUR_GUARDED,
+        "(has(req.o) ? req.o : req.d) < 10.0",
+        "(has(req.o) ? req.o : 0.0) + (has(req.o) ? req.o : 0.0) < 10.0",
+    ] {
+        let p = fork::compile_any_unchecked_presence(&env, src).unwrap();
+        let fused = FastProgram::new(&p).unwrap();
+        let plain = fork::fast_program_unfused(&p).unwrap();
+        for c in &cases {
+            let mut s = typed_cel::FastScratch::default();
+            let got = format!("{:?}", fused.decide(&GuardFacts::of(&fused, c), &mut s));
+            let want = format!("{:?}", plain.decide(&GuardFacts::of(&plain, c), &mut s));
+            assert_eq!(got, want, "`{src}` over {c:?}");
+            errors += usize::from(want.starts_with("Err"));
+        }
+    }
+    assert!(errors >= 3, "the mistyped cases must be errors: {errors}");
 }

@@ -87,18 +87,22 @@ fn dyn_is_gone() {
 
 /// `removed: optional syntax`
 ///
-/// The whole extension goes, not just the syntax: the `[?k]` and `.?f` productions AND the
-/// `optional.*` constructors and `orValue`/`value`/`hasValue`/`or` accessors. Deleting a broken
-/// feature we do not use beats fixing one — `.?field` is measurably wrong on maps — and absence is
-/// handled by a total activation instead of by a case in the language.
+/// `removed: optional values`. An optional READ (`x.?f`, `m[?k]`) is legal only as the operand of
+/// `.orValue(d)`, `.hasValue()` or `has()` (`added: optional reads`); every form that would hold an
+/// optional VALUE — a bare optional read, a comparison of one, the `optional.*` constructors and
+/// the `value`/`or` accessors, `[?x]`, `{?k: v}` — is refused, never reinterpreted.
 ///
 /// There is no flag to turn it back on, which is the point: a parser option is a thing a future
 /// caller can set.
 #[test]
-fn optional_syntax_is_gone() {
+fn optional_values_are_gone() {
     all_refused(&[
         "{'a': 1}[?'a']",
         "{'a': 1}.?a",
+        "{'a': 1}.?a == 1",
+        "{'a': 1}[?'a'] == 1",
+        "{'a': 1}.?a.value() == 1",
+        "{'a': 1}.?a.or({'a': 1}.?a).hasValue()",
         "optional.of(1)",
         "optional.none()",
         "optional.ofNonZeroValue(1)",
@@ -108,6 +112,8 @@ fn optional_syntax_is_gone() {
         "optional.none().orValue(0)",
         "optional.of(1).or(optional.of(2))",
         "[?'a']",
+        "[?1]",
+        "{?'a': 1}",
     ]);
 }
 
